@@ -32,6 +32,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | How does the Settings panel reach the Host, and why is there an HTTP route? | `docs/adr/0005-share-operations-behind-an-http-bridge.md` — superseded by 0008 | English |
 | Why does the panel show one session's roster, and how does it know which session that is? | `docs/adr/0006-session-scoped-roster-panel.md` — superseded by 0008 | English |
 | Why is the plugin model-facing only? | `docs/adr/0008-model-only-surface.md` | English |
+| Why does a replacement hand over the record, and in which order does it happen? | `docs/adr/0009-replacement-handoff.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

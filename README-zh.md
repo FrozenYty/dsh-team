@@ -4,7 +4,7 @@
 
 一个 DeepSeek Harness 插件，给智能体团队补上出厂版本没有的生命周期：成员可以退役、移除、替换——带可恢复的会话回收站、退役后仍存在的花名册，以及针对长跑成员的上下文工具。
 
-**状态**：v0.4 只面向模型。v0.3 里交付的设置页面板与本地回环 HTTP 桥已移除——面板从未在真实 profile 中渲染，点击也不好用——同样的精力投入到模型侧接口，现在覆盖智能体启动的每一个子智能体（ADR 0008）。生命周期工具本身已在作者本机安装并验证。最近变更见 [PROGRESS.md](PROGRESS.md)。
+**状态**：v0.5 让替换带交接：一次 `spawn_member` 调用加 `replace`，先让继任者带着简短交接书启动，再退役前任（ADR 0009）。v0.4 只面向模型——v0.3 里交付的设置页面板与本地回环 HTTP 桥已移除，因为面板从未在真实 profile 中渲染、点击也不好用——同样的精力投入到模型侧接口，现在覆盖智能体启动的每一个子智能体（ADR 0008）。生命周期工具本身已在作者本机安装并验证。最近变更见 [PROGRESS.md](PROGRESS.md)。
 
 **仓库**：[github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -24,9 +24,9 @@
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 创建具名成员；继任者复用基名并递增代次（`reviewer` → `reviewer-g2`）。 |
-| `list_members` | 花名册：target、子会话 id、相态、代次、实时状态，驻留时还给出上下文压力与 `compactable`。收养官方花名册创建的成员**以及**官方 `subagent`／`subagent_fork` 工具启动的子代理，因此模型控制的每个子代理都可列出、可退役。 |
-| `message_member` | 给活着的成员投递消息；已卸载的成员会从自己的会话冷恢复。 |
+| `spawn_member` | 创建具名成员，或替换成员：带 `replace` 时继任者从交接书启动，并在同一次调用里退役前任。除非模型另起名字，继任者复用基名并递增代次（`reviewer` → `reviewer-g2`）。 |
+| `list_members` | 花名册：target、子会话 id、相态、代次、记录在案的职责、实时状态，驻留时还给出上下文压力与 `compactable`。收养官方花名册创建的成员**以及**官方 `subagent`／`subagent_fork` 工具启动的子代理，因此模型控制的每个子代理都可列出、可退役。 |
+| `message_member` | 给活着的成员投递消息，并可顺带替换记录在案的职责；已卸载的成员会从自己的会话冷恢复。 |
 | `stop_member` | 只取消当前轮；激活与收件箱保留。 |
 | `retire_member` | 排空、把会话产物移入可恢复的回收站、给记录立碑。 |
 | `restore_member` | 把已退役成员找回来：把回收站里的会话移回记录的原始路径，记录转回 active。 |
@@ -55,6 +55,14 @@ bundle 同时启用了出厂默认关闭的 `compaction-basic`。
 | 兜底 | 产物移不动时改用工作区归档隐藏会话，并在返回结果里说明。 |
 | 恢复 | `restore_member` 把产物移回记录的原始路径并清除墓碑；已有活成员占用同名目标时拒绝。 |
 
+## 替换成员会交接工作
+
+`spawn_member` 加 `replace: <target>` 就是完整的一次替换。继任者从一份简短交接书启动：其中点名前任、复述记录在案的职责、说明前任已退役且已离场，并按前任的名字指向共享团队任务板——任务板本身不复制。除非模型重新记录，继任者继承该职责。
+
+- **先启动继任者，再退役前任**，都在同一次调用里。启动失败则前任原封不动，并在结果里说明；退役失败则返回继任者并带 `predecessor_retired: false`，再调一次 `retire_member` 即可收尾（ADR 0009）。
+- **职责是持久字段，且有长度上限。** `spawn_member.assignment` 在启动时写入，最多 1000 个字符；工作变化时用 `message_member.assignment` 替换。`list_members` 会报告它，退役后它仍留在墓碑上。
+- 目标已经退役时同样接受，由墓碑提供交接书。
+
 ## 安装
 
 ```
@@ -68,6 +76,7 @@ bundle 是链接安装而不是复制，所以改了模块之后要先 `remove_b
 - 插件行 `application: applied`，无告警；
 - Lead 会话可以调用 `list_members`，驻留成员带压力数值；
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 和 `trash_path`；
+- `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者是下一代次；
 - `include:compaction-basic` 状态是 `schema` 而不是 `inactive`。
 
 ## 配置
