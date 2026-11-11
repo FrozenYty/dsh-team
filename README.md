@@ -13,7 +13,9 @@ never rendered in a real profile and its clicks did not work — and the same ef
 model-facing surface, which now covers every subagent an agent spawns (ADR 0008). The lifecycle tools are
 installed in the author's profile and were exercised live there at v0.5.0: retirement, restore, message,
 stop, and one replacement whose successor read the handoff brief and finished its predecessor's task
-(P2-08). v0.7.0 caps the session trash per Lead, so it no longer grows without bound (ADR 0011). The
+(P2-08). v0.7.0 caps the session trash per Lead, so it no longer grows without bound (ADR 0011). v0.8.0
+makes that cap a config field of this bundle's patch row — `trashLimit`, default 20, minimum 1, refused
+at load when it is out of range — instead of a constant in the code (ADR 0012). The
 working tree has changed since that install, so the newest change is covered by the unit tests only; a
 fresh install is the owner's decision. Recent changes are in [PROGRESS.md](PROGRESS.md).
 
@@ -44,7 +46,7 @@ This plugin supplies the missing half, without forking the shipped roster.
 | `list_members` | The roster: target, child session id, phase, generation, the assignment recorded for the member, live state, and — while resident — context pressure and `compactable`. Adopts members the shipped roster created **and** children spawned with the shipped `subagent` / `subagent_fork` tools, so every subagent the model controls is listed and retirable. |
 | `message_member` | Deliver one message to a live member, and optionally replace the assignment recorded for it; an unloaded member is cold-resumed from its own Session. |
 | `stop_member` | Cancel only the current turn; the activation and inbox are kept. |
-| `retire_member` | Drain, tombstone, move the Session artifact to a recoverable trash directory, and record whether the workspace archive hid it instead. The trash keeps at most 20 artifacts per Lead, so a retirement that moves one in removes the oldest past the cap and reports `pruned`. Retiring an already-retired member is a no-op that says so. |
+| `retire_member` | Drain, tombstone, move the Session artifact to a recoverable trash directory, and record whether the workspace archive hid it instead. The trash keeps a configurable number of artifacts per Lead — 20 unless the profile sets `trashLimit` — so a retirement that moves one in removes the oldest past that cap and reports `pruned`. Retiring an already-retired member is a no-op that says so. |
 | `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. The result says which branch ran, and a restore with nothing to invert is a no-op rather than an error. A member whose artifact the retention cap already removed answers `reason: "pruned"` and stays retired. |
 | `compact_member` | Force one compaction on a resident, idle member. |
 
@@ -79,7 +81,7 @@ rather than repaired, and the effort moved into the model-facing surface above (
 | Move | Its persisted session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`. Move, not delete: recovery is a directory move back. |
 | Tombstone | The roster record becomes `retired`, the name becomes available at the next generation, and the projections stop serving the member. Retiring it again is a no-op that says so. |
 | Fallback | If the artifact cannot be moved, the workspace archive hides the Session instead, and the result says so. |
-| Retention | One Lead's trash keeps at most **20** artifacts. A retirement that moves one in removes the oldest entries past the cap in the same call and reports the count in `pruned`; nothing is swept on a timer or on a read. |
+| Retention | One Lead's trash keeps at most the **effective cap** — 20 by default, or the profile's `trashLimit` — artifacts. A retirement that moves one in removes the oldest entries past the cap in the same call and reports the count in `pruned`; nothing is swept on a timer or on a read. |
 | Pruned | A pruned tombstone keeps its `trashPath` (it still says where the artifact went) and its `trashState` becomes `pruned`. Its bytes are gone, so `restore_member` refuses with `reason: 'pruned'`. |
 | Restore | `restore_member` moves the artifact back to its recorded original path and clears the tombstone. It refuses when a live member already uses the target. |
 
@@ -127,9 +129,38 @@ Verification after install:
 |---|---|---|
 | `DSH_TEAM_ROSTER_DATA_DIR` | `~/.dsh/team-roster` | Trash root and roster data directory. |
 
-The roster itself lives in a `storageDomain` domain (ADR 0003), not in a Session log. The trash cap is
-**not** configurable: it is the fixed `TRASH_LIMIT` constant (20) in `trash.js`, mirroring the shipped
-team roster, which bounds its members with a fixed `maxMembers` rather than a setting.
+The roster itself lives in a `storageDomain` domain (ADR 0003), not in a Session log.
+
+### Trash retention cap
+
+One Lead's trash keeps at most **20** artifacts unless the profile says otherwise. The cap is a config
+field of this bundle's own patch row, so changing it is a profile edit, not an edit of this repository:
+
+```yaml
+# the profile's cordis.patch.yml
+- id: team-roster
+  config:
+    trashLimit: 7
+```
+
+The field must be an integer with a **minimum of 1**. `0`, a negative number, a fraction, a numeric
+string, `NaN` and an explicitly-null value are all refused rather than clamped, and the refusal happens
+**when the profile loads** — before any tool is registered and long before the first retirement. The
+message names the field, the value it saw and the minimum:
+
+```
+dsh-team-roster: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0
+```
+
+A retirement that moves an artifact in enforces the effective cap and its result says which number was
+applied, so what an operator reads is what was in force. Omitting `trashLimit` keeps the documented
+default of 20, so a profile that configures nothing behaves exactly as it did in v0.7.0 (ADR 0012).
+
+This entry still declares no `Config` **schema**, so the Host Config provider reports
+`include:team-roster` as `absent`. That describes the schema projection, not configurability: the field
+is read and validated at load and enforced by the retirement. The reason is recorded in ADR 0012 — the
+Config provider and the profile schema generator both accept only a native Schemastery schema, and a
+zero-import bundle (ADR 0002) cannot import one.
 
 ## Development
 

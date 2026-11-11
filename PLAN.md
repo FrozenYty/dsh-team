@@ -116,6 +116,11 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   deletion: a tombstone is never dropped, because the drained row still sits in the parent's catalog and
   removing the tombstone re-adopts the member as a live ghost — ADR 0011 records why that alternative was
   rejected.
+  Changed in v0.8.0 (ADR 0012): the cap is no longer the `TRASH_LIMIT` constant. `apply(ctx, config)`
+  resolves the effective limit from the `trashLimit` field of this bundle's patch row, refuses a value that
+  is not an integer of at least 1 at load — before any tool is registered — and the retirement enforces and
+  prints that value. The documented default is `DEFAULT_TRASH_LIMIT` (20), so a profile that configures
+  nothing behaves exactly as the v0.7.0 delivery above describes.
 
 ### P3 — Settings panel (cancelled in v0.4)
 

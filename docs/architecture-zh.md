@@ -13,6 +13,8 @@
 
 没有构建步骤，也没有运行时依赖：官方行由已安装的 Harness 自己解析，我们的入口不导入任何东西（ADR 0002）。bundle 只有 Host 半区：没有浏览器半区（ADR 0008）。
 
+它唯一的可调项是每个 Lead 的会话回收站上限，由 bundle 自己补丁行上的 `trashLimit` 字段承载（`- id: team-roster`，`config: { trashLimit: <整数> }`）。`apply(ctx, config)` 在注册任何东西之前先解析它：字段缺失取 `DEFAULT_TRASH_LIMIT`（20），至少为 1 的整数原样采用，其他值则让加载失败，报错信息里点名字段、看到的值与最小值（ADR 0012）。本入口刻意不声明 `Config` schema，因此 Host 的 Config 提供方仍报 `absent`：该投影只接受原生 Schemastery 图，而零导入的 bundle 无法提供，字段改由 `apply` 校验。
+
 ## 2. v0.1，已交付
 
 ### 2.1 启用压缩
@@ -75,7 +77,7 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 `retire_member` 先排空子代理、写出墓碑（带上即将使用的回收站路径与 `trashState: 'pending'` 标记），再把持久化会话移入
 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，最后把记录确认为 `trashState: 'done'`。顺序是刻意的：先让记录退役、再碰文件系统，因此两者之间崩溃留下的是“一条 `retired` 记录配一份要么还没移动、要么已经进回收站的产物”——两种情况都可恢复，因为 `pending` 表示“移动可能发生也可能没有”，而恢复会先去回收站找。反过来则会留下“已进回收站的会话 + `active` 记录”，之后任何一次读取都解释不通。真正让成员从宿主的自有发现里消失的是**移动**——session-query 会摘掉已经不在的文件。移动本身不删除任何东西：跨设备兜底是这一步里唯一会移除源的分支；产物移不动时改由工作区归档隐藏会话（`archived: true`、`trashState: 'none'`，并丢弃计划中的回收站字段），记录与返回结果都会说明走的是哪一条。
 
-随后，**真正移入过产物**的那次退役会在同一次调用里执行每个 Lead 的回收站上限（ADR 0011），因为这次移动正是回收站增长的唯一时刻：超出 `TRASH_LIMIT`（20）的最旧条目被移除，每个被移除的墓碑保留 `trashPath` 并把 `trashState` 置为 `pruned`，结果用 `pruned` 报告移除了多少。不存在定时清理，也不存在读取时清理；`pending` 的移动计入上限但永不被剪除；只有这一个 Lead 回收站目录的直接子项、且目录名与墓碑都能解析时才成为候选。上限是固定常量而不是设置项，而且它只删本插件自己移入回收站的副本——平台没有会话删除 API，唯一官方的“藏起来”机制是可逆的工作区归档，它无法约束字节数。
+随后，**真正移入过产物**的那次退役会在同一次调用里执行每个 Lead 的回收站上限（ADR 0011），因为这次移动正是回收站增长的唯一时刻：超出**生效上限**的最旧条目被移除——生效上限是 `apply` 从 `trashLimit` 配置里解析出的值，profile 什么都没配时就是 `DEFAULT_TRASH_LIMIT`（20）——每个被移除的墓碑保留 `trashPath` 并把 `trashState` 置为 `pruned`，结果用 `pruned` 报告移除了多少、以及用的是哪个上限。不存在定时清理，也不存在读取时清理；`pending` 的移动计入上限但永不被剪除；只有这一个 Lead 回收站目录的直接子项、且目录名与墓碑都能解析时才成为候选。`apply` 读的是配置字段而不是代码里的字面量（ADR 0012），而且它只删本插件自己移入回收站的副本——平台没有会话删除 API，唯一官方的“藏起来”机制是可逆的工作区归档，它无法约束字节数。
 
 恢复是同样明确的逆操作：记录里保留了原始路径和产物类型（`trashKind`——会话目录或单个产物文件），所以 `restore_member` 是**移动**而不是猜测，返回结果会说明实际走的是哪条分支——移回、工作区取消隐藏，还是记录本来就处于活动状态。它绝不覆盖已存在的目标、拒绝活成员已占用的名字，移动失败时记录保持退役状态。
 
@@ -185,9 +187,9 @@ Harness 通知是任何插件操作都无法阻止的事件：
 2. **排空**——`ctx.subagents.drainChildren(lead, [childId])` 停掉子代理，释放它的激活名额与驻留。从未发布过的、或已经结束的子代理没有可排空的；两种情况都继续退役，因为生命周期事实由记录掌握。
 3. **立碑**——记录转为 `retired`，带上 `retiredAt`、`assignment`、原因，以及下一步准备使用的回收站路径，并标记 `trashState: 'pending'`（没有可移动之物时直接是 `'none'`）；这一步发生在碰文件系统**之前**（§2.5）。在这里崩溃留下的是“退役记录 + 要么没移动、要么已进回收站的产物”；`pending` 表示无从确定，恢复会先去回收站找，因此两种情况都能收尾。
 4. **移动产物并确认**——持久化会话移入插件的回收站目录，记录随后确认为 `trashState: 'done'`，并写上 `trashPath`、`originalPath` 与 `trashKind`。没有可移动的产物时，改由工作区归档隐藏会话，丢弃计划中的回收站字段，记录与返回结果都会说明这一点（`archived: true`、`trashState: 'none'`）。`archived` 与 `trashPath` 互斥：只有没发生移动时才会走归档分支。
-5. **只在此时约束回收站**——成功移入过产物的那次退役，会从这个 Lead 的回收站目录里按最旧优先移除超出 `TRASH_LIMIT`（20）的条目；每个被移除的墓碑保留 `trashPath` 并把 `trashState` 置为 `pruned`（ADR 0011）。没有移动过产物的退役不会剪除任何东西。不存在定时器，也不存在读取时清理。
+5. **只在此时约束回收站**——成功移入过产物的那次退役，会从这个 Lead 的回收站目录里按最旧优先移除超出**生效上限**的条目；生效上限是 `apply` 解析出的 `trashLimit` 配置（默认 `DEFAULT_TRASH_LIMIT`，20），而不是代码里的常量；每个被移除的墓碑保留 `trashPath` 并把 `trashState` 置为 `pruned`（ADR 0011、ADR 0012）。没有移动过产物的退役不会剪除任何东西。不存在定时器，也不存在读取时清理。
 6. **隐藏**——宿主投影出口不再下发已退役 id，所有客户端因此丢掉该成员；花名册保留回收站路径以便手工恢复。
-7. **报告**——返回结果带 `retired`、`drained`、`archived`、`trashed`、`pruned`（没有移除任何东西时为 0），有回收站路径时再带 `trash_path`；`pruned` 大于 0 时，消息会说明移除了多少产物以及原因。重复调用是无操作，返回 `retired: true, drained: false, pruned: 0, reason: 'already-retired'`。
+7. **报告**——返回结果带 `retired`、`drained`、`archived`、`trashed`、`pruned`（没有移除任何东西时为 0），有回收站路径时再带 `trash_path`；`pruned` 大于 0 时，消息会说明移除了多少产物、用的是哪个上限以及原因。重复调用是无操作，返回 `retired: true, drained: false, pruned: 0, reason: 'already-retired'`。
 
 工作的持久陈述就是成员的 `assignment`：模型用 `spawn_member.assignment` 写入，用
 `message_member.assignment` 保持最新；上限 1000 个字符，因此记录不会无限增长。

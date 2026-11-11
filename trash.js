@@ -7,8 +7,8 @@
  *
  * Two branches are allowed to remove bytes, and no others: the cross-device move fallback removes the
  * source it has already copied, and `pruneLeadTrash` removes the oldest artifacts once a Lead's trash
- * passes `TRASH_LIMIT` (ADR 0011). A pruned artifact is gone for good, which is why the tombstone keeps
- * saying where it went.
+ * passes the effective cap (ADR 0011, ADR 0012). A pruned artifact is gone for good, which is why the
+ * tombstone keeps saying where it went.
  *
  * No `@deepseek-ai/*` import: a profile-linked bundle cannot resolve those packages (ADR 0002).
  */
@@ -21,15 +21,21 @@ import { basename, dirname, join, resolve } from 'node:path'
 const DATA_DIR_ENV = 'DSH_TEAM_ROSTER_DATA_DIR'
 
 /**
- * How many retired sessions one Lead's trash keeps.
+ * How many retired sessions one Lead's trash keeps when the plugin config sets no cap.
  *
- * Fixed on purpose, mirroring the shipped Agent Teams roster, which bounds its members with the
- * `maxMembers` constant instead of a config key: this is a safety cap, not a preference, so changing
- * it means editing this one line. The unit is one Lead's trash directory and the content is whole
- * Session artifacts, so 20 keeps a long recent history recoverable while bounding the growth; every
- * retirement past it removes exactly one older artifact, oldest first (ADR 0011).
+ * This is a documented default, not the authority: the effective cap is the `trashLimit` config field
+ * resolved from the bundle's patch row by `resolveTrashLimit` below (ADR 0012, superseding point 1 of
+ * ADR 0011). The unit is one Lead's trash directory and the content is whole Session artifacts, so 20
+ * keeps a long recent history recoverable while bounding the growth; every retirement past the cap
+ * removes exactly one older artifact, oldest first.
  */
-export const TRASH_LIMIT = 20
+export const DEFAULT_TRASH_LIMIT = 20
+
+/** The plugin config field that carries the cap. */
+export const TRASH_LIMIT_FIELD = 'trashLimit'
+
+/** The smallest legal cap, mirroring the official integer config fields' `minimum: 1` bound. */
+export const TRASH_LIMIT_MINIMUM = 1
 
 /**
  * Resolve the plugin data directory.
@@ -41,6 +47,47 @@ export function resolveDataDir(env = process.env, home = homedir()) {
   const override = env[DATA_DIR_ENV]
   if (typeof override === 'string' && override.trim() !== '') return override.trim()
   return join(home, '.dsh', 'team-roster')
+}
+
+/** Render one rejected value so the message distinguishes `'20'` from `20` and shows `NaN` and `null`. */
+function describeValue(value) {
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (typeof value === 'number' && Number.isNaN(value)) return 'NaN'
+  if (value === null) return 'null'
+  if (typeof value === 'object') return JSON.stringify(value) ?? String(value)
+  return String(value)
+}
+
+/**
+ * Resolve the effective per-Lead retention cap from the plugin config.
+ *
+ * The official Agent Teams row declares `maxMembers`, `maxTasks`, `maxMessageBytes` and
+ * `disposalTimeoutMs` as config fields with a default and `minimum: 1`, and a value outside that range
+ * is refused rather than clamped. This mirrors that, minus the part of it a zero-import bundle cannot
+ * have (ADR 0012): an absent field takes `DEFAULT_TRASH_LIMIT`, and anything that is not an integer of
+ * at least `TRASH_LIMIT_MINIMUM` is refused with the field, the value it saw and the minimum named.
+ * `apply` calls this before it registers anything, so a bad patch value fails the load, not the first
+ * retirement.
+ * @param {unknown} config - the plugin config the bundle's patch row supplied, if any.
+ * @returns {number} the effective cap.
+ * @throws {TypeError} when the config is not an object, or the field is present and not a positive integer.
+ */
+export function resolveTrashLimit(config) {
+  if (config === undefined || config === null) return DEFAULT_TRASH_LIMIT
+  const field = TRASH_LIMIT_FIELD
+  const reject = (value) => new TypeError(
+    `dsh-team-roster: config field "${field}" must be an integer >= ${TRASH_LIMIT_MINIMUM} `
+    + `(minimum ${TRASH_LIMIT_MINIMUM}); received ${value}`,
+  )
+  if (typeof config !== 'object') throw reject(describeValue(config))
+  const value = config[field]
+  if (value === undefined) return DEFAULT_TRASH_LIMIT
+  // `null` is deliberately not the default: it is a present, wrong value, and the official schema
+  // accepts `null` only because its `anyOf` also admits a Loader expression.
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < TRASH_LIMIT_MINIMUM) {
+    throw reject(describeValue(value))
+  }
+  return value
 }
 
 /**
@@ -303,7 +350,7 @@ export function parseTrashDirName(name) {
 }
 
 /**
- * Bound one Lead's trash to `TRASH_LIMIT` artifacts, oldest first. The one deletion this plugin does
+ * Bound one Lead's trash to `limit` artifacts, oldest first. The one deletion this plugin does
  * on its own bytes: the platform has no Session-deletion API, so a cap that does not remove its own
  * trash copies does not bound anything (ADR 0011).
  *
@@ -320,10 +367,12 @@ export function parseTrashDirName(name) {
  * answers which entries it removed and the caller flips those tombstones to `trashState: 'pruned'`.
  *
  * @param {{trashRoot: string, limit?: number, members?: object[]}} request - `members` is the Lead's
- *   roster member array; `limit` exists for the tests and defaults to the fixed cap.
+ *   roster member array; `limit` is the effective cap the caller resolved from the plugin config
+ *   (ADR 0012) and defaults to the documented `DEFAULT_TRASH_LIMIT`, which is what `retireMember` falls
+ *   back to when no config was supplied.
  * @returns {Promise<{pruned: number, removed: Array<{memberId: string, trashPath: string}>}>}
  */
-export async function pruneLeadTrash({ trashRoot, limit = TRASH_LIMIT, members = [] }) {
+export async function pruneLeadTrash({ trashRoot, limit = DEFAULT_TRASH_LIMIT, members = [] }) {
   const none = { pruned: 0, removed: [] }
   if (typeof trashRoot !== 'string' || trashRoot.trim() === '') return none
   const entries = await readdir(trashRoot, { withFileTypes: true }).catch(() => undefined)
