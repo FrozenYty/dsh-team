@@ -28,6 +28,13 @@
  * checks `output.schema` + `output.render` and projects `parameters` straight to the model).
  *
  * The plugin writes no session events. Its durable state lives in one storage domain (ADR 0003).
+ *
+ * CONFIGURATION
+ * The one tunable is the per-Lead session-trash cap, carried by the `trashLimit` field of this bundle's
+ * patch row (`- id: team-roster`, `config: { trashLimit: <integer> }`). `apply` resolves it with
+ * `resolveTrashLimit` before it registers anything, so an out-of-range value fails the load instead of
+ * the first retirement; an absent value takes the documented `DEFAULT_TRASH_LIMIT` (20), which is what
+ * keeps a profile that configures nothing behaving exactly as it did before (ADR 0012).
  */
 
 import {
@@ -42,7 +49,7 @@ import {
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
 import { ASSIGNMENT_MAX, PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
-import { resolveDataDir } from './trash.js'
+import { resolveDataDir, resolveTrashLimit } from './trash.js'
 
 export const name = 'team-roster'
 
@@ -219,9 +226,10 @@ function leadSessionIdOf(agent) {
  * @param store - promise of the roster table; resolved lazily by each roster tool.
  * @param hooks - host-side effects a retirement refreshes.
  * @param dataDir - plugin data directory the trash lives under.
+ * @param trashLimit - the effective per-Lead trash cap resolved from the plugin config (ADR 0012).
  * @returns a disposer that unwinds every registration in reverse order.
  */
-function install(agent, ctx, store, hooks, dataDir) {
+function install(agent, ctx, store, hooks, dataDir, trashLimit) {
   const scoped = agent.ctx
   const disposers = []
   const register = (disposer) => {
@@ -379,6 +387,7 @@ function install(agent, ctx, store, hooks, dataDir) {
           assignment: args.assignment,
           replace: args.replace,
           signal: exec.signal,
+          trashLimit,
         })
       },
     })))
@@ -402,7 +411,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most 20 retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.',
+      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -429,6 +438,7 @@ function install(agent, ctx, store, hooks, dataDir) {
           hooks,
           target: args.target,
           reason: args.reason,
+          trashLimit,
         })
       },
     })))
@@ -540,9 +550,16 @@ function install(agent, ctx, store, hooks, dataDir) {
 
 /**
  * Install the tools in every live and subsequently published Lead scope.
+ *
+ * The retention cap is resolved first, on purpose: an out-of-range `trashLimit` in the patch row must
+ * fail the load before anything is registered or opened, so a bad config is a visible activation error
+ * rather than a surprise on the first retirement (ADR 0012).
  * @param ctx - plugin context.
+ * @param config - the plugin config the loader passes from the bundle patch row; `undefined` when the
+ *   row declares none, and `{}` when it declares an empty one.
  */
-export function apply(ctx) {
+export function apply(ctx, config) {
+  const trashLimit = resolveTrashLimit(config)
   const installed = new Map()
   const dataDir = resolveDataDir()
   // The storage facility is the readiness barrier for the roster; a rejected open surfaces as a tool
@@ -589,7 +606,7 @@ export function apply(ctx) {
     } else if (membership.role !== 'lead') {
       return
     }
-    installed.set(agent, install(agent, ctx, store, hooks, dataDir))
+    installed.set(agent, install(agent, ctx, store, hooks, dataDir, trashLimit))
   }
 
   for (const agent of ctx.agents.list()) maybeInstall(agent)

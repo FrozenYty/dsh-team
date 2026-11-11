@@ -7,7 +7,7 @@ import { test } from 'node:test'
 
 import { retireMember, restoreMember } from '../actions.js'
 import { PHASE, ROSTER_SPEC, TRASH_STATE, planMember, readRoster, updateRoster } from '../roster.js'
-import { TRASH_LIMIT, parseTrashDirName, pruneLeadTrash } from '../trash.js'
+import { DEFAULT_TRASH_LIMIT, TRASH_LIMIT_MINIMUM, parseTrashDirName, pruneLeadTrash, resolveTrashLimit } from '../trash.js'
 import { memoryTable } from './memory-table.mjs'
 
 const scratch = () => mkdtemp(join(tmpdir(), 'team-roster-retention-'))
@@ -93,16 +93,42 @@ test('a tombstone written before the cap existed is still eligible', async () =>
   assert.deepEqual(await namesInTrash(root), ['legacy-3-1003', 'legacy-4-1004'])
 })
 
-test('the cap is the fixed 20 the documents promise, and a smaller trash is left untouched', async () => {
-  assert.equal(TRASH_LIMIT, 20, 'the documented default is a fixed constant, not a config key')
+test('a profile that configures nothing keeps the documented default cap, and a smaller trash is untouched', async () => {
+  assert.equal(resolveTrashLimit(undefined), DEFAULT_TRASH_LIMIT)
+  assert.equal(resolveTrashLimit({}), DEFAULT_TRASH_LIMIT)
+  assert.equal(DEFAULT_TRASH_LIMIT, 20, 'the documented default is 20; the config, not the constant, is the authority')
   const root = await scratch()
   const entries = []
-  for (let stamp = 1; stamp <= TRASH_LIMIT; stamp += 1) {
+  for (let stamp = 1; stamp <= DEFAULT_TRASH_LIMIT; stamp += 1) {
     entries.push(await seedEntry(root, { memberId: `member-${stamp}`, stamp }))
   }
   const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), members: memberRows(entries) })
   assert.deepEqual(outcome, { pruned: 0, removed: [] })
-  assert.equal((await namesInTrash(root)).length, TRASH_LIMIT, 'a trash at the cap keeps every artifact')
+  assert.equal((await namesInTrash(root)).length, DEFAULT_TRASH_LIMIT, 'a trash at the cap keeps every artifact')
+})
+
+test('the cap comes from the config, and a value outside the range is refused rather than clamped', () => {
+  assert.equal(resolveTrashLimit(null), DEFAULT_TRASH_LIMIT, 'an absent config takes the default')
+  assert.equal(resolveTrashLimit({ trashLimit: undefined }), DEFAULT_TRASH_LIMIT, 'an absent field takes the default')
+  assert.equal(resolveTrashLimit({ trashLimit: TRASH_LIMIT_MINIMUM }), TRASH_LIMIT_MINIMUM, 'the minimum itself is legal')
+  assert.equal(resolveTrashLimit({ trashLimit: 7 }), 7)
+
+  // `null` is a present, wrong value rather than the default: the official schema only admits it
+  // because its `anyOf` also accepts a Loader expression.
+  const refused = [[0, '0'], [-1, '-1'], [1.5, '1.5'], ['20', '"20"'], [Number.NaN, 'NaN'], [null, 'null']]
+  for (const [value, seen] of refused) {
+    assert.throws(
+      () => resolveTrashLimit({ trashLimit: value }),
+      (error) => {
+        assert.ok(error instanceof TypeError, 'the refusal is a type error, not a clamp')
+        assert.match(error.message, /trashLimit/, 'the message names the field')
+        assert.match(error.message, /minimum 1/, 'the message names the minimum')
+        assert.ok(error.message.includes(seen), `the message names the value it saw (${seen})`)
+        return true
+      },
+      `trashLimit: ${String(value)} is refused`,
+    )
+  }
 })
 
 test('the oldest entries are removed first until the cap is met', async () => {
@@ -181,7 +207,7 @@ test('a retirement that moved an artifact in prunes the oldest tombstone and kee
   const root = await scratch()
   const table = memoryTable()
   const seeded = []
-  for (let index = 1; index <= TRASH_LIMIT; index += 1) {
+  for (let index = 1; index <= DEFAULT_TRASH_LIMIT; index += 1) {
     const memberId = `seed-${index}`
     const entry = await seedEntry(root, { memberId, stamp: index })
     seeded.push(record({
@@ -218,7 +244,7 @@ test('a retirement that moved an artifact in prunes the oldest tombstone and kee
   assert.equal(retired.trashed, true)
   assert.equal(retired.pruned, 1, 'the retirement that grew the trash enforced the cap')
   assert.match(retired.message, /Retention removed 1 older artifact/)
-  assert.match(retired.message, new RegExp(`at most ${TRASH_LIMIT}`))
+  assert.match(retired.message, new RegExp(`at most ${DEFAULT_TRASH_LIMIT}`))
   assert.deepEqual(JSON.parse(JSON.stringify(retired)), retired, 'the result stays lossless JSON')
 
   const roster = readRoster(table, 'lead-1')
@@ -242,6 +268,52 @@ test('a retirement that moved an artifact in prunes the oldest tombstone and kee
   assert.equal(quiet.trashed, false)
   assert.equal(quiet.pruned, 0)
   assert.equal(readRoster(table, 'lead-1').members.find((member) => member.memberId === 'seed-2').trashState, TRASH_STATE.done)
+})
+
+test('a configured cap is the one the retirement enforces and prints, not the default', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  const seeded = []
+  for (let index = 1; index <= 2; index += 1) {
+    const memberId = `seed-${index}`
+    const entry = await seedEntry(root, { memberId, stamp: index })
+    seeded.push(record({
+      memberId,
+      name: memberId,
+      childId: memberId,
+      phase: PHASE.retired,
+      retiredAt: new Date(0).toISOString(),
+      trashPath: entry.trashPath,
+      trashKind: 'directory',
+      originalPath: join(root, 'sessions', memberId),
+      trashState: TRASH_STATE.done,
+      archived: false,
+    }))
+  }
+  const artifact = join(root, 'sessions', 'fresh-child')
+  await mkdir(artifact, { recursive: true })
+  await writeFile(join(artifact, 'session.jsonl'), 'log')
+  seeded.push(record({ memberId: 'fresh', name: 'fresh', childId: 'fresh-child' }))
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: seeded }))
+
+  const ctx = retirementCtx({ artifactOf: (id) => (id === 'fresh-child' ? artifact : undefined) })
+  const retired = await retireMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: lead,
+    dataDir: root,
+    hooks: hooks(),
+    target: 'fresh',
+    // What `apply` resolved out of the patch row; without it the retirement would enforce 20.
+    trashLimit: 2,
+  })
+
+  assert.equal(retired.pruned, 1, 'the prune ran at the configured cap')
+  assert.match(retired.message, /at most 2/, 'the operator reads the cap that was actually in force')
+  assert.doesNotMatch(retired.message, new RegExp(`at most ${DEFAULT_TRASH_LIMIT}\\b`), 'the default is not what was applied')
+  assert.equal(readRoster(table, 'lead-1').members.find((member) => member.memberId === 'seed-1').trashState, TRASH_STATE.pruned)
+  assert.equal(existsSync(join(trashRootOf(root), 'seed-1-1')), false)
 })
 
 test('a pruned tombstone refuses restore and the workspace is never called', async () => {

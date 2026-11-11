@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes [0010](0010-roster-layout-and-retention.md) for point 3 only** — *"Nothing is deleted automatically."* The rest of 0010 stands: one record per Lead with members inline, the single-file domain, and the write-time label cap.
+- **Superseded by [0012](0012-configurable-retention.md) for point 1 only** — the cap is a declared config field with a documented default and a minimum, not a fixed constant. Points 2–7 stand: enforcement happens only inside a retirement that moved an artifact in, oldest first, conservatively about what it touches, never a move in flight, with a truthful tombstone and a reported result.
 
 ## Context
 
@@ -29,6 +30,11 @@ reasonably delete are the copies it moved into its own trash. The design is ther
 small, per-Lead, oldest-first, reported in the result, and irreversible for the member it removes.
 
 ## Decision
+
+   > **Superseded for this point by [ADR 0012](0012-configurable-retention.md).** The cap is now the
+   > `trashLimit` field of the bundle's patch row, with `DEFAULT_TRASH_LIMIT = 20` as the documented
+   > default and a minimum of 1; an out-of-range value is refused at load. The rest of this decision —
+   > where, when and how the cap is enforced — still stands.
 
 1. **A fixed per-Lead cap: `TRASH_LIMIT = 20`.** The unit is one Lead's trash directory. The constant is
    fixed on purpose, mirroring the shipped Agent Teams roster, which bounds its members with the

@@ -16,6 +16,14 @@ There is no build step and no runtime dependency: the installed Harness resolves
 its own installation, and our entry imports nothing (ADR 0002). The bundle is Host-only: it has no
 browser half (ADR 0008).
 
+Its one tunable is the per-Lead session-trash cap, carried by the `trashLimit` field of the bundle's own
+patch row (`- id: team-roster`, `config: { trashLimit: <integer> }`). `apply(ctx, config)` resolves it
+before it registers anything: an absent field takes `DEFAULT_TRASH_LIMIT` (20), an integer of at least 1
+is used as-is, and anything else fails the load with the field, the value and the minimum in the message
+(ADR 0012). The entry deliberately declares no `Config` schema, so the Host Config provider still reports
+it `absent`: that projection accepts only a native Schemastery graph, which a zero-import bundle cannot
+provide, and the field is validated in `apply` instead.
+
 ## 2. v0.1, shipped
 
 ### 2.1 Compaction is enabled
@@ -123,11 +131,13 @@ can be moved the workspace archive hides the Session (`archived: true`, `trashSt
 intended trash fields are dropped); the record and the result say which of the two happened.
 
 A retirement that actually moved an artifact in then enforces the per-Lead retention cap (ADR 0011) in the
-same call, because that move is the one moment the trash grew: the oldest entries past `TRASH_LIMIT` (20)
-are removed, each removed tombstone keeps its `trashPath` and becomes `trashState: 'pruned'`, and the
-result reports how many went in `pruned`. Nothing is swept on a timer or on a read; a `pending` move is
-counted but never pruned; and only direct children of that one Lead's trash directory whose name and
-tombstone both parse are candidates. The cap is a fixed constant, not a setting, and it deletes only the
+same call, because that move is the one moment the trash grew: the oldest entries past the **effective**
+cap — the `trashLimit` config value `apply` resolved, or `DEFAULT_TRASH_LIMIT` (20) when the profile
+configures nothing — are removed, each removed tombstone keeps its `trashPath` and becomes
+`trashState: 'pruned'`, and the result reports how many went in `pruned` and which cap was applied.
+Nothing is swept on a timer or on a read; a `pending` move is counted but never pruned; and only direct
+children of that one Lead's trash directory whose name and tombstone both parse are candidates. What
+`apply` reads is a config field, not a literal in the code (ADR 0012), and it deletes only the
 plugin's own trash copies — the platform has no Session-deletion API, and its only "hide it" mechanism is
 the reversible workspace archive, which cannot bound bytes.
 
@@ -296,15 +306,16 @@ half-finished. What `retire_member` does, in the order the code does it:
    fields are dropped, and the record and the result say that this is what happened (`archived: true`,
    `trashState: 'none'`). `archived` and `trashPath` are mutually exclusive: the archive branch runs only
    when no move happened.
-5. **Bound the trash, only here.** A retirement that moved an artifact in removes the entries past
-   `TRASH_LIMIT` (20) from this Lead's trash directory, oldest first; each removed tombstone keeps its
-   `trashPath` and becomes `trashState: 'pruned'` (ADR 0011). A retirement that moved nothing prunes
-   nothing. No timer and no read-time sweep exists.
+5. **Bound the trash, only here.** A retirement that moved an artifact in removes the entries past the
+   **effective** cap from this Lead's trash directory, oldest first; the cap is the `trashLimit` config
+   field `apply` resolved (default `DEFAULT_TRASH_LIMIT`, 20), not a constant in the code; each removed
+   tombstone keeps its `trashPath` and becomes `trashState: 'pruned'` (ADR 0011, ADR 0012). A retirement
+   that moved nothing prunes nothing. No timer and no read-time sweep exists.
 6. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
    member, while the roster keeps the trash path for manual recovery.
 7. **Report.** The result carries `retired`, `drained`, `archived`, `trashed`, `pruned` (0 when nothing
    was removed) and — when there is one — `trash_path`; when `pruned` is above 0 the message says how
-   many artifacts were removed and why. A repeated call is a no-op that answers
+   many artifacts were removed, at which cap, and why. A repeated call is a no-op that answers
    `retired: true, drained: false, pruned: 0, reason: 'already-retired'`.
 
 The durable statement of the work is the member's `assignment`, set by the model with

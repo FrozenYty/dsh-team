@@ -31,7 +31,7 @@ import {
   withMember,
 } from './roster.js'
 import {
-  TRASH_LIMIT,
+  DEFAULT_TRASH_LIMIT,
   applyMemberTrash,
   pathExists,
   planMemberTrash,
@@ -257,11 +257,25 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent }) {
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   name?: string, label: string, prompt: string, assignment?: string, replace?: string,
- *   signal?: AbortSignal}} request
+ *   signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the effective cap from the
+ *   plugin config; the retirement half of a replacement enforces it, and it defaults to
+ *   `DEFAULT_TRASH_LIMIT` for callers that pass none.
  * @returns {Promise<object>} the member row the tool returns.
  */
 export async function spawnMember({
-  ctx, table, leadSessionId, leadAgent, dataDir, hooks, name, label, prompt, assignment, replace, signal,
+  ctx,
+  table,
+  leadSessionId,
+  leadAgent,
+  dataDir,
+  hooks,
+  name,
+  label,
+  prompt,
+  assignment,
+  replace,
+  signal,
+  trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
   const caller = requireLiveLead('spawn_member', leadSessionId, leadAgent)
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
@@ -357,6 +371,7 @@ export async function spawnMember({
       hooks,
       target: replace,
       reason: `Replaced by ${successorTarget}`,
+      trashLimit,
     })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
@@ -405,11 +420,13 @@ export async function spawnMember({
  * when that fallback ran, so a tombstone never carries both a `trashPath` and `archived: true`.
  *
  * A retirement that actually moved an artifact in then enforces the per-Lead retention cap in the same
- * call (ADR 0011), because that is the moment the trash grew. It removes the oldest entries past
- * `TRASH_LIMIT`, flips each removed tombstone to `trashState: 'pruned'` while keeping its `trashPath`,
- * and reports how many went in `pruned`. A retirement that moved nothing leaves the trash alone. The
- * platform has no Session-deletion API, so this is the only deletion on the path, and it touches only
- * this plugin's own trash copies.
+ * call (ADR 0011, ADR 0012), because that is the moment the trash grew. It removes the oldest entries
+ * past the effective `trashLimit` — the value `apply` resolved from the plugin config, or the
+ * documented default when the profile configures nothing — flips each removed tombstone to
+ * `trashState: 'pruned'` while keeping its `trashPath`, and reports how many went in `pruned` and what
+ * cap it applied. A retirement that moved nothing leaves the trash alone. The platform has no
+ * Session-deletion API, so this is the only deletion on the path, and it touches only this plugin's own
+ * trash copies.
  *
  * Without a live Lead Agent there is nothing to drain through, so the operation refuses with a reason
  * instead of throwing. The tool path always runs in the Lead's own Agent context; the guard exists so a
@@ -417,10 +434,21 @@ export async function spawnMember({
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
- *   target: string, reason?: string}} request
+ *   target: string, reason?: string, trashLimit?: number}} request - `trashLimit` is the effective cap
+ *   from the plugin config; it defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none.
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
-export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataDir, hooks, target, reason }) {
+export async function retireMember({
+  ctx,
+  table,
+  leadSessionId,
+  leadAgent,
+  dataDir,
+  hooks,
+  target,
+  reason,
+  trashLimit = DEFAULT_TRASH_LIMIT,
+}) {
   if (leadAgent === undefined || leadAgent === null) {
     return {
       target,
@@ -531,7 +559,7 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
   // `pruned`, which is what makes `restore_member` refuse with a typed reason instead of lying.
   let pruned = 0
   if (moved) {
-    const outcome = await pruneLeadTrash({ trashRoot: plan.trashRoot, members: persisted.members })
+    const outcome = await pruneLeadTrash({ trashRoot: plan.trashRoot, limit: trashLimit, members: persisted.members })
     pruned = outcome.pruned
     if (pruned > 0) {
       const removedIds = new Set(outcome.removed.map((entry) => entry.memberId))
@@ -564,7 +592,7 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
       : `Member retired and tombstoned; the session artifact was not moved (${moveReason ?? 'unknown'}).`,
   }
   if (pruned > 0) {
-    value.message += ` Retention removed ${pruned} older ${pruned === 1 ? 'artifact' : 'artifacts'} from this Lead's trash: it keeps at most ${TRASH_LIMIT}, oldest first, because the platform offers no Session deletion of its own (ADR 0011).`
+    value.message += ` Retention removed ${pruned} older ${pruned === 1 ? 'artifact' : 'artifacts'} from this Lead's trash: it keeps at most ${trashLimit}, oldest first, because the platform offers no Session deletion of its own (ADR 0011, ADR 0012).`
   }
   if (typeof record?.trashPath === 'string') value.trash_path = record.trashPath
   return value

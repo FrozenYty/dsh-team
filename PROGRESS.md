@@ -436,3 +436,71 @@
   `sessionController`, `sessionQuery` and `sessions` have no delete — so the only official way to take a
   Session out of the way is the reversible `archiveSession` flag. The cap therefore deletes this plugin's
   own trash copies, and says so.
+
+## 2026-11-11 — the trash cap is a config field, not a constant (v0.8.0)
+
+- **The owner overruled the fixed-constant decision, and the platform is on their side.** ADR 0011 chose a
+  constant by mirroring what it believed the official mechanism was. The live Host Config provider shows
+  the opposite: the official Agent Teams row (`include:agent-team`,
+  `@deepseek-ai/dsh-experimental-agent-team`) declares `maxMembers {default 16, minimum 1}`,
+  `maxTasks {default 256}`, `maxMessageBytes {default 65536}` and `disposalTimeoutMs {default 5000}` as
+  Config fields with a default and a minimum, while this bundle's own row (`include:team-roster`,
+  `patchId: team-roster`) reports `status: "absent"`. ADR 0012 supersedes point 1 of ADR 0011; 0011 keeps
+  its body and gains a header line and a note above that point.
+- **The cap is now `trashLimit`, read by `apply(ctx, config)` before anything else.** `resolveTrashLimit`
+  (`trash.js`) returns the documented `DEFAULT_TRASH_LIMIT` (20) for an absent field, accepts an integer of
+  at least 1, and refuses anything else — `0`, `-1`, `1.5`, `'20'`, `NaN` and an explicitly-null value —
+  with a message naming the field, the value it saw and the minimum. The resolution happens before any
+  registration, so a bad patch value fails the load rather than the first retirement. The resolved number
+  is passed to `install`, `retireMember` and `spawnMember`, so `pruneLeadTrash` runs at the effective cap
+  and the retirement message prints it; `TRASH_LIMIT` is renamed `DEFAULT_TRASH_LIMIT` because it is no
+  longer the authority.
+- **Verified answer: a zero-import bundle cannot declare a Config *schema*, and the reason is two
+  consumers, not one.** `@deepseek-ai/cordis/lib/index.js:1703` stores the export (`Config: plugin.Config`)
+  and lines 244–250 validate with `runtime.Config["~standard"].validate(config)`, so a plain object with
+  `type`/`properties`/`default` throws `TypeError: Cannot read properties of undefined (reading
+  'validate')` at activation — a loud failure, and still a failure. A hand-written Standard Schema would
+  satisfy Cordis, but the Config inspect provider reports `status: "schema"` only for a native Schemastery
+  graph: `@deepseek-ai/dsh-tool-cordis/lib/types/config.js:12-17` plus
+  `@deepseek-ai/dsh-app-boot/lib/index.js:3197-3201`, which requires `Symbol.for("schemastery") === true`,
+  a string `type` and an object `meta`. The profile schema generator is stricter still:
+  `dsh-app-boot/lib/index.js:4152-4155` records an error diagnostic, *"Config is not a native Schemastery
+  schema"*, for any Config that is present and not native, and line 3963 marks such a document
+  `complete: false`. So no `Config` is declared, the entry keeps reporting `absent` on purpose, and the
+  validation lives in `apply`. The raw patch config still reaches `apply` unchanged: the loader passes it
+  to the plugin callback (`@deepseek-ai/cordis-plugin-loader/lib/index.js:588-591`), and cordis returns it
+  untouched when `runtime.Config` is absent.
+- **The edit surface is the profile's `cordis.patch.yml`, by patch id.** `- id: team-roster` with
+  `config: { trashLimit: 7 }`; `@deepseek-ai/dsh-app-boot/lib/index.js:505-553` matches a non-insert patch
+  by `id` and replaces the supplied fields wholesale, so `config` is replaced rather than merged. The
+  README pair documents exactly that snippet, with the default, the minimum and the load-time refusal.
+- **How this was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js` exits
+  clean; `node --test --test-isolation=none tests/*.test.mjs` is 79 tests, 79 passing — the 76 that existed
+  plus the default and per-value refusal cases for `resolveTrashLimit`, a retirement that runs at
+  `trashLimit: 2` and prints "at most 2", and an entry-harness case that drives `apply` with each rejected
+  value and asserts that nothing was registered; `node scripts/check.mjs` passes.
+- **What stays unverified.** The bundle was not installed, so no live call has run in this change: the
+  entry's activation with a real patch row, the refusal surfacing in the Host log, and the effective cap
+  reaching a real retirement are covered by fakes and by the loader/cordis source, not by a running
+  profile. The Config provider will keep reporting `absent` for this entry — that is the recorded decision
+  (ADR 0012), not a regression.
+
+- **The configurable cap was verified live, in both directions, without touching the owner's profile.** The
+  probe used this bundle's own patch row, which is the same mechanism a profile override reaches:
+  - `config: { trashLimit: 5 }` installed and applied, then a retirement reported `pruned: 2` and the
+    message read "it keeps at most **5**" — the configured number in force, not the default 20, and the
+    trash directory then held exactly 5 entries on disk.
+  - `config: { trashLimit: 0 }` refused at load with `application: failed` and
+    `config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`, naming the field, the rule
+    and the value. That is the official schema's `minimum: 1` behaviour — refused, never silently clamped.
+  - The patch row was put back to `config: {}` before this was recorded, so a config-less profile keeps the
+    documented default; the temporary 5 and 0 were only the probe.
+- **A zero-import bundle cannot declare a Config, and that is a finding rather than an omission.** Cordis
+  validates a plugin's `Config` through `runtime.Config["~standard"].validate` (installed
+  `@deepseek-ai/cordis/lib/index.js:244-250`, stored at `:1703`), so a plain JSON-Schema-shaped object
+  throws at activation. A hand-written Standard Schema would satisfy Cordis, but the Config provider reports
+  `"schema"` only for a native Schemastery graph (`dsh-tool-cordis/lib/types/config.js:12-17`,
+  `dsh-app-boot/lib/index.js:3197-3201`) and records an error diagnostic for anything else
+  (`:4152-4155`). The entry therefore stays `absent` on purpose and the value is validated in `apply`,
+  with the raw patch config reaching it unchanged (loader `lib/index.js:588-591`). ADR 0012 records this,
+  so the next person does not read `absent` as "unfinished".
