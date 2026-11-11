@@ -35,6 +35,18 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 实测到的限制塑造了后续设计：本地子代理空闲即被卸载，而 `compactNow()` 要求 Agent 驻留且空闲。因此“对已完成的成员按需压缩”几乎没有窗口；可行路径是用消息唤醒它，让自动压缩在它下一步之前生效。
 
+### 2.3 自建花名册工具（v0.2，已实测）
+
+| 工具 | 行为 |
+|---|---|
+| `spawn_member` | 先占用一个带代次的名字并**持久化这条预留**，再通过 `ctx.subagents.startActivation` 以生成的 `childId` 和 `delivery: 'parent'` 启动可续聊子代理。启动失败会留下一条可见的 `failed` 记录，绝不会留下看不见的子代理。 |
+| `list_members` | 每条记录给出相态、代次、实时状态，驻留时还给出上下文压力。已退役成员仍以 `retired` 列出。 |
+| `retire_member` | 排空子代理、用 `ctx.workspaceRegistry.archiveSession` 归档其会话、给记录立碑。对“已结束的成员”和“正在跑的成员”两种情形都实测通过。 |
+
+记录存在一个以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。命名规则：代次 1 用裸名字；代次 2 起用 `<base>-g<N>`，因此继任者绝不会与已退役的名字相撞。退役后再用同一个基名创建，就是替换操作：`probe-a` 退役、`probe-a-g2` 启动，两条记录都在。
+
+在 P2-07 关闭官方工具行之前，两个花名册并存：`list_agents` 报官方那套，`list_members` 报自建这套，二者不是同一集合。
+
 ## 3. 为什么不扩展官方花名册
 
 官方花名册是 Lead 会话只追加日志的折叠。成员相态为 `provisioning | active | failed`；投影拒绝任何离开终态的转换，而被拒绝的事件会记成永久 `failure`，使该 Lead 的 Team 服务失效。因此伪造一条“已退役”记录不会安全失败。`maxMembers` 检查的是一个永不收缩的列表，名字永不复用，上游重构也仍在延后删除。
@@ -92,6 +104,8 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | retired | 拒绝 | 拒绝，带类型原因 | 无操作 | 无操作 | 忽略 | 忽略 |
 | failed | 拒绝 | 拒绝，带类型原因 | 无操作 | `retired` | 忽略 | 忽略 |
 
+`dormant` 推迟到 P4-01：当前实现把 `active` 作为生命周期相态，另外单独报告实时状态（`running`、`idle`、`unloaded`），因此被卸载的成员依然可见，不需要第二个持久相态。
+
 有两个格子代价最高，特意点名：
 
 - **provisioning 期间退役**——记录立刻变 `retired`，在途子代理发布后被排空。成员绝不能退役后复活。
@@ -110,7 +124,8 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 
 ### 4.5 模型侧接口
 
-插件将提供 `list_members`、`spawn_member`、`message_member`、`stop_member`、`retire_member`、`replace_member`，并由 bundle 补丁禁用官方花名册工具，避免两个花名册说法不一致（P2-07）。工具 schema 随 P2-06 落地。
+已交付：`spawn_member`、`list_members`、`retire_member`（P2-03、P2-04），与 v0.1 的上下文工具并列。
+计划中：`message_member`、`stop_member`（P2-06），以及禁用官方花名册行的 bundle 补丁（P2-07），避免两个花名册说法不一致。
 
 ## 5. 使用的 Harness 扩展点
 

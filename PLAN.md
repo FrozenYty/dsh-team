@@ -60,10 +60,10 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [x] **P2-02** Write the roster state matrix (phases × events) before implementing transitions.
   Done when `docs/architecture-en.md` contains the matrix with every cell decided, including
   retire-versus-spawn races and messages to a retired member.
-- [ ] **P2-03** Roster service: spawn a member with a generation-suffixed name through `ctx.subagents`.
+- [x] **P2-03** Roster service: spawn a member with a generation-suffixed name through `ctx.subagents`.
   Done when a spawn returns a member record carrying the child Session id and the name is unique in the
   roster.
-- [ ] **P2-04** `retire_member`: handoff brief, drain, tombstone.
+- [x] **P2-04** `retire_member`: drain, archive, tombstone. The handoff brief is deferred to P4-02.
   Done when a retired member stops receiving work, its record says `retired`, and its context is no
   longer reachable through the roster tools.
 - [ ] **P2-05** `replace_member`: retire a member and spawn a successor addressed by the brief.

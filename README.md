@@ -40,8 +40,13 @@ v0.1 fixes that and adds the two inspection tools below. v0.2 replaces the roste
 | Enables the shipped `compaction-basic` backend (profile-wide) | Shipped in v0.1 |
 | `member_context` — per-member context pressure, resident/idle state | Shipped in v0.1 |
 | `compact_member` — compact one in-place member | Shipped in v0.1 |
-| Own roster on `ctx.subagents`: spawn, retire, remove, replace | v0.2, in progress |
+| `spawn_member` / `list_members` / `retire_member` — own durable roster with generation-suffixed names | Shipped in v0.2, verified live |
 | Team panel in Settings | Planned |
+
+**Two rosters during the migration.** `list_agents` still reports the shipped team roster; `list_members`
+reports the roster this plugin owns. They are different sets, because the shipped roster cannot remove a
+member. Until P2-07 disables the shipped roster tools, use `list_members` for anything created with
+`spawn_member` and do not mix the two.
 
 The v0.1 surface is documented in [docs/architecture-en.md](docs/architecture-en.md);
 the durable-roster design is [docs/adr/0001](docs/adr/0001-own-roster-on-subagents.md).
@@ -69,7 +74,7 @@ Verification after install:
 
 | Path | What |
 |---|---|
-| `package.json`, `cordis.patch.yml`, `index.js` | the bundle that gets installed |
+| `package.json`, `cordis.patch.yml`, `index.js`, `roster.js` | the bundle that gets installed |
 | `locale/`, `icon.svg` | plugin display metadata |
 | `PLAN.md`, `PROGRESS.md` | tasks, and the append-only change log |
 | `docs/` | design documents (bilingual) and ADRs |

@@ -48,3 +48,14 @@
   generated `childId`. The state matrix in `docs/architecture-en.md` §4.3 was written against the
   installed API, including the two expensive cells: retirement during provisioning, and retirement
   during an active turn.
+- **P2-03 and P2-04 are ticked after a live run, and the live run found a real defect.** The first
+  `spawn_member` call started the child, the child answered, and the tool still failed: a freshly
+  spawned member has no committed model request, so `contextPressure` returned an undefined window and
+  the registry rejected the result as non-lossless JSON. Numeric fields are now attached only when
+  finite. The interesting part is not the bug, it is that the registry caught it — a tool that returns
+  `undefined` is a broken contract, not a cosmetic detail.
+- **Removal and replacement were exercised end to end, twice.** `probe-a` was spawned, ran, answered,
+  and was retired — `drained: true`, `archived: true`, record `retired`. Spawning the same base name
+  then produced `probe-a-g2` at generation 2, which is the replacement the shipped roster cannot do.
+  Retiring `probe-a-g2` while it was mid-turn exercised the second expensive matrix cell and also
+  returned `drained: true`. Nothing was deleted: the child Sessions stay on disk and are archived.

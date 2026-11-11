@@ -27,8 +27,10 @@
 | 启用官方 `compaction-basic` 压缩后端（profile 级） | v0.1 已交付 |
 | `member_context`——每个成员的上下文压力、是否驻留/空闲 | v0.1 已交付 |
 | `compact_member`——就地压缩指定成员 | v0.1 已交付 |
-| 自建花名册：创建、退役、移除、替换 | v0.2 进行中 |
+| `spawn_member`／`list_members`／`retire_member`——自建持久花名册，代次命名 | v0.2 已交付并实测 |
 | 设置页团队面板 | 计划中 |
+
+**迁移期有两个花名册。** `list_agents` 报的仍是官方团队花名册；`list_members` 报的是本插件自建的花名册。二者不是同一集合——官方花名册无法删除成员。在 P2-07 关闭官方花名册工具之前，用 `spawn_member` 创建的成员一律用 `list_members` 查看，不要把两者混用。
 
 v0.1 的能力说明见 [docs/architecture-zh.md](docs/architecture-zh.md)，自建花名册的设计决策见 [docs/adr/0001](docs/adr/0001-own-roster-on-subagents.md)。
 
@@ -53,7 +55,7 @@ bundle 是链接安装而不是复制，所以改了 `index.js` 之后要先 `re
 
 | 路径 | 内容 |
 |---|---|
-| `package.json`、`cordis.patch.yml`、`index.js` | 被安装的 bundle 本体 |
+| `package.json`、`cordis.patch.yml`、`index.js`、`roster.js` | 被安装的 bundle 本体 |
 | `locale/`、`icon.svg` | 插件展示元数据 |
 | `PLAN.md`、`PROGRESS.md` | 任务与只追加的变更日志 |
 | `docs/` | 设计文档（双语）与 ADR |
