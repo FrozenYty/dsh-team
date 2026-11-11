@@ -78,6 +78,21 @@ test('the trash-directory name parser accepts a uid-plus-stamp name and refuses 
   assert.equal(parseTrashDirName('..-1'), undefined)
 })
 
+test('a tombstone written before the cap existed is still eligible', async () => {
+  const root = await scratch()
+  const entries = []
+  for (let index = 0; index < 5; index += 1) {
+    entries.push(await seedEntry(root, { memberId: `legacy-${index}`, stamp: 1000 + index }))
+  }
+  // `trashState` arrived with the cap, so every earlier tombstone has a trashPath and no state. Reading
+  // that absence as ineligible leaves the entire pre-existing trash permanently exempt: the first live
+  // run of the cap pruned nothing for exactly this reason.
+  const legacyRows = entries.map(({ memberId, trashPath }) => ({ memberId, trashPath }))
+  const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), limit: 2, members: legacyRows })
+  assert.equal(outcome.pruned, 3)
+  assert.deepEqual(await namesInTrash(root), ['legacy-3-1003', 'legacy-4-1004'])
+})
+
 test('the cap is the fixed 20 the documents promise, and a smaller trash is left untouched', async () => {
   assert.equal(TRASH_LIMIT, 20, 'the documented default is a fixed constant, not a config key')
   const root = await scratch()

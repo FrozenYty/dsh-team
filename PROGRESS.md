@@ -417,3 +417,22 @@
   entries: the retention task this change ticked (in the P2 section) and "File the missing lifecycle
   upstream with the evidence gathered here" (in P4). The retention task is the one the brief named, and
   renumbering the other is a plan edit nobody asked for, so it is left as it is.
+
+- **The retention cap was verified live, and the first run of it did nothing.** Installed `0.7.0`, retired
+  a member with the cap set low, and got `pruned: 0` where three deletions were expected. Cause: the
+  candidacy rule required `trashState` to be `done` or `pending`, but `trashState` is a field this very
+  release introduced — every tombstone written before it has a `trashPath` and no state, so the whole
+  pre-existing trash was permanently exempt and the cap only ever governed records created after it. Fixed
+  by reading a missing state as `done` (a record with a path completed its move), with a regression test
+  that seeds state-less tombstones. The live re-run then reported `pruned: 3` with an explicit message,
+  the directory held exactly the cap, `restore_member` on a pruned tombstone answered
+  `{restored: false, reason: "pruned"}` and kept the record retired instead of calling the workspace, and
+  restoring an unpruned one still answered `reason: "moved-back"` with the path. The constant was put back
+  to 20 before merging; the temporary 7 was only the live probe.
+- **The cap is a fixed constant, not a config key, because that is how the platform bounds things.**
+  The owner asked to mirror the official mechanism, and the shipped Agent Teams roster bounds members with
+  a fixed `maxMembers`. ADR 0011 also records what the investigation found: the Harness exposes no
+  Session-deletion API at all — `sessionPersistence` offers `create/open/flush/stat/list`, and
+  `sessionController`, `sessionQuery` and `sessions` have no delete — so the only official way to take a
+  Session out of the way is the reversible `archiveSession` flag. The cap therefore deletes this plugin's
+  own trash copies, and says so.

@@ -93,6 +93,17 @@ small, per-Lead, oldest-first, reported in the result, and irreversible for the 
   guessing at.
 - The record shape and the state matrix gain `pruned`; `docs/architecture-en.md` §4.2/§4.3/§4.4 carry it.
 
+## Migration
+
+`trashState` did not exist before this cap, so every tombstone written by an earlier release carries a
+`trashPath` and **no state at all**. The cap reads a missing state as `done` — a record with a path has
+completed its move; the field simply did not exist when it was written.
+
+That rule is not optional politeness. The first live run of the cap pruned nothing, because an absent
+state failed the "did the move land" test and every pre-existing tombstone was therefore exempt: the cap
+was enforced only against records created after it. The regression test seeds state-less tombstones for
+that reason, and the live re-run then pruned three artifacts and bounded the directory as designed.
+
 ## Revisit when
 
 The owner wants a different number (edit `TRASH_LIMIT`), the Harness gains a Session-deletion API that

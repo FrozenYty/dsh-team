@@ -331,10 +331,15 @@ export async function pruneLeadTrash({ trashRoot, limit = TRASH_LIMIT, members =
 
   // The tombstone is the authority: an artifact is a candidate only when a record says the move
   // landed (or is still in flight) and that this is where it went.
+  //
+  // `trashState` arrived with the cap in 0.7.0, so every tombstone written before it carries a
+  // `trashPath` and no state at all. A record with a path but no state has completed its move — the
+  // field simply did not exist yet — and treating it as anything else leaves the whole legacy trash
+  // permanently exempt, which is exactly what the first live run of the cap did.
   const byPath = new Map()
   for (const member of members) {
     if (typeof member?.trashPath !== 'string' || member.trashPath === '') continue
-    byPath.set(resolve(member.trashPath), member)
+    byPath.set(resolve(member.trashPath), { ...member, trashState: member.trashState ?? 'done' })
   }
 
   const candidates = []
