@@ -14,12 +14,14 @@ state in a `storageDomain` domain keyed by Lead Session id (ADR 0003).
 
 ## Status
 
-- Current version: v0.8.0.
+- Current version: v0.9.0.
 - Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
-  refused at load.
-- Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn, and
-  the lost-update protection when two roster operations overlap.
+  refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
+  `list_members` answered `swept: 2` with both targets, and both rows came back `retired`.
+- Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn,
+  the lost-update protection when two roster operations overlap, and that a member still running is never
+  swept.
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -41,8 +43,8 @@ that is a move rather than a deletion.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Start a named member as a continuable child; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call. |
-| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, live state, `compactable` and — while resident — context pressure. |
+| `spawn_member` | Start a named member as a continuable child; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
+| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, live state, `compactable` and — while resident — context pressure. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
 | `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. |
@@ -90,7 +92,7 @@ The walkthrough is abridged from an acceptance run recorded in [PROGRESS.md](PRO
 | Move | Its persisted Session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, with the original path and artifact kind recorded. Recovery is a directory move back. |
 | Tombstone | The record becomes `retired` and keeps the assignment and the paths; the next generation of the name can then be spawned. The projections stop serving the member, and a repeated retirement is a no-op that says so. |
 | Archive fallback | When no artifact can be moved, the workspace archive hides the Session instead, and the record and the result say so (`archived: true`). |
-| Retention | A retirement that moved an artifact in removes the oldest entries past the effective per-Lead cap in the same call and reports the count in `pruned`; nothing is swept on a timer or on a read. The platform has no Session-deletion API, which is why the plugin deletes only its own trash copies (ADR 0011); the cap and its refusal are in Configuration below. |
+| Retention | A retirement that moved an artifact in removes the oldest entries past the effective per-Lead cap in the same call and reports the count in `pruned`; the cap is enforced only there — no timer and no read-time sweep for it. The platform has no Session-deletion API, which is why the plugin deletes only its own trash copies (ADR 0011); the cap and its refusal are in Configuration below. |
 | Pruned | A pruned tombstone keeps its `trashPath` — it still says where the artifact went — and its `trashState` becomes `pruned`. The bytes are gone, so `restore_member` refuses with `reason: "pruned"` and never calls the workspace. |
 | Restore | `restore_member` moves the artifact back to its recorded path and clears the tombstone. It refuses when a live member already owns the target, and its result names the branch that actually ran. |
 
@@ -108,6 +110,19 @@ assignment unless the model records a different one.
 - **The assignment is durable and capped.** `spawn_member.assignment` sets it, `message_member.assignment`
   replaces it, both capped at 1000 characters (refused, never truncated); `list_members` reports it and the
   tombstone keeps it.
+
+## Ephemeral members
+
+`spawn_member` with `ephemeral: true` marks a member one-shot, and `list_members` reports `ephemeral: true`
+on its row; the default is `false`. The plugin receives no completion event, so the sweep that retires such
+a member runs at the start of `list_members` and `spawn_member`, and it retires only a member it has
+positive evidence ran and then stopped: one that never started is never swept, and one still running is
+never swept. A swept member goes through the ordinary retirement path, so its tombstone stays listed and
+its slot is credited back. The triggering call reports `swept` and `swept_targets`, and adds nothing when
+the sweep retired nobody.
+
+Messaging an ephemeral member clears the flag: sending it work again is a declaration that it is not
+one-shot after all, and without that rule a sweep could eat work a just-delivered message meant to keep.
 
 ## Install and verify
 
