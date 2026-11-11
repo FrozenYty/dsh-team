@@ -47,6 +47,22 @@ Measured limitation that shapes the design: a local child is unloaded when it go
 demand; waking it with a message and letting automatic compaction run at its next step is the durable
 path.
 
+### 2.3 Own roster tools (v0.2, verified live)
+
+| Tool | Behaviour |
+|---|---|
+| `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. |
+| `list_members` | Every record with phase, generation, live status and — while resident — context pressure. Retired members stay listed as `retired`. |
+| `retire_member` | Drains the child, archives its Session through `ctx.workspaceRegistry.archiveSession`, and tombstones the record. Verified against both a finished member and a member mid-turn. |
+
+Records live in one `storageDomain` domain keyed by the Lead Session id (ADR 0003). Naming rule:
+generation 1 is the bare base name; generation 2 and later is `<base>-g<N>`, so a replacement never
+collides with a retired name. Spawning the same base name after a retirement is the replace operation:
+`probe-a` retired, `probe-a-g2` started, both recorded.
+
+The shipped team roster and this roster coexist until P2-07 disables the shipped tool row. `list_agents`
+reports one; `list_members` reports the other. They are different sets.
+
 ## 3. Why the shipped roster is not extended
 
 The shipped roster is a fold over the Lead Session's append-only event log. Member phases are
@@ -123,6 +139,10 @@ notices; a dash means the event is rejected with a typed reason.
 | retired | reject | reject, typed reason | no-op | no-op | ignore | ignore |
 | failed | reject | reject, typed reason | no-op | `retired` | ignore | ignore |
 
+`dormant` is deferred to P4-01: the shipped implementation keeps `active` as the lifecycle phase and
+reports live state (`running`, `idle`, `unloaded`) separately, so an unloaded member is visible without a
+second durable phase.
+
 Two cells are the expensive ones and are called out deliberately:
 
 - **retire while provisioning** — the record becomes `retired` and the in-flight child is drained when
@@ -152,9 +172,9 @@ half-finished:
 
 ### 4.5 Model-facing surface
 
-The plugin will expose `list_members`, `spawn_member`, `message_member`, `stop_member`, `retire_member`
-and `replace_member`, and the bundle patch will disable the shipped roster tools so two rosters never
-disagree (P2-07). The exact tool schemas land with P2-06.
+Shipped: `spawn_member`, `list_members`, `retire_member` (P2-03, P2-04), beside the v0.1 context tools.
+Planned: `message_member` and `stop_member` (P2-06), and the bundle patch that disables the shipped
+roster row so two rosters never disagree (P2-07).
 
 ## 5. Harness extension points used
 
