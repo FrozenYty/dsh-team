@@ -32,6 +32,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么面板只显示一个会话的花名册，又是怎么知道是哪个会话？ | `docs/adr/0006-session-scoped-roster-panel.md`——已被 0008 取代 | 英文 |
 | 为什么插件只面向模型？ | `docs/adr/0008-model-only-surface.md` | 英文 |
 | 为什么替换要交接记录，以及按什么顺序进行？ | `docs/adr/0009-replacement-handoff.md` | 英文 |
+| 为什么每个 Lead 只有一条记录，以及为什么任何东西都不会被自动删除？ | `docs/adr/0010-roster-layout-and-retention.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 

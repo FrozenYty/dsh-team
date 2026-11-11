@@ -339,3 +339,28 @@
 - **What stays unverified.** The bundle was not installed, so no live call has run in this change: the
   `update`-serialized mutations, the tombstone-first ordering and the typed refusals are covered by fakes
   that model the storage facility's write chain, not by a real profile.
+
+- **The 0.6.0 correctness fixes were verified live, not only by their tests.** Installed from `main` and
+  driven through the tools: `retire_member` reported `retired/drained/trashed` with a `trash_path`; a
+  second `retire_member` answered the typed no-op `{retired: true, drained: false, reason:
+  "already-retired"}`; `message_member` on the tombstone answered `{sent: false, reason: "retired"}`;
+  `restore_member` answered `reason: "moved-back"` with the path, and a second call `reason:
+  "already-active"`; a tombstone with no trash path answered `reason: "unarchived"`, naming the branch it
+  actually ran, with the Session present on disk and no residue in the trash — the false-success class
+  that bit this plugin twice is not reproducible now. `spawn_member` with a blank label refused before
+  creating anything.
+- **The replacement flow was re-verified after the refactor, because a 363-line rewrite of `actions.js`
+  is exactly where a working feature goes quiet.** A fresh member took the assignment "Reply with the
+  digit 7 and nothing else" and was told to stand by; one `spawn_member {replace: …}` call started its
+  successor, which inherited the assignment, and replied `7`. That is P2-08 repeated on the refactored
+  code, not on the code that first passed it.
+- **ADR 0003's decision never matched the code, and that is now closed by ADR 0010 rather than by editing
+  history.** 0003 read "one record per member, plus a per-Lead index"; the shipped code keeps one record
+  per Lead with members inline. ADR 0010 supersedes the layout paragraph, records why the per-member
+  layout was not adopted (a retirement must be one consistent document, and the migration is the risk),
+  and writes down the fact nobody had written: nothing is ever deleted. Retention of the trash directory
+  and of tombstones is now a stated deferral with an owner (P4-03) instead of an accident.
+- **The label gained a write-time cap** (`LABEL_MAX`, 200, matching the shipped roster's description
+  cap) because the record is a single document rewritten in full on every mutation. Load-time validation
+  deliberately does not enforce it: refusing to load a roster over a display field would brick the plugin.
+  Unit-tested; not exercised by a live tool call, because the cap only fires above 200 characters.

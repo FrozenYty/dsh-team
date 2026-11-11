@@ -104,6 +104,12 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   `ctx.subagents.listDescendants`, `memberRow` adds `child_id`, the Settings panel and its bridge are
   deleted in the same change (ADR 0008), and the suite covers adoption with fakes. A live install is
   the owner's decision.
+- [ ] **P4-03** Retention: bound the session trash and the tombstone list.
+  Done when a documented policy exists for `$DSH_HOME/team-roster/trash` and for tombstones whose Lead
+  Session no longer exists, and running it twice leaves the same state. Deferred deliberately (ADR 0010):
+  the trash holds real Session bytes, so a policy that deletes them is the owner's decision, and a
+  tombstone cannot be dropped while the drained row still sits in the parent's catalog — otherwise the
+  member is re-adopted as a live ghost.
 
 ### P3 — Settings panel (cancelled in v0.4)
 

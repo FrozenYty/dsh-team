@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { PHASE, ROSTER_SPEC, adoptMember, findAnyTarget, findByTarget, planMember, targetOf, withMember } from '../roster.js'
+import { PHASE, ROSTER_SPEC, adoptMember, checkLabel, findAnyTarget, findByTarget, planMember, targetOf, withMember } from '../roster.js'
 
 const emptyRoster = () => ({ leadSessionId: 'lead-1', members: [] })
+
+test('a label is trimmed and capped at the write boundary', () => {
+  assert.equal(checkLabel('  Check the diff  '), 'Check the diff')
+  assert.equal(checkLabel('x'.repeat(200)).length, 200)
+  assert.throws(() => checkLabel('x'.repeat(201)), /the cap is 200/)
+  assert.throws(() => checkLabel('   '), /non-empty/)
+  assert.throws(() => checkLabel(undefined), /must be a string/)
+  // The cap is enforced where a member is planned, so no write can store an unbounded label.
+  assert.throws(() => planMember(emptyRoster(), 'reviewer', 'x'.repeat(201)), /the cap is 200/)
+  assert.equal(planMember(emptyRoster(), 'reviewer', '  spaced  ').label, 'spaced')
+})
 
 test('the first holder of a name keeps the bare name; the next generation is suffixed', () => {
   const first = planMember(emptyRoster(), 'reviewer', 'Check the diff')

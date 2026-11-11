@@ -36,6 +36,34 @@ const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
 export const ASSIGNMENT_MAX = 1000
 
 /**
+ * Cap on the label. The label is display text, and the roster is one JSON document per Lead in a
+ * single-file domain, so every write rewrites it: an uncapped label is paid for on every spawn and
+ * every retirement. 200 matches the cap the shipped team roster puts on a member description.
+ *
+ * This is a write-time contract. A record already on disk is NOT rejected for a longer label, because
+ * refusing to load a whole roster over a display field would brick the plugin; only new writes are
+ * bounded.
+ */
+export const LABEL_MAX = 200
+
+/**
+ * Validate and normalize a member label. Throws rather than truncating, for the same reason the
+ * assignment does: a label the model did not write is a label it cannot recognise later.
+ * @param {unknown} value - the model-supplied label.
+ * @param {string} source - operation name, so the thrown message names what refused.
+ * @returns {string} the label, trimmed.
+ */
+export function checkLabel(value, source = 'label') {
+  if (typeof value !== 'string') throw new Error(`${source}: label must be a string`)
+  const text = value.trim()
+  if (text.length === 0) throw new Error(`${source}: label must be a non-empty string`)
+  if (text.length > LABEL_MAX) {
+    throw new Error(`${source}: label is ${text.length} characters; the cap is ${LABEL_MAX}`)
+  }
+  return text
+}
+
+/**
  * Validate and normalize a member assignment.
  * Throws rather than truncating: a silently shortened assignment would be handed to a successor as if
  * the model had written it that way.
@@ -43,8 +71,7 @@ export const ASSIGNMENT_MAX = 1000
  * @param {string} source - operation name, so the thrown message names what refused.
  * @returns {string} the assignment, trimmed.
  */
-export function checkAssignment(value, source = 'assignment') {
-  if (typeof value !== 'string') throw new Error(`${source}: assignment must be a string`)
+export function checkAssignment(value, source = 'assignment') {  if (typeof value !== 'string') throw new Error(`${source}: assignment must be a string`)
   const text = value.trim()
   if (text.length === 0) throw new Error(`${source}: assignment must not be empty`)
   if (text.length > ASSIGNMENT_MAX) {
@@ -223,6 +250,7 @@ export function planMember(roster, baseName, label, assignment) {
     throw new Error(`member name "${baseName}" must match ${String(NAME_PATTERN)}`)
   }
   if (baseName === 'lead') throw new Error('member name "lead" is reserved for the root agent')
+  const trimmedLabel = checkLabel(label, 'planMember')
   const used = roster.members.filter((member) => member.name === baseName)
   const generation = used.reduce((highest, member) => Math.max(highest, member.generation), 0) + 1
   const planned = {
@@ -231,7 +259,7 @@ export function planMember(roster, baseName, label, assignment) {
     generation,
     childId: randomUUID(),
     phase: PHASE.provisioning,
-    label,
+    label: trimmedLabel,
     createdAt: new Date().toISOString(),
   }
   if (typeof assignment === 'string' && assignment.length > 0) planned.assignment = checkAssignment(assignment, 'planMember')
