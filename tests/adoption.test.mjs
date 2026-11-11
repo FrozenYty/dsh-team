@@ -1,19 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ensureAdopted, listMembers } from '../actions.js'
-import { PHASE, readRoster } from '../roster.js'
-
-/** A roster table with the two methods the lifecycle uses. */
-function memoryTable() {
-  const rows = new Map()
-  return {
-    get: (key) => rows.get(key),
-    put: async (key, value) => {
-      rows.set(key, value)
-    },
-  }
-}
+import { ensureAdopted, listMembers, memberRow, retireMember } from '../actions.js'
+import { PHASE, findAnyTarget, planMember, readRoster, updateRoster } from '../roster.js'
+import { memoryTable } from './memory-table.mjs'
 
 /** A subagent-registry row, as `ctx.subagents.listDescendants` answers for one child. */
 function descendant(id, overrides = {}) {
@@ -33,13 +23,16 @@ function descendant(id, overrides = {}) {
 function fakeCtx({ shipped = [], descendants = [] } = {}) {
   return {
     agentTeams: { listMembers: () => shipped },
-    subagents: { listDescendants: async () => descendants },
+    subagents: { listDescendants: async () => descendants, drainChildren: async () => {} },
     agents: { get: () => undefined },
     get: () => undefined,
   }
 }
 
 const caller = { session: { id: 'lead-1' } }
+
+/** The host-side effects a retirement refreshes. */
+const hooks = () => ({ filter: { invalidate() {} }, slots: { refresh: async () => {} } })
 
 test('an unknown descendant is adopted once and only once', async () => {
   const table = memoryTable()
@@ -115,4 +108,113 @@ test('every listed row carries the child id and stays lossless JSON', async () =
     assert.ok(row.child_id.length > 0)
   }
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result, 'no row carries an undefined value')
+})
+
+test('a broken shipped-roster projection does not block adoption', async () => {
+  // The shipped roster is a projection over the Lead's append-only Team log; a rejected transition
+  // leaves it in a permanent failure state and `listMembers` throws. Discovery must degrade to the
+  // subagent registry, not disable the roster tools.
+  const table = memoryTable()
+  const ctx = {
+    agentTeams: { listMembers: () => { throw new Error('the Team projection is in a permanent failure state') } },
+    subagents: { listDescendants: async () => [descendant('child-1')], drainChildren: async () => {} },
+    agents: { get: () => undefined },
+    get: () => undefined,
+  }
+  const roster = await ensureAdopted(ctx, caller, table, 'lead-1')
+  assert.equal(roster.members.length, 1)
+  assert.equal(roster.members[0].childId, 'child-1')
+})
+
+test('a stranded provisioning reservation is reconciled on read', async () => {
+  const table = memoryTable()
+  const planned = planMember({ leadSessionId: 'lead-1', members: [] }, 'probe', 'Probe the cache')
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [planned] }))
+
+  const stranded = await ensureAdopted(fakeCtx(), caller, table, 'lead-1')
+  assert.equal(stranded.members[0].phase, PHASE.failed, 'a reservation that published nothing is retirable')
+  assert.match(stranded.members[0].note, /never published/)
+
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [planned] }))
+  const publishedCtx = {
+    ...fakeCtx(),
+    agents: { get: (id) => (id === planned.childId ? { id } : undefined) },
+  }
+  const published = await ensureAdopted(publishedCtx, caller, table, 'lead-1')
+  assert.equal(published.members[0].phase, PHASE.active, 'a child that did publish is reconciled to active')
+})
+
+test('a mutation suspended across the discovery await cannot resurrect a tombstone', async () => {
+  const table = memoryTable()
+  const planned = planMember({ leadSessionId: 'lead-1', members: [] }, 'reviewer', 'Check the diff')
+  await updateRoster(table, 'lead-1', () => ({
+    leadSessionId: 'lead-1',
+    members: [{ ...planned, phase: PHASE.active }],
+  }))
+
+  let releaseDiscovery
+  const gate = new Promise((resolve) => { releaseDiscovery = resolve })
+  let discoveryStarted
+  const started = new Promise((resolve) => { discoveryStarted = resolve })
+  let calls = 0
+  const ctx = {
+    agentTeams: { listMembers: () => [] },
+    subagents: {
+      listDescendants: async () => {
+        calls += 1
+        if (calls === 1) {
+          discoveryStarted()
+          await gate
+          return [descendant('child-2')]
+        }
+        return []
+      },
+      drainChildren: async () => {},
+    },
+    agents: { get: () => undefined },
+    get: () => undefined,
+  }
+
+  // The adoption reads the roster, then suspends inside the subagent-registry walk.
+  const suspended = ensureAdopted(ctx, caller, table, 'lead-1')
+  await started
+  // A retirement commits while that read is still suspended.
+  const retirement = await retireMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: caller,
+    dataDir: '/tmp/team-roster-test',
+    hooks: hooks(),
+    target: 'reviewer',
+  })
+  assert.equal(retirement.retired, true)
+  releaseDiscovery()
+  await suspended
+
+  const roster = readRoster(table, 'lead-1')
+  const reviewer = findAnyTarget(roster, 'reviewer')
+  assert.equal(reviewer.phase, PHASE.retired, 'the tombstone survives the adoption write that was suspended')
+  assert.equal(reviewer.trashState, 'none')
+  assert.ok(roster.members.some((member) => member.childId === 'child-2'), 'the discovery result is still adopted')
+})
+
+test('a NaN pressure ratio is omitted instead of failing the tool result', () => {
+  const ctx = {
+    agents: { get: () => ({ status: 'idle' }) },
+    tokenMeter: { contextPressure: () => ({ pressureTokens: Number.NaN, contextWindow: 1024 }) },
+    get: () => undefined,
+  }
+  const member = {
+    memberId: 'member-1',
+    childId: 'child-1',
+    name: 'reviewer',
+    generation: 1,
+    phase: PHASE.active,
+    label: 'Check the diff',
+  }
+  const row = memberRow(ctx, member)
+  assert.equal(Object.hasOwn(row, 'usage_ratio'), false, 'a NaN ratio is not lossless JSON')
+  assert.equal(Object.hasOwn(row, 'pressure_tokens'), false)
+  assert.deepEqual(JSON.parse(JSON.stringify(row)), row)
 })

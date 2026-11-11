@@ -80,7 +80,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Adoption made the shipped row unnecessary for removal, and disabling it today would remove the shared
   task board. Done when the shipped roster tools are absent from a Lead's tool list, the plugin's own
   task tools replace them, and nothing else regressed.
-- [ ] **P2-08** Live end-to-end verification of a replaced member finishing its predecessor's task.
+- [x] **P2-08** Live end-to-end verification of a replaced member finishing its predecessor's task.
   Done when, in one session, a member is retired, a successor starts from a handoff brief, and the
   successor completes the predecessor's task without redoing it.
 - [ ] **P2-09** Own task board: create, list, read, compare-and-set, dependencies.

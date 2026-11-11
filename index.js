@@ -68,12 +68,34 @@ function callingAgent(agent, toolName) {
   return agent
 }
 
-/** Refuse every caller that is not the Lead of its own Team. */
+/**
+ * Whether one agent is the root of its own Session tree.
+ *
+ * The shipped Team service answers `lead` for exactly this shape, but `tryMembership` returns
+ * `undefined` both for a subagent it does not own and when its own projection cannot be read: it
+ * swallows that failure. The parent Session is the discriminator — a spawned child always names its
+ * parent, so an agent that names none and is still live in the Agent registry is a root. This is the
+ * same test the shipped roster's own `liveChildrenByRoot` uses to find roots.
+ */
+function isRootAgent(ctx, agent) {
+  return ctx.agents.get(agent.id) === agent && agent.session?.header?.parentSession === undefined
+}
+
+/**
+ * Refuse every caller that is not the Lead of its own Team.
+ *
+ * A roster whose Team projection is in its documented permanent-failure state must still be usable:
+ * otherwise `maybeInstall` never installs the tools and `requireLead` refuses every call — including
+ * the retirement that exists to repair that team — behind "available to the Team Lead only". So when
+ * membership cannot be read, a live root agent is accepted as the Lead.
+ */
 function requireLead(ctx, caller, toolName) {
   const membership = ctx.agentTeams.tryMembership(caller)
-  if (membership === undefined || membership.role !== 'lead') {
-    throw new Error(`${toolName} is available to the Team Lead only`)
+  if (membership !== undefined) {
+    if (membership.role !== 'lead') throw new Error(`${toolName} is available to the Team Lead only`)
+    return
   }
+  if (!isRootAgent(ctx, caller)) throw new Error(`${toolName} is available to the Team Lead only`)
 }
 
 const COMPACT_VALUE = {
@@ -101,7 +123,7 @@ const MEMBER_ROW = {
     phase: { type: 'string', enum: ['provisioning', 'active', 'retired', 'failed'] },
     generation: { type: 'integer' },
     label: { type: 'string' },
-    status: { type: 'string', enum: ['running', 'idle', 'unloaded', 'unknown'] },
+    status: { type: 'string', enum: ['running', 'idle', 'unloaded'] },
     resident: { type: 'boolean' },
     assignment: { type: 'string' },
     pressure_tokens: { type: 'integer' },
@@ -133,6 +155,8 @@ const RETIRE_VALUE = {
     archived: { type: 'boolean' },
     trashed: { type: 'boolean' },
     trash_path: { type: 'string' },
+    // `already-retired` on the state matrix's no-op row; absent on the retirements that happened.
+    reason: { type: 'string' },
     message: { type: 'string' },
   },
 }
@@ -144,6 +168,9 @@ const MESSAGE_VALUE = {
   properties: {
     target: { type: 'string' },
     sent: { type: 'boolean' },
+    // The typed refusal: a tombstone, a failed member and a target that never existed are three
+    // different answers, never the same sentence.
+    reason: { type: 'string', enum: ['retired', 'failed', 'missing'] },
     message_id: { type: 'string' },
     assignment: { type: 'string' },
     message: { type: 'string' },
@@ -157,6 +184,9 @@ const RESTORE_VALUE = {
   properties: {
     target: { type: 'string' },
     restored: { type: 'boolean' },
+    // Which branch actually ran: moved-back, never-moved, unarchived, not-archived, already-active,
+    // or not-retired for a refusal.
+    reason: { type: 'string' },
     path: { type: 'string' },
     message: { type: 'string' },
   },
@@ -169,6 +199,7 @@ const STOP_VALUE = {
   properties: {
     target: { type: 'string' },
     stopped: { type: 'boolean' },
+    reason: { type: 'string', enum: ['retired', 'failed', 'missing'] },
     resident: { type: 'boolean' },
     message: { type: 'string' },
   },
@@ -283,7 +314,7 @@ function install(agent, ctx, store, hooks, dataDir) {
           ...numberField('after_tokens', tokensNow()),
           message: 'The member was compacted in place; its identity and session are unchanged.',
         }
-        if (typeof result.shadowedTokenCount === 'number') value.shadowed_tokens = result.shadowedTokenCount
+        if (Number.isFinite(result.shadowedTokenCount)) value.shadowed_tokens = result.shadowedTokenCount
         return value
       },
     })))
@@ -314,11 +345,14 @@ function install(agent, ctx, store, hooks, dataDir) {
       async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'spawn_member')
         requireLead(ctx, caller, 'spawn_member')
-        if (typeof args.label !== 'string' || typeof args.prompt !== 'string') {
-          throw new Error('spawn_member: label and prompt must be strings')
+        if (typeof args.label !== 'string' || args.label.trim().length === 0) {
+          throw new Error('spawn_member: label must be a non-empty string')
         }
-        if (args.name !== undefined && typeof args.name !== 'string') {
-          throw new Error('spawn_member: name must be a string')
+        if (typeof args.prompt !== 'string' || args.prompt.trim().length === 0) {
+          throw new Error('spawn_member: prompt must be a non-empty string')
+        }
+        if (args.name !== undefined && (typeof args.name !== 'string' || args.name.trim().length === 0)) {
+          throw new Error('spawn_member: name must be a non-empty string')
         }
         if (args.replace !== undefined && (typeof args.replace !== 'string' || args.replace.length === 0)) {
           throw new Error('spawn_member: replace must be a non-empty string')
@@ -450,7 +484,7 @@ function install(agent, ctx, store, hooks, dataDir) {
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('message_member: target must be a non-empty string')
         }
-        if (typeof args.message !== 'string' || args.message.length === 0) {
+        if (typeof args.message !== 'string' || args.message.trim().length === 0) {
           throw new Error('message_member: message must be a non-empty string')
         }
         if (args.assignment !== undefined && typeof args.assignment !== 'string') {
@@ -546,7 +580,13 @@ export function apply(ctx) {
   const maybeInstall = (agent) => {
     if (installed.has(agent)) return
     const membership = ctx.agentTeams.tryMembership(agent)
-    if (membership === undefined || membership.role !== 'lead') return
+    // Same rule as `requireLead`: `undefined` means "no readable membership", which is either a
+    // subagent (refused) or a Team projection that cannot be read (a root is still the Lead).
+    if (membership === undefined) {
+      if (!isRootAgent(ctx, agent)) return
+    } else if (membership.role !== 'lead') {
+      return
+    }
     installed.set(agent, install(agent, ctx, store, hooks, dataDir))
   }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { PHASE, adoptMember, findByTarget, planMember, targetOf, withMember } from '../roster.js'
+import { PHASE, ROSTER_SPEC, adoptMember, findAnyTarget, findByTarget, planMember, targetOf, withMember } from '../roster.js'
 
 const emptyRoster = () => ({ leadSessionId: 'lead-1', members: [] })
 
@@ -74,4 +74,26 @@ test('withMember replaces by memberId and appends otherwise', () => {
   const updated = withMember(roster, { ...first, label: 'changed' })
   assert.equal(updated.members.length, 1)
   assert.equal(updated.members[0].label, 'changed')
+})
+
+test('an addressable lookup skips a failed member that the any-phase lookup still finds', () => {
+  const planned = planMember(emptyRoster(), 'reviewer', 'x')
+  const roster = withMember(emptyRoster(), { ...planned, phase: PHASE.failed })
+  assert.equal(findByTarget(roster, 'reviewer'), undefined, 'a failed member cannot be messaged or stopped')
+  assert.equal(findAnyTarget(roster, 'reviewer').phase, PHASE.failed, 'but the lifecycle can still name it')
+})
+
+test('a record that gives one target to two members is refused when it is loaded', () => {
+  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const record = {
+    leadSessionId: 'lead-1',
+    members: [
+      { memberId: 'a', childId: 'a', name: 'reviewer', generation: 1, phase: PHASE.active, label: 'x' },
+      { memberId: 'b', childId: 'b', name: 'reviewer', generation: 1, phase: PHASE.active, label: 'y' },
+    ],
+  }
+  assert.throws(() => parse(record), /held by more than one member/, 'the lookup takes the first match, so a duplicate must not load')
+
+  record.members[1].generation = 2
+  assert.equal(parse(record), record, 'distinct generations of one name are the normal successor case')
 })

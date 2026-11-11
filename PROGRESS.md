@@ -272,3 +272,70 @@
   are covered only by fakes. One runtime fact is deliberately not assumed — whether a spawned teammate
   can see the shipped team task board tools — which is why the brief says to ask the Lead for the task
   ids if the board cannot be read. P2-08 is the live end-to-end check.
+
+- **P2-08 passed live, on the first attempt, and it is the whole point of the replacement work.** With
+  `0.5.0` installed, a member was spawned carrying the assignment "Compute 6 * 7 and reply with the single
+  number, nothing else" and a prompt that told it to stand by. One `spawn_member {replace: "handoff-probe"}`
+  call then returned `handoff-probe-g2`, `generation: 2`, `assignment` inherited, `replaced: "handoff-probe"`,
+  `predecessor_retired: true`. The predecessor was drained without ever answering; the successor, which
+  never saw it, read the handoff brief and replied `42`. A successor completing a predecessor's task is
+  therefore verified against a real model, not a fake.
+- **The replacement install was blocked for two attempts by a different plugin.** `remove_bundle` reported
+  `application: failed` with `memory-notebook: JsonSchemaError: unsupported JSON schema … type arrays are
+  not supported`, which is another project's working tree, not this one. The reload was retried once that
+  tree changed and both operations then applied. Recorded here because the diagnostic named a foreign
+  package while this repository's own install was the operation that failed.
+
+## 2026-11-11 — correctness audit fixes, v0.6.0
+
+- **The Lead authority check no longer disables the plugin behind a misleading message.** The shipped
+  Team service answers `undefined` from `tryMembership` both for a subagent it does not own and when its
+  own projection cannot be read, and this plugin treated both as "not the Lead". A Lead whose Team log is
+  in the documented permanent-failure state therefore got no tools installed, and `requireLead` refused
+  every call — including the retirement that exists to repair that team. `requireLead` and `maybeInstall`
+  now fall back to the same root test the shipped roster itself uses for a Lead: a live agent whose
+  Session names no parent. `ensureAdopted` also reads the shipped roster best-effort, the way it already
+  read the subagent registry, so a broken projection degrades to "nothing new to adopt" instead of failing
+  the roster tools.
+- **Nested suppression of the shipped slot credit no longer loses the outer credit.** `live.current` is
+  one process-wide field and the effective `maxMembers` is read later, inside `roster.spawn`'s transact;
+  the inner `finally` reset it to `0`, so a spawn caught by another spawn (or interleaved with one) lost
+  the outer Lead's credit and was refused at the old limit. It restores the previous value now.
+- **Every roster mutation goes through the storage table's own serialized `update`, and the comment that
+  claimed it does is no longer false.** `updateRoster` seeded an absent key with `put` and then applied the
+  mutation to the record as it is when the write reaches the chain, instead of rewriting the snapshot
+  taken before the caller's last `await`. `ensureAdopted` adopted candidates against the current record,
+  the spawn's reservation and activation writes merge by member id, and a tombstone committed while a
+  discovery read or a start was suspended survives. A `provisioning` reservation whose child never
+  published is reconciled to `failed` on read; one that did publish becomes `active`; a retirement
+  committed during a spawn keeps the tombstone and drains the child when it publishes.
+- **Retirement writes the tombstone before it moves the artifact.** The record carries the intended trash
+  path and `trashState: 'pending'`; the move follows; a confirming write records `trashState: 'done'` or
+  drops the path and records `archived`. The code says what a crash at each of the three points leaves
+  behind. A `pending` tombstone whose artifact never reached the trash is reactivated by `restore_member`
+  (`reason: 'never-moved'`) instead of being refused forever. `archived` is true only when the
+  workspace-archive fallback ran, so a tombstone never carries both a `trashPath` and `archived: true`;
+  `restore_member` names the branch that actually ran and no longer calls `unarchiveSession` for a
+  retirement that archived nothing.
+- **The lifecycle lookups are the matrix the documents describe.** `retire_member` and `restore_member`
+  look a target up in any phase: a repeat retire answers `{retired: true, drained: false, reason:
+  'already-retired'}`, a repeat restore answers `{restored: true, reason: 'already-active'}`, a failed
+  member is still retirable, and a genuinely unknown target still refuses. `message_member` and
+  `stop_member` narrow to the addressable set (`provisioning | active`) and answer a typed refusal —
+  `reason: 'retired' | 'failed' | 'missing'` — so a tombstone can no longer return the same text as a
+  target that never existed. The `retire_member`/`restore_member`/`message_member`/`stop_member` result
+  schemas carry `reason`; the unused `unknown` member of the `status` enum is gone.
+- **A duplicate target is refused when the record loads**, because every lookup takes the first match.
+  `usage_ratio` is attached only when it is finite, so a `NaN` ratio can no longer make an entire
+  `list_members` call fail as non-lossless JSON after the work is done. `spawn_member` and
+  `message_member` refuse a `label`, `prompt`, `name` or `message` that is empty after trimming, which
+  the registry never checked because this bundle registers raw tool definitions (ADR 0002).
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` is 65 tests, 65 passing — the 40 that
+  existed plus 25 covering each fix, including a `tests/entry.test.mjs` harness that calls the registered
+  tool wrappers through `apply` (the layer the other suites never entered); `node scripts/check.mjs`
+  passes. The two files this change does not own (`README.md`, `docs/**`) were left to the document lane;
+  the behaviours changed are listed in the pull request for reconciliation.
+- **What stays unverified.** The bundle was not installed, so no live call has run in this change: the
+  `update`-serialized mutations, the tombstone-first ordering and the typed refusals are covered by fakes
+  that model the storage facility's write chain, not by a real profile.
