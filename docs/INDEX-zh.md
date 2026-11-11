@@ -37,6 +37,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么每个 Lead 只有一条记录，以及为什么任何东西都不会被自动删除？ | `docs/adr/0010-roster-layout-and-retention.md`——第 3 点已被 0011 取代 | 英文 |
 | 为什么回收站有上限，被剪除的成员会怎样？ | `docs/adr/0011-trash-retention.md`——第 1 点已被 0012 取代 | 英文 |
 | 为什么回收站上限是一个配置字段，以及为什么入口不声明 Config schema？ | `docs/adr/0012-configurable-retention.md` | 英文 |
+| 为什么一次性成员会自行离开，以及清扫为什么需要证据？ | `docs/adr/0013-ephemeral-members.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 

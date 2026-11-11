@@ -140,6 +140,11 @@ const MEMBER_ROW = {
     note: { type: 'string' },
     replaced: { type: 'string' },
     predecessor_retired: { type: 'boolean' },
+    // True on a one-shot member that will retire itself once its turn ends (P4-01, ADR 0013).
+    ephemeral: { type: 'boolean' },
+    // Present on a result whose sweep retired finished ephemeral members; absent otherwise.
+    swept: { type: 'integer' },
+    swept_targets: { type: 'array', items: { type: 'string' } },
     message: { type: 'string' },
   },
 }
@@ -148,7 +153,11 @@ const MEMBER_LIST_VALUE = {
   type: 'object',
   additionalProperties: false,
   required: ['members'],
-  properties: { members: { type: 'array', items: MEMBER_ROW } },
+  properties: {
+    members: { type: 'array', items: MEMBER_ROW },
+    swept: { type: 'integer' },
+    swept_targets: { type: 'array', items: { type: 'string' } },
+  },
 }
 
 const RETIRE_VALUE = {
@@ -182,6 +191,8 @@ const MESSAGE_VALUE = {
     reason: { type: 'string', enum: ['retired', 'failed', 'missing'] },
     message_id: { type: 'string' },
     assignment: { type: 'string' },
+    // false when this message cleared an ephemeral member's one-shot flag (P4-01).
+    ephemeral: { type: 'boolean' },
     message: { type: 'string' },
   },
 }
@@ -331,7 +342,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'spawn_member',
-      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over.',
+      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over. Pass ephemeral: true for one-shot work: the member retires itself through the normal retirement path once it has run and stopped, so a parallel fan-out leaves the roster without one retire_member call per member. This call first sweeps members already in that state and reports the count.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -348,6 +359,10 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           replace: {
             type: 'string',
             description: 'Target of an existing member to retire in the same call, such as reviewer. The successor starts first and the predecessor is retired second, so a failed start leaves the predecessor untouched; a failed retirement is reported as predecessor_retired: false. An already-retired target is accepted, and its tombstone supplies the brief.',
+          },
+          ephemeral: {
+            type: 'boolean',
+            description: 'Default false. True marks this member as one-shot: a lazy sweep at the start of list_members or spawn_member retires it through the normal retirement path once it has run and stopped, without a retire_member call. A member that never started, and one still running, are never swept. Message it again and the flag is cleared, because that message is a declaration it is not one-shot. list_members reports ephemeral: true on such a member.',
           },
         },
       },
@@ -373,6 +388,9 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.assignment !== undefined && typeof args.assignment !== 'string') {
           throw new Error('spawn_member: assignment must be a string')
         }
+        if (args.ephemeral !== undefined && typeof args.ephemeral !== 'boolean') {
+          throw new Error('spawn_member: ephemeral must be a boolean')
+        }
         const table = await store
         return await spawnMember({
           ctx,
@@ -386,6 +404,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           prompt: args.prompt,
           assignment: args.assignment,
           replace: args.replace,
+          ephemeral: args.ephemeral,
           signal: exec.signal,
           trashLimit,
         })
@@ -394,7 +413,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, live state and, while resident, context pressure. Unknown children are adopted on the first read, and retired members stay listed as retired.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, ephemeral: true on a one-shot member that will retire itself, live state and, while resident, context pressure. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first retires every ephemeral member whose turn has ended — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -405,7 +424,15 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         const caller = callingAgent(exec.agent, 'list_members')
         requireLead(ctx, caller, 'list_members')
         const table = await store
-        return await listMembers({ ctx, table, leadSessionId: leadSessionIdOf(caller), leadAgent: caller })
+        return await listMembers({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          leadAgent: caller,
+          dataDir,
+          hooks,
+          trashLimit,
+        })
       },
     })))
 
@@ -474,7 +501,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'message_member',
-      description: 'Send one message to a live member or adopted subagent from list_members, and optionally replace the assignment recorded for it. A running child receives the message at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. Success means the inbox accepted the message, not that the member has processed it.',
+      description: 'Send one message to a live member or adopted subagent from list_members, and optionally replace the assignment recorded for it. A running child receives the message at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. Messaging an ephemeral member clears its one-shot flag, so it will not be swept — use that when the work is not over after all. Success means the inbox accepted the message, not that the member has processed it.',
       parameters: {
         type: 'object',
         additionalProperties: false,

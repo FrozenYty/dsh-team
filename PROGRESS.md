@@ -504,3 +504,46 @@
   (`:4152-4155`). The entry therefore stays `absent` on purpose and the value is validated in `apply`,
   with the raw patch config reaching it unchanged (loader `lib/index.js:588-591`). ADR 0012 records this,
   so the next person does not read `absent` as "unfinished".
+
+## 2026-11-11 — ephemeral members retire themselves on a lazy sweep (v0.9.0)
+
+- **P4-01 is delivered as a property plus a lazy sweep, not a new phase and not a hook.** A member
+  spawned with `ephemeral: true` carries the flag on its record and a `startedAt` when its child starts;
+  every `list_members` row reports the flag, and a sweep at the start of `list_members` and
+  `spawn_member` retires it once it has run and stopped. No timer, no background task, no model call, and
+  no `dormant` phase: a member stays `active` until the sweep retires it through the existing
+  `retireMember` protocol (drain, tombstone-first, move, retention cap, host effects). ADR 0013 records
+  the design.
+- **The completion signal was read out of the installed asar, and the obvious value does not work.** In
+  `dsh-subagent` `0.2.2-rc.1`, `lib/index.js:2435` builds every descendant row's `activity` as
+  `sessions.get(entry.id) === void 0 ? "inactive" : "running"` — exactly two values. `inactive` means
+  "not resident", which is also the state of a freshly reserved child that has never run, so it cannot
+  prove completion; only `running` is trustworthy positive evidence. The sweep therefore requires the
+  plugin's own `startedAt` — written when the activation resolved, so a reservation that never published
+  has none — plus the local live registry (`liveStateOf` → `ctx.agents.get`) reporting the member not
+  resident. A member that never ran and one still running are never swept. The row schema and the
+  traversal are at lines 709–791 and 2380–2446 of the same file.
+- **`message_member` clears the flag, and the sweep reports itself.** Messaging an ephemeral member again
+  is a declaration that it is not one-shot, so the accepted message deletes `ephemeral` in the same
+  record write and the result answers `ephemeral: false`; this is the one case where a later sweep would
+  otherwise eat work the model meant to keep. A triggering operation whose sweep retired anything adds
+  `swept` and `swept_targets`; when it retired nothing, the result is exactly what it was before this
+  release, which is why the 79 earlier tests did not change.
+- **The record gains two optional fields and nothing else.** `ephemeral` and `startedAt` are written only
+  on ephemeral members and both are validated on load, so every record a previous release wrote loads and
+  behaves as before. `list_members` rows carry `ephemeral: true` for those members, and the tool
+  descriptions say which calls sweep, that `spawn_member` is the other trigger, and that a message clears
+  the flag.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` is 86 tests, 86 passing — the 79 that
+  existed plus seven in `tests/ephemeral.test.mjs` covering a swept member going through the normal
+  retirement path (drained, tombstoned, `retireReason`), a member that never ran (a provisioning
+  reservation and an active record with no `startedAt`) never being swept, a running member never being
+  swept, the message-clears-the-flag rule, a profile with no ephemeral member returning the old shape,
+  idempotence with `spawn_member` as the second trigger and the count in its result, and load-time
+  validation of the two new fields; `node scripts/check.mjs` passes.
+- **What stays unverified.** The bundle was not installed, so no live call has run: the tools' new
+  parameter activating, the sweep seeing a real child go from resident to unloaded, and the reporting
+  fields reaching a model are covered by fakes and by the asar source, not by a running profile. The
+  live end-to-end check — spawn two ephemeral members, let them finish, call `list_members` and see them
+  leave and the slots come back — remains the owner's install decision.

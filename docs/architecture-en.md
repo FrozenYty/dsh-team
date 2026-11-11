@@ -36,6 +36,8 @@ A short map, not a changelog: each release below names what it added and the sec
   adoption grew to cover every descendant a Lead controls (§4.5.1).
 - **v0.7–v0.8** — the trash is bounded per Lead, and the bound is the bundle's `trashLimit` config field
   (§2.5, ADR 0011, ADR 0012).
+- **v0.9** — ephemeral members: a member can be marked one-shot at spawn, and a lazy sweep in the roster
+  operations the model calls anyway retires it once it has run and stopped (§4.3.1, ADR 0013).
 
 ### 2.1 Compaction is enabled
 
@@ -191,6 +193,10 @@ trashKind     what was moved: `directory` for the Session directory, `file` for 
 trashState    `pending` while the move is in flight, `done` once it landed, `none` when there was none,
               `pruned` when the move landed and the retention cap later removed the artifact (§2.5)
 archived      true when no artifact could be moved and the workspace archive hid the Session instead
+ephemeral     true when the member retires itself once its work is over, set by spawn_member and cleared
+              by message_member (§4.3.1); optional, absent otherwise, so a non-ephemeral record is unchanged
+startedAt     ISO timestamp on an ephemeral member: when its child was started. This is the positive
+              evidence the lazy sweep requires, so a reservation that never published is never swept
 ```
 
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
@@ -198,7 +204,9 @@ archived      true when no artifact could be moved and the workspace archive hid
 the artifact went — and is the only value that makes `restore_member` a typed refusal without a move.
 
 There is no other field, and in particular no `dormant` phase (§4.3) and no `briefPath`: the brief is
-composed at replacement time from `assignment`, and a stored, reusable template is still P4-02.
+composed at replacement time from `assignment`, and a stored, reusable template is still P4-02. The
+`ephemeral` and `startedAt` fields are the P4-01 pair, and both are optional: a record written by any
+earlier release loads and behaves exactly as it did.
 
 `assignment` is the durable statement a successor is briefed with. It is set with
 `spawn_member.assignment`, replaced with `message_member.assignment`, reported on every `list_members`
@@ -216,27 +224,29 @@ Every cell is decided before implementation (AGENTS.md §4.8). The four phases a
 **refusal** marks a deliberate rejection: the call reports why instead of acting, and it is neither a crash
 nor an omission. "Same base" means spawning the name whose earlier holder is in that phase.
 
-| Phase \ Event | adopt | spawn (same base) | replace | message | stop | compact | retire | restore |
-|---|---|---|---|---|---|---|---|---|
-| `provisioning` | not produced by adoption — an adopted record starts `active` or `failed` | reserves the next generation; this row is untouched | successor starts, then this reservation is drained and tombstoned | delivered through `sendMessage`; a child that has not published yet is refused by the subagent service and the error is reported | no-op unless the child is already resident, then its turn is cancelled | refusal `not-resident` until it is resident and idle | drain, then tombstone; the artifact usually cannot be moved yet, so `trashed: false` and the archive branch decides | refusal `not-retired` — only `active` is the no-op success (`restored: true, reason: 'already-active'`) |
-| `active` | no-op — identity is the child id, so a known child is never adopted twice | reserves the next generation; this row is untouched | successor starts from the brief, then this member is drained and tombstoned | delivered; a running child sees it at its next step, an unloaded one is cold-resumed | current turn cancelled; activation, inbox and record kept | compacts in place when resident and idle; refusal `busy` while running, `not-resident` when unloaded | drain, tombstone (`pending`), move and confirm, refresh the host effects | no-op success: `restored: true, reason: 'already-active'` |
-| `retired` | no-op — the tombstone holds the child id, which is what stops re-adoption | allowed: a new generation of the base starts with no replacement link (§2.3) | successor starts from the tombstone's brief; the retire half is a no-op (`reason: 'already-retired'`) | refusal `retired` | refusal `retired` | refusal — only `provisioning` and `active` are addressable | repeat: no-op success, `retired: true, drained: false, reason: 'already-retired'` | moves the artifact back, or runs the workspace unhide branch; `reason` names which one ran. A `trashState: 'pruned'` tombstone instead refuses with `restored: false, reason: 'pruned'` and never calls the workspace |
-| `failed` | no-op — known child id | reserves the next generation; this row is untouched | successor starts, then this record is tombstoned | refusal `failed` — the child never started, so there is nothing to receive it | refusal `failed` | refusal — only `provisioning` and `active` are addressable | accepted and tombstoned; there is usually nothing to drain or move | refusal `not-retired` — only `active` is the no-op success (`restored: true, reason: 'already-active'`) |
+| Phase \ Event | adopt | spawn (same base) | replace | message | stop | compact | retire | restore | sweep |
+|---|---|---|---|---|---|---|---|---|---|
+| `provisioning` | not produced by adoption — an adopted record starts `active` or `failed` | reserves the next generation; this row is untouched | successor starts, then this reservation is drained and tombstoned | delivered through `sendMessage`; a child that has not published yet is refused by the subagent service and the error is reported | no-op unless the child is already resident, then its turn is cancelled | refusal `not-resident` until it is resident and idle | drain, then tombstone; the artifact usually cannot be moved yet, so `trashed: false` and the archive branch decides | refusal `not-retired` — only `active` is the no-op success (`restored: true, reason: 'already-active'`) | no-op — nothing has run, so there is no evidence to sweep on; only the read-time reconciliation can move this row, and it moves it to `failed` |
+| `active` | no-op — identity is the child id, so a known child is never adopted twice | reserves the next generation; this row is untouched | successor starts from the brief, then this member is drained and tombstoned | delivered; a running child sees it at its next step, an unloaded one is cold-resumed | current turn cancelled; activation, inbox and record kept | compacts in place when resident and idle; refusal `busy` while running, `not-resident` when unloaded | drain, tombstone (`pending`), move and confirm, refresh the host effects | no-op success: `restored: true, reason: 'already-active'` | the one phase a sweep acts on: an ephemeral member with `startedAt` whose child is no longer resident is retired through the normal path, and a running or resident member — or any non-ephemeral member — is left exactly as it is (§4.3.1) |
+| `retired` | no-op — the tombstone holds the child id, which is what stops re-adoption | allowed: a new generation of the base starts with no replacement link (§2.3) | successor starts from the tombstone's brief; the retire half is a no-op (`reason: 'already-retired'`) | refusal `retired` | refusal `retired` | refusal — only `provisioning` and `active` are addressable | repeat: no-op success, `retired: true, drained: false, reason: 'already-retired'` | moves the artifact back, or runs the workspace unhide branch; `reason` names which one ran. A `trashState: 'pruned'` tombstone instead refuses with `restored: false, reason: 'pruned'` and never calls the workspace | no-op — the tombstone is already the result the sweep exists to produce |
+| `failed` | no-op — known child id | reserves the next generation; this row is untouched | successor starts, then this record is tombstoned | refusal `failed` — the child never started, so there is nothing to receive it | refusal `failed` | refusal — only `provisioning` and `active` are addressable | accepted and tombstoned; there is usually nothing to drain or move | refusal `not-retired` — only `active` is the no-op success (`restored: true, reason: 'already-active'`) | no-op — it never ran, and the record stays visible and retirable |
 
 Harness notices are the events no plugin operation can prevent:
 
 | Phase \ Notice | the child finishes its turn | the child's turn fails | the host drains or unloads the child | the persisted Session disappears |
 |---|---|---|---|---|
 | `provisioning` | not applicable — the reservation precedes any turn | `failed`, with the start error in `note`; this is the only failure the plugin records | nothing observed; the reservation stands until the start resolves | retirement reports `trashed: false` with the reason, then the archive branch hides the Session |
-| `active` | no durable change — no completion notice is observed; the phase stays `active` and live state reports `unloaded` | no durable change — a failure after the start is invisible here, so the record stays `active` | phase unchanged, live state `unloaded`; still messageable (cold-resumed) and retirable | retirement reports `trashed: false` and falls back to the archive; restore reports the reason and leaves the record retired |
+| `active` | no durable change on its own — no completion notice is observed; the phase stays `active` and live state reports `unloaded`. An ephemeral member is retired by the next lazy sweep, which is the only thing that turns this notice into a durable change (§4.3.1) | no durable change — a failure after the start is invisible here, so the record stays `active` | phase unchanged, live state `unloaded`; still messageable (cold-resumed) and retirable | retirement reports `trashed: false` and falls back to the archive; restore reports the reason and leaves the record retired |
 | `retired` | ignored — there is no live child | ignored | ignored | restore refuses and the record stays retired |
 | `failed` | ignored | ignored | ignored | ignored |
 
 What the cells depend on:
 
-- **`dormant` does not exist.** The four phases above are exactly `PHASE` in `roster.js`; live state
-  (`running`, `idle`, `unloaded`) is read from the Harness at call time and never stored. A `dormant`
-  phase is P4-01 work, together with the completion hook that would ever set it.
+- **`dormant` does not exist, and P4-01 did not add one.** The four phases above are exactly `PHASE` in
+  `roster.js`; live state (`running`, `idle`, `unloaded`) is read from the Harness at call time and never
+  stored. Ephemeral members do not need a stored "finished" state: the `ephemeral` flag rides on the
+  record and a lazy sweep retires the member once positive evidence that it ran and stopped exists
+  (§4.3.1). The completion hook this note used to expect does not exist in the Harness (ADR 0013).
 - **`replace` is one model call composed of `spawn` and `retire`.** The successor starts first in every
   cell, so a start that fails leaves the row exactly as it was, and the retire half reports
   `predecessor_retired: false` when it fails.
@@ -262,6 +272,54 @@ Two cells are the expensive ones and are called out deliberately:
 - **retire while active** — retirement wins over in-flight work. The record's `assignment` is the brief
   (§4.4); if the model never recorded one, the successor's prompt says so and sends it to the shared
   task board instead of inventing a summary.
+
+#### 4.3.1 Ephemeral members (P4-01)
+
+An ephemeral member exists for one-shot work: the model spawns several of them in parallel, reads their
+output, and expects them to leave the roster without one `retire_member` call each.
+
+**The property, not a phase.** `spawn_member.ephemeral: true` records `ephemeral: true` on the member and
+`startedAt` when its child starts, and every `list_members` row reports `ephemeral: true`, so the model
+can see which members will leave on their own. The default is false, no phase is added, and a profile that
+never sets the flag behaves exactly as it did before. `message_member` to an ephemeral member **clears
+the flag**: messaging it again is a declaration that it is not one-shot after all, and this is the one
+case where a later sweep would otherwise retire work the model intended to keep.
+
+**There is no completion event, so the sweep carries its own evidence.** The notices table above records
+that nothing durable happens when an active child finishes its turn. The installed subagent seam
+(`dsh-subagent` 0.2.2-rc.1) reports a descendant row's `activity` as `running` or `inactive`
+(`lib/index.js:2435`, `sessions.get(entry.id) === undefined ? "inactive" : "running"`), and `inactive`
+also describes a child that never started, so it cannot prove completion by itself — only `running` is
+trustworthy positive evidence. The plugin therefore requires evidence it recorded itself: `startedAt`,
+written when the activation resolved, so a reservation that never published has none; plus the local live
+registry (`liveStateOf`: `ctx.agents.get(childId)`) reporting the member not resident. That pair is "it
+ran and then stopped" — a member that never started, and a member still running, are both left alone.
+ADR 0013 records the signal and why `activity` alone was not enough.
+
+**The sweep is lazy, and it has exactly two trigger points.** It runs at the start of `list_members` (the
+read where the model collects results) and `spawn_member` (the fan-out where the freed slots matter), and
+nowhere else. Both already re-read the roster; neither runs on a plugin-owned clock, and no background
+task, timer or model call is involved. It runs before the triggering operation's own read, so a
+`list_members` result already shows a swept member as `retired`, and `spawn_member` can reuse the freed
+target. It returns immediately — no read of the subagent registry, no write — when no member is
+ephemeral. Every other tool is target-scoped (`message_member`, `stop_member`, `retire_member`,
+`restore_member`, `compact_member`), so a sweep there would be an unrelated retirement on a result that
+does not report it.
+
+**Retirement stays one implementation.** A swept member goes through `retireMember` exactly like a
+model-invoked retirement — drain, tombstone-first, artifact move, retention cap, host effects — and its
+tombstone records `retireReason: 'ephemeral member: its turn ended'`. A triggering operation whose sweep
+retired something adds `swept` and `swept_targets` to its result; when it retired nothing, the result is
+byte-for-byte what it was before this feature.
+
+What the four events do to an ephemeral member in each phase:
+
+| Phase | retire | message | replace | sweep |
+|---|---|---|---|---|
+| `provisioning` | drains (usually nothing) and tombstones; the child is drained when it publishes | delivered or refused as the matrix says, and an accepted message clears the flag | the successor starts, then the reservation is tombstoned | never — there is no `startedAt`, so nothing proves it ran |
+| `active` | the normal retirement protocol | delivered, and the flag is cleared: it is no longer one-shot | the normal replacement handoff | retires it only when it is not resident; a running member is never swept |
+| `retired` | no-op, `reason: 'already-retired'` | refusal `retired` | the normal replacement, briefed from the tombstone | no-op |
+| `failed` | accepted; there is usually nothing to drain | refusal `failed` | the normal replacement | no-op — it never ran, and the record stays visible |
 
 ### 4.4 Retire and replace
 
@@ -333,9 +391,9 @@ so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). |
-| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. |
-| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`. |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any. |
+| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`. |
 | `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, and a repeat is a no-op that answers `reason: 'already-retired'`. |
 | `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, and a pruned tombstone answers `reason: 'pruned'` without touching the workspace. |
@@ -377,6 +435,7 @@ and still retirable.
 | membership test | `ctx.agentTeams.tryMembership(agent)` |
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
 | list every subagent descendant | `ctx.subagents.listDescendants(rootSessionId, signal)`; rows carry `id`, `mode`, `label?`, `parentId` and `depth` |
+| notice that a child stopped | none exists — a descendant row's `activity` is only `running` or `inactive`, and `inactive` also covers a child that never started; a lazy sweep reads the local live registry instead (§4.3.1, ADR 0013) |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |

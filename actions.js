@@ -10,6 +10,9 @@
  * Agent. When it is absent the operation says so instead of throwing a `TypeError` from a missing
  * `session` field.
  *
+ * `sweepEphemeral` is the one operation here that is not a tool of its own: it retires finished
+ * ephemeral members and runs only at the start of `list_members` and `spawn_member` (ADR 0013).
+ *
  * No `@deepseek-ai/*` import: a profile-linked bundle cannot resolve those packages (ADR 0002).
  */
 
@@ -96,6 +99,8 @@ export function memberRow(ctx, member) {
   }
   // What the model recorded about the work, so the Lead can see it before replacing the member.
   if (typeof member.assignment === 'string') row.assignment = member.assignment
+  // A member that will leave on its own once its work is over is worth seeing before relying on it.
+  if (member.ephemeral === true) row.ephemeral = true
   return row
 }
 
@@ -232,14 +237,77 @@ export async function ensureAdopted(ctx, caller, table, leadSessionId) {
 }
 
 /**
+ * The lazy sweep: retire every ephemeral member whose work is over, at the start of the two roster
+ * operations the model calls anyway.
+ *
+ * The Harness has no completion event — an active child that finishes its turn produces no durable
+ * change (§4.3 of `docs/architecture-en.md`) — so the sweep requires evidence this plugin recorded
+ * itself: the member is `active` and `ephemeral`, carries `startedAt` (written when its activation
+ * resolved, so a reservation that never published has none), and is no longer resident in the local live
+ * registry. A member that never started is never swept, and neither is a running one. The installed
+ * subagent seam reports a descendant row's `activity` as only `running | inactive`, and `inactive` also
+ * describes a child that never started, so the local registry is what decides (ADR 0013).
+ *
+ * Retirement is the existing protocol, not a second implementation: every candidate goes through
+ * `retireMember`, with `retireReason: 'ephemeral member: its turn ended'` on the tombstone.
+ *
+ * It calls no model and no clock, and returns no fields at all when nothing was retired, so a profile
+ * that never sets the flag sees results exactly as they were before this feature.
+ *
+ * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
+ *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
+ *   trashLimit?: number}} request
+ * @returns {Promise<{swept?: number, swept_targets?: string[]}>} the report fields, or `{}`.
+ */
+export async function sweepEphemeral({
+  ctx,
+  table,
+  leadSessionId,
+  leadAgent,
+  dataDir,
+  hooks,
+  trashLimit = DEFAULT_TRASH_LIMIT,
+}) {
+  const finished = readRoster(table, leadSessionId).members.filter((member) => member.phase === PHASE.active
+    && member.ephemeral === true
+    && typeof member.startedAt === 'string'
+    && liveStateOf(ctx, member).resident === false)
+  if (finished.length === 0) return {}
+  const swept = []
+  for (const member of finished) {
+    const outcome = await retireMember({
+      ctx,
+      table,
+      leadSessionId,
+      leadAgent,
+      dataDir,
+      hooks,
+      target: targetOf(member),
+      reason: 'ephemeral member: its turn ended',
+      trashLimit,
+    })
+    // A member another caller retired in between answers `already-retired`; it is not this sweep's doing.
+    if (outcome.retired === true && outcome.reason !== 'already-retired') swept.push(targetOf(member))
+  }
+  return swept.length === 0 ? {} : { swept: swept.length, swept_targets: swept }
+}
+
+/**
  * List one Lead's roster.
- * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined}} request
+ *
+ * This read is one of the two sweep triggers (ADR 0013): it first retires every ephemeral member whose
+ * turn has ended, so the rows it returns already show those members as `retired` and the result reports
+ * `swept` and `swept_targets` when the sweep retired anyone.
+ * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
+ *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
+ *   trashLimit?: number}} request
  * @returns {Promise<{members: object[]}>} the tool's result object, unchanged.
  */
-export async function listMembers({ ctx, table, leadSessionId, leadAgent }) {
+export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDir, hooks, trashLimit = DEFAULT_TRASH_LIMIT }) {
   const caller = requireLiveLead('list_members', leadSessionId, leadAgent)
+  const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-  return { members: roster.members.map((member) => memberRow(ctx, member)) }
+  return { members: roster.members.map((member) => memberRow(ctx, member)), ...swept }
 }
 
 /**
@@ -254,12 +322,16 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent }) {
  * answer says which half it was (`predecessor_retired: false`, or a thrown error that names the live
  * predecessor) instead of reporting success.
  *
+ * This is the second sweep trigger (ADR 0013): the call first retires every finished ephemeral member, so
+ * the fan-out that follows sees the slots those members were holding.
+ *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   name?: string, label: string, prompt: string, assignment?: string, replace?: string,
- *   signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the effective cap from the
- *   plugin config; the retirement half of a replacement enforces it, and it defaults to
- *   `DEFAULT_TRASH_LIMIT` for callers that pass none.
+ *   ephemeral?: boolean, signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the
+ *   effective cap from the plugin config; the retirement half of a replacement enforces it, and it
+ *   defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none. `ephemeral` records the member as
+ *   one-shot (§4.3.1).
  * @returns {Promise<object>} the member row the tool returns.
  */
 export async function spawnMember({
@@ -274,10 +346,12 @@ export async function spawnMember({
   prompt,
   assignment,
   replace,
+  ephemeral = false,
   signal,
   trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
   const caller = requireLiveLead('spawn_member', leadSessionId, leadAgent)
+  const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const predecessor = replace === undefined
     ? undefined
@@ -290,7 +364,7 @@ export async function spawnMember({
   const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'spawn_member')
   // A successor continues the predecessor's work, so it inherits the recorded assignment unless the
   // model records a different one. Without this, a brief would thin out one generation at a time.
-  const planned = planMember(roster, baseName, label, recorded ?? predecessor?.assignment)
+  const planned = planMember(roster, baseName, label, recorded ?? predecessor?.assignment, ephemeral === true)
   if (predecessor !== undefined) planned.predecessor = predecessor.memberId
   const successorTarget = targetOf(planned)
   const text = predecessor === undefined
@@ -323,7 +397,15 @@ export async function spawnMember({
       `spawn_member: the successor could not start (${reason}); the predecessor "${replace}" was NOT retired and is still live. Its failed reservation is recorded as "${successorTarget}".`,
     )
   }
-  const active = { ...planned, childId: started.childId ?? planned.childId, phase: PHASE.active }
+  // `startedAt` is the evidence the lazy sweep requires: the child was started, so a later observation
+  // that it is no longer resident means it ran and stopped (ADR 0013). A non-ephemeral record is
+  // unchanged, which is why the field is written only here.
+  const active = {
+    ...planned,
+    childId: started.childId ?? planned.childId,
+    phase: PHASE.active,
+    ...planned.ephemeral === true ? { startedAt: new Date().toISOString() } : {},
+  }
   const persisted = await updateRoster(table, leadSessionId, (current) => {
     const existing = current.members.find((member) => member.memberId === planned.memberId)
     // Retired while the start was in flight: keep the tombstone (and its paths), but record the child
@@ -345,15 +427,17 @@ export async function spawnMember({
     }
     return {
       ...successor,
+      ...swept,
       ...predecessor === undefined ? {} : { replaced: replace, predecessor_retired: false },
       message: `The member was retired while its spawn was in flight; the record stays retired and the child it published was drained.${predecessor === undefined ? '' : ` The predecessor "${replace}" was NOT retired.`}`,
     }
   }
-  if (predecessor === undefined) return successor
+  if (predecessor === undefined) return { ...successor, ...swept }
 
   if (predecessor.phase === PHASE.retired) {
     return {
       ...successor,
+      ...swept,
       replaced: replace,
       predecessor_retired: true,
       message: `Successor ${successorTarget} started from the tombstone's handoff brief; "${replace}" was already retired.`,
@@ -377,6 +461,7 @@ export async function spawnMember({
     const reason = error instanceof Error ? error.message : String(error)
     return {
       ...successor,
+      ...swept,
       replaced: replace,
       predecessor_retired: false,
       message: `Successor ${successorTarget} is active, but the predecessor "${replace}" could NOT be retired (${reason}). It is still live; retire it with retire_member.`,
@@ -385,6 +470,7 @@ export async function spawnMember({
   if (retirement.retired !== true) {
     return {
       ...successor,
+      ...swept,
       replaced: replace,
       predecessor_retired: false,
       message: `Successor ${successorTarget} is active, but the predecessor "${replace}" was not retired: ${retirement.message ?? 'no reason reported'}. Retire it with retire_member.`,
@@ -392,6 +478,7 @@ export async function spawnMember({
   }
   return {
     ...successor,
+    ...swept,
     replaced: replace,
     predecessor_retired: true,
     message: `Successor ${successorTarget} started from the handoff brief and the predecessor "${replace}" is retired. ${retirement.message}`,
@@ -794,6 +881,10 @@ function refusalFor(roster, target) {
  * The assignment is the durable statement a successor is briefed with, and the moment the Lead tells a
  * member what to do is the moment that statement changes. It is stored only after the message is
  * accepted, so a refused delivery does not silently rewrite the record.
+ *
+ * Messaging an ephemeral member **clears the flag** in that same write: sending it work again is a
+ * declaration that it is not one-shot after all, and this is the one case where a later sweep would
+ * otherwise retire work the model intended to keep (§4.3.1, ADR 0013).
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   target: string, message: string, assignment?: string, signal?: AbortSignal}} request
  * @returns {Promise<object>} the tool's result object, unchanged.
@@ -824,14 +915,19 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
     message: 'Message accepted. A running member sees it at its next step; an unloaded one is resumed.',
   }
   if (typeof messageId === 'string') value.message_id = messageId
-  if (recorded !== undefined) {
+  const clearsEphemeral = member.ephemeral === true
+  if (recorded !== undefined || clearsEphemeral) {
     // Rebuild from the record on disk, so a concurrent edit to another member survives and a tombstone
     // written while the message was in flight is not overwritten with a stale snapshot.
     await updateRoster(table, leadSessionId, (current) => {
       const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
-      return withMember(current, { ...(existing ?? member), assignment: recorded })
+      const next = { ...(existing ?? member) }
+      if (recorded !== undefined) next.assignment = recorded
+      if (clearsEphemeral) delete next.ephemeral
+      return withMember(current, next)
     })
-    value.assignment = recorded
+    if (recorded !== undefined) value.assignment = recorded
+    if (clearsEphemeral) value.ephemeral = false
   }
   return value
 }
