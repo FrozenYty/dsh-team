@@ -59,3 +59,9 @@
   then produced `probe-a-g2` at generation 2, which is the replacement the shipped roster cannot do.
   Retiring `probe-a-g2` while it was mid-turn exercised the second expensive matrix cell and also
   returned `drained: true`. Nothing was deleted: the child Sessions stay on disk and are archived.
+- **The repository is public and `main` is protected, as `CONTRIBUTING.md` always claimed.** Visibility
+  was flipped through the repository API, then proven by reading the repository with no credentials
+  (`private: false`). Description and topics were set in the same pass. Protection was enabled with the
+  `check` context required, strict up-to-date enforced, and force pushes and branch deletion refused;
+  an earlier entry in this file says “private for now”, which was true when it was written and is the
+  reason this entry exists rather than an edit to it.
