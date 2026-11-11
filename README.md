@@ -37,6 +37,7 @@ This plugin supplies the missing half, without forking the shipped roster.
 | `message_member` | Deliver one message to a live member; an unloaded member is cold-resumed from its own Session. |
 | `stop_member` | Cancel only the current turn; the activation and inbox are kept. |
 | `retire_member` | Drain, move the Session artifact to a recoverable trash directory, and tombstone the record. |
+| `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. |
 | `compact_member` | Force one compaction on a resident, idle member. |
 
 Plus two host-side effects, applied for every retirement:
@@ -57,6 +58,7 @@ The bundle also enables the shipped `compaction-basic` row, which this profile s
 | Move | Its persisted session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`. Move, not delete: recovery is a directory move back. |
 | Tombstone | The roster record becomes `retired`, the name becomes available at the next generation, and the projections stop serving the member. |
 | Fallback | If the artifact cannot be moved, the workspace archive hides the Session instead, and the result says so. |
+| Restore | `restore_member` moves the artifact back to its recorded original path and clears the tombstone. It refuses when a live member already uses the target. |
 
 ## Install
 
