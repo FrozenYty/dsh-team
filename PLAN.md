@@ -161,4 +161,6 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 
 - [ ] **P4-01** Ephemeral members: auto-retire on completion.
 - [ ] **P4-02** A stored, reusable handoff-brief template.
-- [ ] **P4-03** File the missing lifecycle upstream with the evidence gathered here.
+- [ ] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
+  P4-03 until v0.8.0; that ID belongs to the retention task, and two tasks sharing one ID made the
+  reference ambiguous.)
