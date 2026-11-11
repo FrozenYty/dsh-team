@@ -33,9 +33,11 @@ Three options were considered:
 
 Option 3. The plugin owns the roster. A member is a child created through
 `ctx.subagents.startActivation(...)`, and the plugin keeps its own durable record per member with an
-explicit `retired` phase, generation-suffixed names, and a `replace_member` operation. The shipped
-roster and its tools are disabled by the bundle patch so that two rosters never answer the same question
-differently.
+explicit `retired` phase, generation-suffixed names, and replacement delivered as the `replace`
+parameter of `spawn_member` rather than a tool of its own (ADR 0009). The bundle patch enables
+`compaction-basic` and inserts this plugin's row; it does not touch the shipped roster rows, so the two
+rosters coexist until P2-07 retires the shipped tool row — which is why `list_members` reports a superset
+of `list_agents` instead of replacing it.
 
 ## Rationale
 

@@ -1,5 +1,7 @@
 # Document index
 
+> Owner: @FrozenYty · Revisit when: a document is added, renamed or removed
+
 [中文](INDEX-zh.md)
 
 What is in this repository, which document answers what, and what else has to change alongside a

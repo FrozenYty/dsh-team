@@ -8,7 +8,7 @@
 ## Context
 
 ADR 0010 wrote down the fact nobody had written and deferred the policy: a retirement moves a member's
-persisted Session into `$DSH_HOME/team-roster/trash/<leadSessionId>/<memberId>-<ms>/` and leaves it there
+persisted Session into `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/` and leaves it there
 forever, one directory per retirement. It deferred retention to P4-03 because the trash holds real Session
 artifacts, so a policy that deletes them is the owner's decision. The owner has now approved a cap.
 
@@ -91,9 +91,10 @@ small, per-Lead, oldest-first, reported in the result, and irreversible for the 
 - **No client sees a change.** Retirement already removed the artifact from the host's discovery, so
   pruning only decides whether the copy is still recoverable — it never alters what a running session
   list renders.
-- The trash now has a hard bound: at most `TRASH_LIMIT` accounted artifacts per Lead, plus entries this
-  plugin did not write and moves still in flight. Both exceptions are deliberate and both are visible to
-  an operator who lists the directory.
+- The trash now has a hard bound: at most the effective cap — the `trashLimit` config field, default
+  `DEFAULT_TRASH_LIMIT` (ADR 0012) — accounted artifacts per Lead, plus entries this plugin did not write
+  and moves still in flight. Both exceptions are deliberate and both are visible to an operator who lists
+  the directory.
 - Loading a record now validates `trashState`. Every value this plugin has ever written is in the enum,
   so no stored roster is refused by it; an unknown value is a bug worth failing loudly on rather than
   guessing at.
@@ -112,6 +113,7 @@ that reason, and the live re-run then pruned three artifacts and bounded the dir
 
 ## Revisit when
 
-The owner wants a different number (edit `TRASH_LIMIT`), the Harness gains a Session-deletion API that
+The owner wants a different number (set `trashLimit` in the bundle's patch row — ADR 0012, where
+`DEFAULT_TRASH_LIMIT` is only the fallback), the Harness gains a Session-deletion API that
 could retire the artifact in place, or the platform offers a per-plugin storage quota that makes a
 self-imposed cap redundant.

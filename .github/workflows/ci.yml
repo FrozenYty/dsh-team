@@ -14,8 +14,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Node 24: `--test-isolation` does not exist in Node 22, and the local runner is Node 24. Pinning
-          # the same major keeps "passes locally" and "green in CI" the same statement.
+          # Node 24: Node 22 documents this flag as `--experimental-test-isolation`, and the local runner
+          # is Node 24. Pinning the same major keeps "passes locally" and "green in CI" the same statement.
           node-version: "24"
 
       - name: Bundle modules parse as ESM

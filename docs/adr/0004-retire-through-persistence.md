@@ -28,9 +28,17 @@ tombstone.
 Retirement becomes four ordered steps, each independently fallible and each reported:
 
 1. drain the child (releases activation and capacity);
-2. move its persisted session into `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`;
-3. tombstone the roster record, with `trashPath` when a move happened;
+2. tombstone the roster record, carrying the trash path the move intends to use and a
+   `trashState: 'pending'` marker (`'none'` at once when there is nothing to move) — *before* the
+   filesystem is touched;
+3. move its persisted session into `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/` and
+   confirm the record with `trashState: 'done'`;
 4. refresh two host-side effects: the projection filter's id cache and the roster slot credit.
+
+The tombstone precedes the move deliberately: a crash between the two leaves a `retired` record beside an
+artifact that is either still in place or already in the trash, and `pending` says which is unknown, so
+restore looks in the trash first. The reverse order would leave a trashed session behind an `active`
+record, which no later read could explain.
 
 Both host effects are **capability-probed and reversible**. They wrap `sessionController.list` /
 `projections` / `control` / `follow` and patch the legacy roster's `maxMembers` getter plus `spawn`;

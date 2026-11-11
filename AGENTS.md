@@ -7,11 +7,9 @@ Instructions for AI assistants working in this repository. Read this before your
 
 ## 1. Before you start
 
-Read, in this order:
-
-```
-PLAN.md  ->  PROGRESS.md  ->  CONTRIBUTING.md  ->  docs/architecture-en.md  ->  the ADR that touches your change
-```
+Read the repository documents in the order `docs/INDEX-en.md` §1 gives. Two entries exist for an
+assistant rather than a reader: `CONTRIBUTING.md` before your first commit, and the ADR that touches your
+change before you edit anything.
 
 - The files beat your memory. The plugin runs inside a sealed Electron asar whose
   version changes under you; anything you remember about Harness APIs may already be wrong.
@@ -26,7 +24,9 @@ replaced, instead of one that only grows.
 
 Two layers, and they must not be confused:
 
-- **The bundle** (`package.json`, `cordis.patch.yml`, `index.js`, `locale/`, `icon.svg`) is
+- **The bundle** (`package.json` and the nine files its `files` list publishes: `index.js`, `actions.js`,
+  `roster.js`, `trash.js`, `host-hooks.js`, `cordis.patch.yml`, `locale/en.json`, `locale/zh.json`,
+  `icon.svg`) is
   what gets installed into a profile. It is linked from this repository, so no build step exists.
   It has no browser half: every surface is a model-facing tool (ADR 0008).
 - **The Harness** is the host. Its APIs are read from the installed asar, never from this repository.
@@ -85,15 +85,16 @@ lands in — in `docs/architecture-en.md`, not in a comment — before implement
 ## 6. Verify and report
 
 ```bash
-node scripts/check.mjs                 # manifest, entry syntax, locale parity, no machine paths
+node scripts/check.mjs                 # manifest + published files, zero-import rule, execute(args, exec), locale parity, patch rows, pairs, no machine paths
 node --check index.js                  # the bundle entry parses as ESM
 node --test --test-isolation=none tests/*.test.mjs   # unit tests, one process on purpose
 ```
 
 `--test-isolation=none` is required here: the default runner spawns one process per file and this
-machine's sandbox refuses that spawn. It also requires Node 24 — the flag does not exist in Node 22, which
-is why CI pins Node 24. Do not "simplify" the flag away in CI either: both sides run the same command so
-a local pass means the same thing as a green run.
+machine's sandbox refuses that spawn. It also requires Node 24: Node 22 documents the flag as
+`--experimental-test-isolation`, so the `--test-isolation` spelling is the Node 24 one — which is why
+this machine runs v24 and CI pins v24. Do not "simplify" the flag away in CI either: both sides run the
+same command so a local pass means the same thing as a green run.
 
 `scripts/check.mjs` cannot prove the plugin works: it never loads the Harness. Installing the bundle
 into a profile and calling the tools is the only real check, and it is the user's call each time.

@@ -105,7 +105,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   deleted in the same change (ADR 0008), and the suite covers adoption with fakes. A live install is
   the owner's decision.
 - [x] **P4-03** Retention: bound the session trash and the tombstone list.
-  Done when a documented policy exists for `$DSH_HOME/team-roster/trash` and for tombstones whose Lead
+  Done when a documented policy exists for `~/.dsh/team-roster/trash` and for tombstones whose Lead
   Session no longer exists, and running it twice leaves the same state.
   Delivered (v0.7.0, ADR 0011): the trash is bounded by a fixed per-Lead cap (`TRASH_LIMIT`, 20),
   enforced only inside a retirement that actually moved an artifact in — oldest first by the
