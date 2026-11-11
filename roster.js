@@ -105,6 +105,91 @@ export function checkAssignment(value, source = 'assignment') {  if (typeof valu
 }
 
 /**
+ * Upper bound on a stored handoff-brief template. A template exists to fix the shape of a brief that is
+ * five short lines, and every replacement pays for it in a cold child's prompt, so it is bounded at the
+ * same order as an assignment. Refused rather than truncated, for the same reason `checkLabel` refuses:
+ * a template the model did not write is one it cannot recognise later.
+ */
+export const HANDOFF_TEMPLATE_MAX = 1000
+
+/**
+ * Upper bound on the brief a stored template renders. The template cap alone does not bound the result,
+ * because a `{assignment}` value is itself up to `ASSIGNMENT_MAX`; a maximal template plus a maximal
+ * assignment would defeat the point of a short brief. The built-in brief with a maximal assignment is
+ * about 1,400 characters, so 2000 leaves a template room to add structure while still refusing a wall of
+ * prose. It is measured only when a template is stored, which is what keeps a profile that stores none
+ * byte-identical to the release before this one.
+ */
+export const HANDOFF_BRIEF_MAX = 2000
+
+/**
+ * The named fields a stored template may interpolate: the successor's target, the predecessor's target,
+ * its label, the assignment recorded for it, and the pointer to the shared team task board. A token
+ * outside this set is a typo (`{asignment}`) that would otherwise reach a child as literal text, so it is
+ * refused when the template is stored. `{assignment}` is the one required placeholder — a brief without
+ * it tells a successor its predecessor's role and where the work is, but not what the work was.
+ */
+export const HANDOFF_PLACEHOLDERS = ['successor', 'predecessor', 'label', 'assignment', 'task_board']
+
+/**
+ * Why one stored or supplied handoff template cannot be used, or undefined when it can.
+ *
+ * The set path throws this answer and the read path returns it, so a template that was hand-edited into
+ * a record is reported instead of being silently written into a child's prompt.
+ * @param {unknown} value - the template.
+ * @returns {string|undefined} the reason, or undefined when the template is usable.
+ */
+export function handoffTemplateProblem(value) {
+  if (typeof value !== 'string') return 'template must be a string'
+  const text = value.trim()
+  if (text.length === 0) return 'template must not be empty'
+  if (text.length > HANDOFF_TEMPLATE_MAX) {
+    return `template is ${text.length} characters; the cap is ${HANDOFF_TEMPLATE_MAX}`
+  }
+  const tokens = HANDOFF_PLACEHOLDERS.map((name) => `{${name}}`).join(', ')
+  const unknown = [...text.matchAll(/\{([^{}]*)\}/g)]
+    .map((match) => match[1])
+    .filter((name) => !HANDOFF_PLACEHOLDERS.includes(name))
+  if (unknown.length > 0) {
+    return `unknown placeholder {${unknown[0]}}; the placeholders are ${tokens}`
+  }
+  let rest = text
+  for (const name of HANDOFF_PLACEHOLDERS) rest = rest.split(`{${name}}`).join('')
+  if (/[{}]/.test(rest)) {
+    return `a "{"/"}" that is not part of one of ${tokens} would reach the child as literal text`
+  }
+  if (!text.includes('{assignment}')) {
+    return 'template must reference {assignment}: without it the successor is told its predecessor\'s role and where the work is, but not what the work was'
+  }
+  return undefined
+}
+
+/**
+ * Validate and normalize a handoff-brief template.
+ * Throws rather than truncating, like `checkLabel` and `checkAssignment`.
+ * @param {unknown} value - the model-supplied template.
+ * @param {string} source - operation name, so the thrown message names what refused.
+ * @returns {string} the template, trimmed.
+ */
+export function checkHandoffTemplate(value, source = 'handoff_template') {
+  const problem = handoffTemplateProblem(value)
+  if (problem !== undefined) throw new Error(`${source}: ${problem}`)
+  return value.trim()
+}
+
+/**
+ * The stored template a composition may use, or undefined when there is none or it is not usable.
+ * A stored value that fails the content rules stays on the record — the read form reports it — but is
+ * never interpolated into a child's prompt, where a literal `{asignment}` would go unnoticed.
+ * @param {unknown} stored - `roster.handoffTemplate`.
+ * @returns {string|undefined} the trimmed template, or undefined.
+ */
+export function usableHandoffTemplate(stored) {
+  if (typeof stored !== 'string' || handoffTemplateProblem(stored) !== undefined) return undefined
+  return stored.trim()
+}
+
+/**
  * A member is addressable only while it is live. A `failed` member is still listed, and can be
  * retired, but nothing can be delivered to it: the state matrix refuses a message or a stop with a
  * typed reason, and this set is what keeps that refusal out of the `live` lookup.
@@ -120,6 +205,14 @@ function parseRoster(value) {
     throw new Error('roster.leadSessionId must be a non-empty string')
   }
   if (!Array.isArray(value.members)) throw new Error('roster.members must be an array')
+  // The P4-02 field. Only its type is checked here on purpose: the storage facility validates every
+  // record of every Lead when it opens a domain (`invalid-record`, naming the table and key), so
+  // refusing the whole domain over one Lead's brief template would hide every roster. The content
+  // rules are enforced when a template is stored and reported by the read form (see
+  // `handoffTemplateProblem`), never guessed at when the brief is composed.
+  if (value.handoffTemplate !== undefined && typeof value.handoffTemplate !== 'string') {
+    throw new Error('roster.handoffTemplate must be a string')
+  }
   const targets = new Set()
   for (const member of value.members) {
     if (typeof member?.memberId !== 'string') throw new Error('roster member needs a memberId')

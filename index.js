@@ -10,14 +10,16 @@
  * the switch, and can keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
- * `restore_member`, `compact_member`. The operation bodies live in `actions.js`; this file keeps
- * argument validation, the Lead-only authority check, and the tool result schemas, and nothing else.
- * The plugin has no browser half: it is entirely model-facing (ADR 0008).
+ * `restore_member`, `compact_member`, `handoff_template`. The operation bodies live in `actions.js`;
+ * this file keeps argument validation, the Lead-only authority check, and the tool result schemas, and
+ * nothing else. The plugin has no browser half: it is entirely model-facing (ADR 0008).
  *
  * `spawn_member` with `replace` is the whole replacement: it starts the successor from a short handoff
  * brief composed from the assignment recorded on the predecessor's record, then retires the
  * predecessor in the same call (ADR 0009). The work itself stays on the shipped team task board, which
- * this plugin does not own; the brief points the successor at it.
+ * this plugin does not own; the brief points the successor at it. A Lead that replaces members
+ * repeatedly can fix the brief's shape once with `handoff_template` (ADR 0015); the built-in shape is
+ * what a Lead that never stores one gets.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -41,6 +43,7 @@
 
 import {
   ensureAdopted,
+  handoffTemplate,
   listMembers,
   messageMember,
   pressureOf,
@@ -50,7 +53,14 @@ import {
   stopMember,
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
-import { ASSIGNMENT_MAX, PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
+import {
+  ASSIGNMENT_MAX,
+  HANDOFF_TEMPLATE_MAX,
+  PHASE,
+  findByTarget,
+  openRosterStore,
+  targetOf,
+} from './roster.js'
 import { resolveDataDir, resolveTrashLimit } from './trash.js'
 
 export const name = 'dsh-team'
@@ -223,6 +233,21 @@ const STOP_VALUE = {
     stopped: { type: 'boolean' },
     reason: { type: 'string', enum: ['retired', 'failed', 'missing'] },
     resident: { type: 'boolean' },
+    message: { type: 'string' },
+  },
+}
+
+const HANDOFF_TEMPLATE_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['template', 'stored', 'valid', 'message'],
+  properties: {
+    // The stored template, or '' when this Lead has none.
+    template: { type: 'string' },
+    stored: { type: 'boolean' },
+    valid: { type: 'boolean' },
+    // Present only on a stored template that fails validation: what is wrong, and which token.
+    problem: { type: 'string' },
     message: { type: 'string' },
   },
 }
@@ -565,6 +590,32 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         }
         const table = await store
         return await stopMember({ ctx, table, leadSessionId: leadSessionIdOf(caller), leadAgent: caller, target: args.target })
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'handoff_template',
+      description: 'Read, store or clear this Lead\'s handoff-brief template: the shape spawn_member with replace uses to brief a successor. Omit template to read back what is stored; pass a template to validate and store it; pass an empty string to clear it and return to the built-in brief. The template belongs to this Lead\'s own roster record, so it does not affect another Lead, and a Lead that never stores one keeps the built-in brief.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          template: {
+            type: 'string',
+            maxLength: HANDOFF_TEMPLATE_MAX,
+            description: 'The template to store, or an empty string to clear it. Placeholders: {successor} and {predecessor} (their targets), {label} (the predecessor\'s role), {assignment} (what it was doing; required, or the successor is not told what it inherited) and {task_board} (the pointer to the shared team task board). An unknown placeholder is refused. The successor\'s own prompt is always appended after the rendered template.',
+          },
+        },
+      },
+      output: { schema: HANDOFF_TEMPLATE_VALUE },
+      async execute(args, exec) {
+        const caller = callingAgent(exec.agent, 'handoff_template')
+        requireLead(ctx, caller, 'handoff_template')
+        if (args.template !== undefined && typeof args.template !== 'string') {
+          throw new Error('handoff_template: template must be a string')
+        }
+        const table = await store
+        return await handoffTemplate({ table, leadSessionId: leadSessionIdOf(caller), template: args.template })
       },
     })))
   } catch (error) {

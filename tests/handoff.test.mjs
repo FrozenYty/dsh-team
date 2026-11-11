@@ -4,8 +4,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { handoffPrompt, messageMember, retireMember, restoreMember, spawnMember, stopMember } from '../actions.js'
-import { ASSIGNMENT_MAX, PHASE, ROSTER_SPEC, checkAssignment, findAnyTarget, planMember, readRoster, updateRoster } from '../roster.js'
+import { handoffPrompt, handoffTemplate, messageMember, retireMember, restoreMember, spawnMember, stopMember } from '../actions.js'
+import {
+  ASSIGNMENT_MAX,
+  HANDOFF_BRIEF_MAX,
+  HANDOFF_TEMPLATE_MAX,
+  LABEL_MAX,
+  PHASE,
+  ROSTER_SPEC,
+  checkAssignment,
+  findAnyTarget,
+  planMember,
+  readRoster,
+  updateRoster,
+} from '../roster.js'
 import { memoryTable } from './memory-table.mjs'
 
 /**
@@ -157,6 +169,197 @@ test('a predecessor without an assignment still yields a usable brief', () => {
   })
   assert.match(prompt, /Its role was: Audit the theme tokens\./)
   assert.match(prompt, /not recorded; take it from the shared team task board/)
+})
+
+test('a Lead with no stored template gets the built-in brief byte for byte', () => {
+  const prompt = handoffPrompt({
+    successor: 'reviewer-g2',
+    predecessor: {
+      name: 'reviewer',
+      generation: 1,
+      label: 'Check the diff',
+      assignment: 'Finish the parser unit tests.',
+    },
+    prompt: 'Continue with the cache change.',
+  })
+  assert.equal(prompt, [
+    'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
+    'Its role was: Check the diff.',
+    'What it was doing: Finish the parser unit tests.',
+    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Your task: Continue with the cache change.',
+  ].join('\n'))
+
+  // The same shape when nothing was recorded: the fallback sentence is part of the built-in brief.
+  const bare = handoffPrompt({
+    successor: 'probe-g2',
+    predecessor: { name: 'probe', generation: 1, label: 'Audit the theme tokens' },
+    prompt: 'Take over.',
+  })
+  assert.equal(bare, [
+    'You are probe-g2, the successor of probe. probe has been retired and is gone; it cannot be messaged.',
+    'Its role was: Audit the theme tokens.',
+    'What it was doing: not recorded; take it from the shared team task board',
+    'Its unfinished work is still on the shared team task board under the name "probe": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Your task: Take over.',
+  ].join('\n'))
+})
+
+test('the template is read back, and a bad stored value is reported instead of dropped', async () => {
+  const table = memoryTable()
+  const written = 'You are {successor}, taking over from {predecessor}. {assignment}'
+  const set = await handoffTemplate({ table, leadSessionId: 'lead-1', template: written })
+  assert.equal(set.stored, true)
+  assert.equal(set.valid, true)
+  assert.equal(set.template, written)
+  assert.deepEqual(JSON.parse(JSON.stringify(set)), set, 'the result stays lossless JSON')
+
+  const read = await handoffTemplate({ table, leadSessionId: 'lead-1' })
+  assert.equal(read.template, set.template, 'the get form reads back exactly what was set')
+  assert.equal(read.stored, true)
+  assert.equal(read.valid, true)
+  assert.deepEqual(JSON.parse(JSON.stringify(read)), read)
+
+  // A value that got past the set path — hand-edited, or written by a release with other rules — is
+  // reported by the read and left on the record rather than thrown away.
+  await updateRoster(table, 'lead-1', (current) => ({ ...current, handoffTemplate: 'a brief with {asignment}' }))
+  const broken = await handoffTemplate({ table, leadSessionId: 'lead-1' })
+  assert.equal(broken.stored, true)
+  assert.equal(broken.valid, false)
+  assert.match(broken.problem, /\{asignment\}/)
+  assert.equal(readRoster(table, 'lead-1').handoffTemplate, 'a brief with {asignment}', 'it is kept, not silently cleared')
+
+  // ... and the composition falls back to the built-in instead of writing the token into a child.
+  const ctx = fakeCtx()
+  await spawnMember(call(ctx, table, { name: 'probe', label: 'Probe', prompt: 'Start.', assignment: 'Watch the cache.' }))
+  await spawnMember(call(ctx, table, { replace: 'probe', label: 'Probe', prompt: 'Continue.' }))
+  const text = ctx.started.at(-1).request.prompt[0].text
+  assert.match(text, /^You are probe-g2, the successor of probe\./)
+  assert.ok(!text.includes('{'), 'no placeholder or stray brace reaches the child')
+})
+
+test('two Leads do not share a handoff template', async () => {
+  const table = memoryTable()
+  const stored = 'Take over from {predecessor} as {successor}: {assignment}'
+  await handoffTemplate({ table, leadSessionId: 'lead-1', template: stored })
+  await handoffTemplate({ table, leadSessionId: 'lead-2', template: 'Lead two: {assignment}' })
+
+  assert.equal((await handoffTemplate({ table, leadSessionId: 'lead-2' })).template, 'Lead two: {assignment}')
+  await handoffTemplate({ table, leadSessionId: 'lead-1', template: '' })
+  assert.equal((await handoffTemplate({ table, leadSessionId: 'lead-1' })).stored, false)
+  assert.equal((await handoffTemplate({ table, leadSessionId: 'lead-2' })).template, 'Lead two: {assignment}')
+  assert.equal(readRoster(table, 'lead-2').handoffTemplate, 'Lead two: {assignment}')
+})
+
+test('an unknown placeholder is refused at set time and names the token', async () => {
+  const table = memoryTable()
+  await assert.rejects(
+    () => handoffTemplate({ table, leadSessionId: 'lead-1', template: 'What it was doing: {asignment}' }),
+    (error) => /handoff_template/.test(error.message) && /\{asignment\}/.test(error.message),
+  )
+  // An unbalanced brace is the other half of the same typo class: it would be literal text too.
+  await assert.rejects(
+    () => handoffTemplate({ table, leadSessionId: 'lead-1', template: 'Work: {assignment' }),
+    /not part of one of/,
+  )
+  assert.equal(readRoster(table, 'lead-1').handoffTemplate, undefined, 'a refused template is not stored')
+})
+
+test('a template that does not reference the assignment is refused, with the reason', async () => {
+  const table = memoryTable()
+  await assert.rejects(
+    () => handoffTemplate({ table, leadSessionId: 'lead-1', template: 'You are {successor}. Do your best.' }),
+    /must reference \{assignment\}/,
+  )
+  assert.equal(readRoster(table, 'lead-1').handoffTemplate, undefined)
+})
+
+test('the template cap refuses rather than truncating', async () => {
+  const table = memoryTable()
+  const oversized = `{assignment} ${'x'.repeat(HANDOFF_TEMPLATE_MAX)}`
+  await assert.rejects(
+    () => handoffTemplate({ table, leadSessionId: 'lead-1', template: oversized }),
+    new RegExp(`cap is ${HANDOFF_TEMPLATE_MAX}`),
+  )
+  assert.equal(readRoster(table, 'lead-1').handoffTemplate, undefined)
+  // The boundary itself is accepted.
+  const bounded = `{assignment} ${'x'.repeat(HANDOFF_TEMPLATE_MAX - 13)}`
+  assert.equal(bounded.length, HANDOFF_TEMPLATE_MAX)
+  assert.equal((await handoffTemplate({ table, leadSessionId: 'lead-1', template: bounded })).stored, true)
+})
+
+test('a template that renders past the brief cap refuses the replacement before anything starts', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  const template = `{assignment} ${'x'.repeat(900)} {label}`
+  await handoffTemplate({ table, leadSessionId: 'lead-1', template })
+  await spawnMember(call(ctx, table, {
+    name: 'probe',
+    label: 'L'.repeat(LABEL_MAX),
+    prompt: 'Start.',
+    assignment: 'a'.repeat(ASSIGNMENT_MAX),
+  }))
+  const startedBefore = ctx.started.length
+
+  await assert.rejects(
+    () => spawnMember(call(ctx, table, { replace: 'probe', label: 'Next', prompt: 'Continue.' })),
+    new RegExp(`cap is ${HANDOFF_BRIEF_MAX}`),
+  )
+  assert.equal(ctx.started.length, startedBefore, 'the refusal happens before any child is started')
+  assert.equal(memberNamed(table, 'probe', 1).phase, PHASE.active, 'the predecessor is untouched')
+  assert.equal(memberNamed(table, 'probe', 2), undefined, 'no failed reservation was written')
+})
+
+test('a stored template is interpolated with the real values when a successor starts', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await handoffTemplate({ table, leadSessionId: 'lead-1', template: [
+    'Handoff: {predecessor} -> {successor}.',
+    'Its role was: {label}.',
+    'Inherited work: {assignment}',
+    'Board: {task_board}',
+    'Do not redo finished work.',
+  ].join('\n') })
+
+  const replaced = await spawnMember(call(ctx, table, { replace: 'reviewer', label: 'Check the diff', prompt: 'Continue.' }))
+  assert.equal(replaced.target, 'reviewer-g2')
+  assert.equal(replaced.predecessor_retired, true)
+  const text = ctx.started.at(-1).request.prompt[0].text
+  assert.match(text, /^Handoff: reviewer -> reviewer-g2\./)
+  assert.match(text, /Its role was: Check the diff\./)
+  assert.match(text, /Inherited work: Finish the parser unit tests\./)
+  assert.match(text, /Board: the shared team task board under the name "reviewer"/)
+  assert.match(text, /Do not redo finished work\.\nYour task: Continue\.$/)
+  assert.ok(!text.includes('{'), 'every placeholder is replaced before it reaches the child')
+})
+
+test('clearing the template returns that Lead to the built-in brief', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await handoffTemplate({ table, leadSessionId: 'lead-1', template: 'One line: {assignment}' })
+  const cleared = await handoffTemplate({ table, leadSessionId: 'lead-1', template: '   ' })
+  assert.equal(cleared.stored, false)
+  assert.equal(cleared.template, '')
+  assert.equal(readRoster(table, 'lead-1').handoffTemplate, undefined)
+
+  await spawnMember(call(ctx, table, { replace: 'reviewer', label: 'Check the diff', prompt: 'Continue the parser work.' }))
+  assert.equal(ctx.started.at(-1).request.prompt[0].text, [
+    'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
+    'Its role was: Check the diff.',
+    'What it was doing: Finish the parser unit tests.',
+    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Your task: Continue the parser work.',
+  ].join('\n'), 'clearing returns byte-identical built-in briefs')
+})
+
+test('a stored template must be a string for the record to load', () => {
+  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const record = { leadSessionId: 'lead-1', members: [], handoffTemplate: 'You are {successor}: {assignment}' }
+  assert.equal(parse(record), record)
+  record.handoffTemplate = 42
+  assert.throws(() => parse(record), /handoffTemplate must be a string/)
 })
 
 test('one spawn_member call retires the predecessor and starts its successor', async () => {
