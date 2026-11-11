@@ -34,7 +34,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   exist and `node scripts/check.mjs` passes.
 - [x] **P0-02** Create the GitHub repository and push `main`.
   Done when `git ls-remote` shows `main` and a clean clone passes `node scripts/check.mjs`.
-- [ ] **P0-03** CI runs the repository checks on every pull request.
+- [x] **P0-03** CI runs the repository checks on every pull request.
   Done when `.github/workflows/ci.yml` exists and a pull request shows the `check` job green.
 
 ### P1 — v0.1 context tooling
