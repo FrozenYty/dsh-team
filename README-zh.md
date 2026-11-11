@@ -4,7 +4,7 @@
 
 一个 DeepSeek Harness 插件，给智能体团队补上出厂版本没有的生命周期：成员可以退役、移除、替换——带可恢复的会话回收站、退役后仍存在的花名册，以及针对长跑成员的上下文工具。
 
-**状态**：v0.3 的工具已在作者本机安装并验证。设置页面板已实现并带单元测试，但尚未安装、也未实际渲染——见 [PLAN.md](PLAN.md) 的 P3-04。最近变更见 [PROGRESS.md](PROGRESS.md)。
+**状态**：v0.4 只面向模型。v0.3 里交付的设置页面板与本地回环 HTTP 桥已移除——面板从未在真实 profile 中渲染，点击也不好用——同样的精力投入到模型侧接口，现在覆盖智能体启动的每一个子智能体（ADR 0008）。生命周期工具本身已在作者本机安装并验证。最近变更见 [PROGRESS.md](PROGRESS.md)。
 
 **仓库**：[github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -25,7 +25,7 @@
 | 工具 | 行为 |
 |---|---|
 | `spawn_member` | 创建具名成员；继任者复用基名并递增代次（`reviewer` → `reviewer-g2`）。 |
-| `list_members` | 花名册：相态、代次、实时状态，驻留时还给出上下文压力与 `compactable`。官方花名册创建的成员会在首次读取时被**收养**，因此同样可退役。 |
+| `list_members` | 花名册：target、子会话 id、相态、代次、实时状态，驻留时还给出上下文压力与 `compactable`。收养官方花名册创建的成员**以及**官方 `subagent`／`subagent_fork` 工具启动的子代理，因此模型控制的每个子代理都可列出、可退役。 |
 | `message_member` | 给活着的成员投递消息；已卸载的成员会从自己的会话冷恢复。 |
 | `stop_member` | 只取消当前轮；激活与收件箱保留。 |
 | `retire_member` | 排空、把会话产物移入可恢复的回收站、给记录立碑。 |
@@ -39,21 +39,11 @@
 
 bundle 同时启用了出厂默认关闭的 `compaction-basic`。
 
-## 设置页面板
+## 只面向模型
 
-bundle 还带一个设置页（设置 → **团队花名册**），由浏览器半区（`client.js`，注册进 `settings.section` 槽）通过宿主编织的仅回环 JSON 桥（`routes.js`）渲染。
+本插件没有浏览器半区：没有设置页、没有 HTTP 路由、没有客户端 bundle。它提供的一切都是模型调用的工具，而 `list_members` 就是控制面——它会报告本插件启动的成员、官方团队花名册创建的成员，以及官方 `subagent`／`subagent_fork` 工具启动的每个子代理，每行都带子会话 id。`message_member`、`stop_member`、`retire_member` 可以寻址它返回的任意一行。一次性（one-shot）的 `subagent` 子代理无法冷恢复，所以要在它仍然驻留时发消息；停止和退役则随时可用。
 
-**面板是按会话的。** 持久存储本身就按 Lead 会话各存一份花名册，所以本页一次只显示其中一份：
-
-- 打开时定位到你当前所在的会话。该会话在浏览器侧从 shell 自己的会话目录（`useSessions`）解析，其行带有 `retainedBy.mainView`（shell 自己的“当前打开”计数）和 `displayTitle`。有标题就显示标题，没有就显示短 id；会话数据不经过这座桥。
-- **选择器**列出拥有花名册的会话，附成员数与 Lead 是否在线，便于切到另一份。你当前所在的会话即使还没有花名册也保留为选项，标注“尚无花名册”。
-- 会话没有花名册时直接说明——*这个会话还没有团队花名册。*——而不是渲染一个空页。当浏览器完全拿不到当前会话信号时，按宿主写定的顺序选取打开项：Lead 在线的排前，其次最近写入的花名册。
-- **刷新**按钮，加上面板打开期间每三秒一次的轮询，因此用工具做出的改动能到达面板，无需刷新页面。
-- **退役**带行内确认，已退役成员显示**恢复**。两者调用的是模型工具所用的同一批函数（`actions.js`），因此参数含义、结果字段与失败原因不会在两处走样。
-
-该桥是两个读、两个写：`GET /api/team-roster/sessions`（只有计数的选择器索引）、`GET /api/team-roster/state?leadSessionId=…`（单个花名册及其成员行）、`POST /api/team-roster/retire` 与 `POST /api/team-roster/restore`。它只接受本机回环请求、拒绝跨源 `Origin` 头、请求体上限 64 KiB，错误一律以带状态码的 JSON 返回。Lead 会话未在线时退役成员，会得到可读的失败说明，而不是堆栈。
-
-最后一步是重新安装更新后的 bundle，目前尚未执行：插件激活与面板实际渲染都未验证（PLAN.md P3-04）。
+设置页面板确实是一套浏览器半区，并在 v0.3 交付过；但它从未在真实 profile 中渲染，且所有者反馈点击不好用。v0.4 选择移除面板与桥，而不是修它，把精力移到上面的模型侧接口（ADR 0008）。
 
 ## 退役不是删除
 
@@ -91,7 +81,7 @@ bundle 是链接安装而不是复制，所以改了模块之后要先 `remove_b
 ## 开发
 
 ```sh
-node --check index.js actions.js routes.js client.js roster.js trash.js host-hooks.js
+node --check index.js actions.js roster.js trash.js host-hooks.js
 node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
@@ -103,9 +93,7 @@ node scripts/check.mjs
 | 路径 | 内容 |
 |---|---|
 | `index.js` | Host 插件入口、工具定义、Lead 专属权限检查 |
-| `actions.js` | 花名册操作，工具与设置桥共用 |
-| `routes.js` | `/api/team-roster` 桥：按会话的 state、选择器索引、retire、restore，以及回环/来源防护 |
-| `client.js` | 设置页面板（浏览器半区） |
+| `actions.js` | 花名册操作，位于模型侧工具背后 |
 | `roster.js` | 持久花名册、代次命名、收养、旧域迁移 |
 | `trash.js` | 会话产物回收站 |
 | `host-hooks.js` | 投影过滤与花名册名额补偿 |

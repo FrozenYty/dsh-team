@@ -195,10 +195,12 @@ export function withMember(roster, member) {
 }
 
 /**
- * Adopt one member that the shipped team roster created, so the removal this plugin provides applies
- * to it too. The member keeps its Session id as its identity; only the lifecycle bookkeeping is ours.
+ * Adopt one member discovered outside this roster, so the removal this plugin provides applies to it
+ * too. The member keeps its Session id as its identity; only the lifecycle bookkeeping is ours. Both
+ * discovery sources are passed as the same row shape: the shipped team roster (id, name, description,
+ * status) and a subagent-registry row (id, mode, label), with the label standing in for the name.
  * @param roster - the Lead's current roster.
- * @param shipped - one shipped roster row: child Session id, name, description and status.
+ * @param shipped - one discovery row: child Session id, name, description and status.
  * @returns the provisional member record, or undefined when the child has no usable identity.
  */
 export function adoptMember(roster, shipped) {

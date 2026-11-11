@@ -22,8 +22,6 @@ jobs:
         run: |
           node --check index.js
           node --check actions.js
-          node --check routes.js
-          node --check client.js
           node --check roster.js
           node --check trash.js
           node --check host-hooks.js

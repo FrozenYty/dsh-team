@@ -1,5 +1,7 @@
 # 0005 — Share the roster operations behind a loopback HTTP bridge
 
+> **Superseded by [0008](0008-model-only-surface.md).** The Settings panel and this bridge were removed; the operations themselves survive in `actions.js`.
+
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** —

@@ -177,3 +177,48 @@
   (`dsh-client-ui-workspace/lib/client.js` line 3615), so the retained count may or may not survive; if it
   does not, the panel falls back to the Host's order. P3-04 carries the live check and the P3 gate stays
   open.
+
+## 2026-11-11 — the UI is removed; every subagent becomes controllable
+
+- **Two previously merged UI pull requests were removed, and the removal is the owner's call, not a
+  repair.** Pull request 8 (the Settings panel over a loopback bridge) and pull request 9 (scoping it to
+  one Lead Session) are gone from `main`: `client.js`, `routes.js` and `tests/routes.test.mjs` are
+  deleted, `webServer` is no longer injected, and `package.json` loses `exports["./client"]`, the
+  `dsh.client` block and the published client files at version `0.4.0`. The panel had never been
+  rendered in a real profile, and the owner reported that its clicks did not work in real use. The
+  decision recorded in ADR 0008 is to stop building UI and put the effort into the model-facing
+  surface; ADRs 0005 and 0006 are marked superseded, with their bodies untouched.
+- **What survives is what was backend.** `actions.js` keeps the operation bodies — they are not
+  re-inlined, and the removed route was only a second caller. `host-hooks.js` keeps the projection
+  filter and the slot credit, because they exist to make a retirement visible in the shipped pickers and
+  to buy back a budget slot, not to serve a page. The per-Lead-session roster storage model (ADR 0003)
+  is unchanged; only the per-Lead-session *bridge* design died with the bridge.
+- **Adoption now covers every descendant of the calling agent, and the API was re-read from the
+  installed asar first.** The relevant package is `@deepseek-ai/dsh-subagent` `0.2.2-rc.1`. Its service
+  exposes `listChildren(parentSessionId, signal)` (`lib/index.js` lines 3162–3164) and
+  `listDescendants(rootSessionId, signal)` (lines 3181–3183, implementation lines 2380–2446); adoption
+  uses the latter. Child rows are `{ id, mode, label?, kind: 'child', parentId, depth, activity,
+  hasChildren }` (constructed at lines 2429–2437 from the catalog rows defined at 709–770 and 780–791);
+  `kind: 'diagnostic'` rows are skipped. A child with a label is named from it through the same
+  normalization a shipped name goes through, an unlabeled child becomes `subagent-<id>`, and the child
+  Session id stays the identity. Adoption is deduplicated in one pass, because the shipped roster and the
+  catalog report the same child when the shipped team created it; it is idempotent across reads, because
+  the retired record stays in the roster. Every `list_members` row now carries `child_id`.
+- **Two small decisions were made rather than inherited.** An adopted one-shot subagent keeps both its
+  tombstone and its trash move: the tombstone is the only thing preventing the next read from
+  re-adopting a child whose row survives in the parent's durable catalog, and moving the artifact to the
+  trash relocates an artifact that would otherwise stay in the live sessions store. `message_member` does
+  not accept a raw `childId`: the target is already unique among addressable members, and a second
+  selector would have to be honoured by every tool that takes one. The row's `child_id` reports the
+  identity the host's own listings show.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` passes, with new fakes covering an
+  unknown descendant adopted once and only once, a shipped-roster member still adopted, a child reported
+  by both sources adopted once, a tombstone blocking re-adoption, a diagnostic row ignored, and the
+  child id on every row; `node scripts/check.mjs` passes. A search over the repository finds no live
+  reference to the deleted modules, the client slot, or `webServer` outside archived ADR bodies and this
+  file. Not verified: activation of the Host-only bundle and the live behaviour of the widened adoption,
+  because the bundle was not reinstalled — that remains the owner's decision.
+- **A discrepancy in the change brief, stated rather than patched over.** The brief named an ADR 0007
+  and two panel-store modules (`panel-store.js`, `client.panel-store.js`) that do not exist in this
+  repository at `dc385bd`. There is nothing to supersede or delete beyond 0005 and 0006; ADR 0008 says so.

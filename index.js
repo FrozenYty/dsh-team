@@ -10,9 +10,9 @@
  * the switch, and can keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
- * `compact_member`. The operation bodies live in `actions.js`, because the Settings panel's HTTP bridge
- * (`routes.js`) calls the same functions: this file keeps argument validation, the Lead-only authority
- * check, and the tool result schemas, and nothing else.
+ * `restore_member`, `compact_member`. The operation bodies live in `actions.js`; this file keeps
+ * argument validation, the Lead-only authority check, and the tool result schemas, and nothing else.
+ * The plugin has no browser half: it is entirely model-facing (ADR 0008).
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -37,12 +37,11 @@ import {
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
 import { PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
-import { registerTeamRosterRoutes } from './routes.js'
 import { resolveDataDir } from './trash.js'
 
 export const name = 'team-roster'
 
-export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents', 'webServer']
+export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
 
 /** Build a registry-ready definition from canonical JSON Schemas. */
 function defineTool(options) {
@@ -90,9 +89,10 @@ const COMPACT_VALUE = {
 const MEMBER_ROW = {
   type: 'object',
   additionalProperties: false,
-  required: ['target', 'phase', 'generation', 'label', 'status', 'resident'],
+  required: ['target', 'child_id', 'phase', 'generation', 'label', 'status', 'resident'],
   properties: {
     target: { type: 'string' },
+    child_id: { type: 'string' },
     phase: { type: 'string', enum: ['provisioning', 'active', 'retired', 'failed'] },
     generation: { type: 'integer' },
     label: { type: 'string' },
@@ -314,7 +314,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member of this roster with its lifecycle phase, live state and, while resident, its context pressure. Retired members stay listed as retired. Members the shipped roster created before this plugin existed are adopted on first use.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, live state and, while resident, context pressure. Unknown children are adopted on the first read, and retired members stay listed as retired.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -331,7 +331,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have. A successor can then reuse the base name at the next generation.',
+      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A successor can then reuse the base name at the next generation.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -393,7 +393,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'message_member',
-      description: 'Send one message to a live member. A running member receives it at its next step; an unloaded member is resumed from its own Session. A retired member cannot be messaged. Success means the inbox accepted the message, not that the member has processed it.',
+      description: 'Send one message to a live member or adopted subagent from list_members. A running child receives it at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. Success means the inbox accepted the message, not that the member has processed it.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -428,7 +428,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'stop_member',
-      description: 'Cancel one member\'s current turn immediately. The activation, its inbox and its record are kept, so a later message resumes it; use retire_member to end a member for good.',
+      description: 'Cancel one member or adopted subagent\'s current turn at once. The activation, its inbox and its record are kept, so a later message resumes it; use retire_member to end a member for good.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -498,12 +498,6 @@ export function apply(ctx) {
     filter.dispose()
     slots.dispose()
   }, 'team-roster.hostHooks()')
-
-  // The Settings panel's bridge. `webServer` is a required injection: this plugin exists for a browser
-  // profile, and Cordis refuses a service property that was not injected, so the earlier conditional
-  // wiring failed activation instead of degrading. The registered shape is the raw-node handler the
-  // shipped client-connection plugin uses.
-  registerTeamRosterRoutes(ctx, { ctx, store, dataDir, hooks, log })
 
   const maybeInstall = (agent) => {
     if (installed.has(agent)) return
