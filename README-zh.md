@@ -35,6 +35,7 @@
 | `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。 |
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
+| `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取已存的那份，传入模板即保存，传空串则回到内置版本。 |
 
 每次退役都会产生两个宿主侧效果，二者都带能力探测：宿主会话列表出口会从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 
@@ -79,6 +80,7 @@ handoff-probe-g2（从未见过前任）回复：42
 
 - **先启动继任者，再退役前任，都在同一次调用里。** 启动失败时前任原封不动，失败的预留会记成继任者的 `failed` 记录；退役失败则返回 `predecessor_retired: false`，再调一次 `retire_member` 即可收尾（ADR 0009）。目标已经退役时同样接受，由墓碑提供交接书。
 - **assignment 是持久字段，且有长度上限。** `spawn_member.assignment` 在启动时写入，`message_member.assignment` 在工作变化时替换，两者都限制在 1000 个字符以内，超长直接拒绝而不是截断；`list_members` 会报告它，墓碑也会保留它。
+- **交接书的形状可以每个 Lead 固定一次。** `handoff_template` 存下的模板会代入 `{successor}`、`{predecessor}`、`{label}`、`{assignment}` 与 `{task_board}`。没有引用 `{assignment}` 的模板在保存时就被拒绝——继任者若不知道接手的是什么，就不算完成交接；未知占位符同样在保存时被拒绝，而不是原样写进子代理的提示词。内置交接书就是默认模板、由同一套渲染代码生成，因此没有存过模板的 Lead 得到的字句和以前完全一样，清除模板即回到它（ADR 0015）。
 
 ## 临时成员
 
