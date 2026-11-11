@@ -31,10 +31,12 @@ Two layers, and they must not be confused:
   It has no browser half: every surface is a model-facing tool (ADR 0008).
 - **The Harness** is the host. Its APIs are read from the installed asar, never from this repository.
 
-The project was renamed `dsh-team-relay` in v0.10.0. Three names did not change with it and are not
+The project was renamed `dsh-team-relay` in v0.10.0. Four names did not change with it and are not
 typos: the storage domain `team_roster` (`roster.js`, `ROSTER_SPEC`), the patch row id `team-roster`
-(`cordis.patch.yml`) and the trash directory `~/.dsh/team-roster`. Renaming any of them orphans stored
-state or silently drops a profile's override — read ADR 0014 before "finishing" the rename.
+(`cordis.patch.yml`), the trash directory `~/.dsh/team-roster`, and the pre-rename
+`DSH_TEAM_ROSTER_DATA_DIR` (still honoured; `DSH_TEAM_RELAY_DATA_DIR` is the current spelling). Renaming
+any of them orphans stored state or silently drops a profile's override — read ADR 0014 before
+"finishing" the rename.
 
 `PLAN.md` owns task state; `PROGRESS.md` owns the record of what changed. Do not restate either here.
 
