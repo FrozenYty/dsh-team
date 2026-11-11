@@ -245,7 +245,8 @@ and loses only the panel.
 
 | Endpoint | Method | Behaviour |
 |---|---|---|
-| `/api/team-roster/state` | GET | `{ rosters: [{ leadSessionId, leadLive, members }], version }`, built from the store with no session listing |
+| `/api/team-roster/sessions` | GET | `{ sessions: [{ leadSessionId, memberCount, liveCount, updatedAt, leadLive }], selectedLeadSessionId? }` — the picker's index: counts only, no member rows, no Session reads |
+| `/api/team-roster/state` | GET | `?leadSessionId=` → `{ leadSessionId, leadLive, exists, members, updatedAt? }` for exactly one roster. A missing id is 400; an unknown one is a normal answer with `exists: false` |
 | `/api/team-roster/retire` | POST | `{ leadSessionId, target, reason? }` → the `retire_member` result |
 | `/api/team-roster/restore` | POST | `{ leadSessionId, target }` → the `restore_member` result |
 
@@ -254,19 +255,50 @@ same-authority `Origin` / `Sec-Fetch-Site` when a browser attaches them, and a 6
 JSON body. Failures are JSON with a status: 400 malformed, 403 fence, 404 unknown path, 405 wrong method,
 413 too large, 409 operation failure, 500 unavailable store.
 
+**The unit of the bridge is one Lead Session, not the whole store.** The durable record is already keyed
+per Lead Session (§4.2), so flattening every roster into one page was a presentation defect rather than a
+data one: with a dozen sessions the page becomes a list to search instead of a roster to manage. Only the
+per-session payload carries member rows — the per-session payload is the small one, and `/sessions` exists
+so the picker can be filled without reading any roster's members.
+
+**Selection has one owner per fact.** The Host decides which *stored* session opens and never lists
+Sessions; the browser decides which session the user is *in*. `selectedLeadSessionId` is the documented
+fallback, ordered live Leads first, then the newest write, then the id, and it is used only when the
+browser sends no `currentSessionId`. A named `currentSessionId` always wins, even when that session has no
+roster, because the panel must be able to say so instead of silently showing another team.
+
+**Titles are joined in the browser, and that mechanism is verified, not assumed.** The root-scoped
+`settings.section` slot receives the shell's standard hooks, `useSessions` among them: the root session
+catalog is provided by `@deepseek-ai/dsh-client-ui-session/lib/client.js` lines 1120–1123
+(`ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list }, ... })`). The catalog rows carry
+`displayTitle`/`title` and `retainedBy` (`@deepseek-ai/dsh-api-session-controller/lib/client.js` lines
+4162–4182, `projectList`), and "the session the user is in" is the row whose `retainedBy.mainView > 0` —
+the same test the shipped root-scoped session browser uses (`@deepseek-ai/dsh-client-ui-workspace/lib/client.js`
+line 3697, reading `useSessions((state) => state)` on line 3669). A Host-side session listing to resolve
+titles was rejected: it needs a service this panel should not depend on, it cannot answer for a closed Lead
+Session, and it duplicates a catalog the page already subscribes to (ADR 0006).
+
 ### 5.3 Browser half
 
 `client.js` is plain browser JavaScript loaded through the module table; `exports["./client"]` and the
-package's `dsh.client` block (`platform: web`, `immediately: false`, package injection edges) are what
-make the host compose and serve it. It registers one `settings.section` page (`id: 'team-roster'`,
-order 25) with a locale namespace, so the settings shell owns navigation and the panel owns only its
-content. The panel polls the state endpoint every three seconds while open and refreshes after each
-action; retire has an inline confirmation because it destroys the member's live session.
+package's `dsh.client` block (`platform: web`, `immediately: true`, package injection edges) are what make
+the host compose and serve it. It registers one `settings.section` page (`id: 'team-roster'`, order 25) with
+a locale namespace, so the settings shell owns navigation and the panel owns only its content.
+
+The page shows exactly one roster: the session the user is in, or the one chosen in the picker. The header
+names that session with its catalog title and short id, and the picker lists every session that has a
+roster with its counts and whether its Lead is live. A session without a roster states that plainly — *No
+team roster for this session yet.* — instead of rendering an empty page. The panel polls both reads every
+three seconds while open and re-reads immediately after a pick and after each action; retire keeps its
+inline confirmation because it destroys the member's live session.
 
 There is no build step, so the panel uses React from the module table and inline theme tokens
 (`--dsw-alias-*`) for colours. Unverified: the bundle has not been reinstalled, so activation, served
-bundle composition and the rendered page are untested. The unit tests cover the fence, the state builder
-and the route/operation wiring without an HTTP socket.
+bundle composition and the rendered page are untested. One runtime fact is specifically unverified — whether
+`retainedBy.mainView` is still non-zero while the Settings panel is open; the shipped browser suppresses its
+own "current" highlight when a sidebar panel is active (`dsh-client-ui-workspace/lib/client.js` line 3615),
+and the panel falls back to the Host's order if the retain is dropped. The unit tests cover the fence, the
+two read builders, the selection rule and the route/operation wiring without an HTTP socket.
 
 ## 6. Harness extension points used
 
@@ -287,6 +319,7 @@ and the route/operation wiring without an HTTP socket.
 | serve a mutating HTTP endpoint | `ctx.webServer.register({ kind: 'prefix', path, handler })` from a `ctx.inject(['webServer'], ...)` scope |
 | render a Settings page | Client half declared by `dsh.client`; `ctx.slots.register({ name: 'settings.section', id, order, label, locale }, Component)` |
 | localize the panel | `ctx.locale.register(ns, { en, zh })` in the client half, then the `locale: ns` slot option injects `t` |
+| read the session catalog from a root-scoped slot | the `useSessions` standard hook — the root hook `@deepseek-ai/dsh-client-ui-session` provides over `ctx.sessions.list`; rows carry `displayTitle` and `retainedBy.mainView` |
 
 ## 7. Risks and limits
 

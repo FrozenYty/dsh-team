@@ -29,6 +29,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 花名册存在哪里？ | `docs/adr/0003-roster-storage.md` | 英文 |
 | 为什么退役要移动文件、还要改宿主服务？ | `docs/adr/0004-retire-through-persistence.md` | 英文 |
 | 设置页面板如何触达 Host，为什么要有 HTTP 路由？ | `docs/adr/0005-share-operations-behind-an-http-bridge.md` | 英文 |
+| 为什么面板只显示一个会话的花名册，又是怎么知道是哪个会话？ | `docs/adr/0006-session-scoped-roster-panel.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 

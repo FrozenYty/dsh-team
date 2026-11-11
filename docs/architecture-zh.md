@@ -165,17 +165,26 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 
 | 端点 | 方法 | 行为 |
 |---|---|---|
-| `/api/team-roster/state` | GET | `{ rosters: [{ leadSessionId, leadLive, members }], version }`，从存储构建，不列会话 |
+| `/api/team-roster/sessions` | GET | `{ sessions: [{ leadSessionId, memberCount, liveCount, updatedAt, leadLive }], selectedLeadSessionId? }`——选择器索引：只有计数，没有成员行，也不读会话 |
+| `/api/team-roster/state` | GET | `?leadSessionId=` → 恰好一个花名册的 `{ leadSessionId, leadLive, exists, members, updatedAt? }`。缺参数是 400；未知会话是正常答案，`exists: false` |
 | `/api/team-roster/retire` | POST | `{ leadSessionId, target, reason? }` → `retire_member` 的结果 |
 | `/api/team-roster/restore` | POST | `{ leadSessionId, target }` → `restore_member` 的结果 |
 
 路由位于 Connection 防护之外，所以桥自带防护：只接受回环 `remoteAddress`，浏览器带上时校验同源 `Origin`／`Sec-Fetch-Site`，缓冲 JSON 请求体上限 64 KiB。失败一律是带状态码的 JSON：400 格式错误、403 防护拒绝、404 路径不存在、405 方法不允许、413 过大、409 操作失败、500 存储不可用。
 
+**桥的单位是一个 Lead 会话，不是整个存储。** 持久记录本来就是按 Lead 会话分键的（§4.2），所以把全部花名册摊在一页上是呈现层的缺陷，不是数据层的问题：十几个会话之后，那一页变成“需要搜索的列表”，而不是“可管理的花名册”。只有按会话的响应携带成员行——按会话的载荷才是小的那一个；`/sessions` 的存在就是为了在不读任何成员的情况下填出选择器。
+
+**每个事实只有一个归属方。** 打开哪一个**已存**会话由 Host 决定，Host 从不列会话；用户**正在**哪个会话，由浏览器决定。`selectedLeadSessionId` 是写明的兜底顺序：Lead 在线优先，其次最近写入，再次按 id；只有当浏览器没有传 `currentSessionId` 时才使用。具名的 `currentSessionId` 永远优先，即使该会话没有花名册——面板必须能说出来，而不是悄悄展示另一支队。
+
+**标题在浏览器侧拼接，这条机制是核实过的，不是猜的。** 根作用域的 `settings.section` 槽会拿到 shell 的标准 hook，其中包含 `useSessions`：根会话目录由 `@deepseek-ai/dsh-client-ui-session/lib/client.js` 第 1120–1123 行提供（`ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list }, ... })`）。目录行带有 `displayTitle`／`title` 与 `retainedBy`（`@deepseek-ai/dsh-api-session-controller/lib/client.js` 第 4162–4182 行的 `projectList`），而“用户当前所在的会话”就是 `retainedBy.mainView > 0` 的那一行——与官方根作用域会话浏览器用的是同一个判据（`@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 第 3697 行，第 3669 行读的是 `useSessions((state) => state)`）。被否决的方案是让 Host 侧列会话以取标题：那会引入本面板不该依赖的服务，对未打开的 Lead 会话答不出来，而且与页面已经订阅的目录重复（ADR 0006）。
+
 ### 5.3 浏览器半区
 
-`client.js` 是普通浏览器 JavaScript，经模块表加载；`exports["./client"]` 与 package 的 `dsh.client` 块（`platform: web`、`immediately: false`、注入边）让宿主组合并提供它。它注册一个 `settings.section` 页面（`id: 'team-roster'`，order 25）并带一个 locale 命名空间，因此设置外壳拥有导航，面板只拥有自己的内容。面板打开期间每三秒轮询 state，并在每次操作后刷新；退役带行内确认，因为它会销毁成员的活会话。
+`client.js` 是普通浏览器 JavaScript，经模块表加载；`exports["./client"]` 与 package 的 `dsh.client` 块（`platform: web`、`immediately: true`、注入边）让宿主组合并提供它。它注册一个 `settings.section` 页面（`id: 'team-roster'`，order 25）并带一个 locale 命名空间，因此设置外壳拥有导航，面板只拥有自己的内容。
 
-没有构建步骤，所以面板用模块表里的 React，颜色只用主题令牌（`--dsw-alias-*`）。未验证：bundle 尚未重新安装，因此插件激活、bundle 组合与页面渲染都未测试。单元测试覆盖防护、state 构建以及路由与操作的接线，不涉及 HTTP socket。
+页面一次只显示一份花名册：你当前所在的会话，或选择器里选中的那个。页头用目录里的标题加短 id 标明当前展示的会话；选择器列出所有拥有花名册的会话，附计数与 Lead 是否在线。会话没有花名册时直接说明——*这个会话还没有团队花名册。*——而不是渲染空页。面板打开期间每三秒轮询这两个读接口，选择之后与每次操作之后立即重读；退役保留行内确认，因为它会销毁成员的活会话。
+
+没有构建步骤，所以面板用模块表里的 React，颜色只用主题令牌（`--dsw-alias-*`）。未验证：bundle 尚未重新安装，因此插件激活、bundle 组合与页面渲染都未测试。其中有一条运行时事实专门未验证——设置面板打开时 `retainedBy.mainView` 是否仍非零；官方浏览器在侧栏面板激活时会抑制自己的“当前”高亮（`dsh-client-ui-workspace/lib/client.js` 第 3615 行），若该 retain 被释放，面板会退回 Host 的兜底顺序。单元测试覆盖防护、两个读构建器、选择规则以及路由与操作的接线，不涉及 HTTP socket。
 
 ## 6. 使用的 Harness 扩展点
 
@@ -196,6 +205,7 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | 提供可变更的 HTTP 端点 | 在 `ctx.inject(['webServer'], ...)` 作用域里 `ctx.webServer.register({ kind: 'prefix', path, handler })` |
 | 渲染设置页 | 由 `dsh.client` 声明的浏览器半区；`ctx.slots.register({ name: 'settings.section', id, order, label, locale }, Component)` |
 | 面板本地化 | 浏览器半区 `ctx.locale.register(ns, { en, zh })`，再用 `locale: ns` 槽选项注入 `t` |
+| 在根作用域槽里读会话目录 | `useSessions` 标准 hook——由 `@deepseek-ai/dsh-client-ui-session` 在根作用域对 `ctx.sessions.list` 提供；行带有 `displayTitle` 与 `retainedBy.mainView` |
 
 ## 7. 风险与边界
 

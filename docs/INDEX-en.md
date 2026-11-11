@@ -30,6 +30,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Where does the roster live? | `docs/adr/0003-roster-storage.md` | English |
 | Why does retirement move files, and why does it patch host services? | `docs/adr/0004-retire-through-persistence.md` | English |
 | How does the Settings panel reach the Host, and why is there an HTTP route? | `docs/adr/0005-share-operations-behind-an-http-bridge.md` | English |
+| Why does the panel show one session's roster, and how does it know which session that is? | `docs/adr/0006-session-scoped-roster-panel.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

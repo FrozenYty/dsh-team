@@ -106,9 +106,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Done when the panel triggers the same operations as the model tools and reports their result. Delivered:
   the tool bodies moved to `actions.js`, and both `POST /retire` and `POST /restore` call those functions.
 - [ ] **P3-04** Live verification of the Settings panel.
-  Done when a reinstalled bundle serves the client half, Settings → Team roster renders the live roster, a
-  change made through a tool appears within one poll, and a retire plus a restore from the panel return
-  the same result objects the tools return. Not done: installing the bundle is the user's decision.
+  Done when a reinstalled bundle serves the client half, Settings → Team roster renders the live roster, the
+  panel opens on the session the user is in and switches through the picker (with the "no roster" sentence
+  for a session that has none), a change made through a tool appears within one poll, and a retire plus a
+  restore from the panel return the same result objects the tools return. Not done: installing the bundle is
+  the user's decision.
+- [x] **P3-05** Scope the panel to one Lead Session.
+  Done when `GET /state` answers exactly one roster, `GET /sessions` answers a counts-only index, the panel
+  opens on the session the user is in, offers a picker over the sessions that have a roster, and says so
+  plainly when the current session has none. Delivered in code: `buildSessionState` and
+  `buildSessionsIndex` in `routes.js` (the index owns the default-selection rule), `client.js` resolves the
+  current session from the root-scoped `useSessions` hook and joins titles there (ADR 0006), and six tests
+  pin both read shapes, the missing/unknown id answers and the rule. The live render stays with P3-04.
 - [ ] **Gate P3** — the roster is manageable without typing a tool call.
 
 ### P4 — Optional, only after the gate above
