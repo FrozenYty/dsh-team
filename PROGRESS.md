@@ -36,6 +36,6 @@
   clone. A repository that only passes in the directory that produced it has not been tested.
 - **P0-03 is ticked because the check job actually ran, not because the workflow file exists.** Pull
   request 1 ran the `check` job on GitHub and finished green. The same PR also caught a real defect in
-  the check script: the machine-path rule matched the `s:/` of `https://`, so it failed on the README
-  line that links this repository. The rule now requires the drive letter to follow a non-word
-  character, and a five-case self-test pins both directions.
+  the check script: the machine-path rule matched the letter-plus-colon inside an `https` URL, so it
+  failed on the README line that links this repository. The rule now requires the drive letter to
+  follow a non-word character, and a five-case self-test pins both directions.
