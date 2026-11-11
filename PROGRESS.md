@@ -30,3 +30,7 @@
 - **Two spikes are open and named in `PLAN.md`.** P2-01 needs the durable-storage API, P2-02 needs the
   exact subagent lifecycle semantics including whether a retired child can be hidden from the app. Both
   are being answered from the installed asar, not from memory.
+- **P0-02 is ticked on evidence, not on intent.** The repository was pushed to
+  `github.com/FrozenYty/dsh-team-control` (private for now), then cloned into a fresh temporary
+  directory and checked there: `node --check index.js` and `node scripts/check.mjs` both pass from the
+  clone. A repository that only passes in the directory that produced it has not been tested.

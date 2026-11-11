@@ -32,7 +32,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [x] **P0-01** Initialise the repository with the v0.1 bundle and the document set.
   Done when the bundle files, README pair, AGENTS, CONTRIBUTING, PLAN, PROGRESS and `scripts/check.mjs`
   exist and `node scripts/check.mjs` passes.
-- [ ] **P0-02** Create the GitHub repository and push `main`.
+- [x] **P0-02** Create the GitHub repository and push `main`.
   Done when `git ls-remote` shows `main` and a clean clone passes `node scripts/check.mjs`.
 - [ ] **P0-03** CI runs the repository checks on every pull request.
   Done when `.github/workflows/ci.yml` exists and a pull request shows the `check` job green.

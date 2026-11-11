@@ -6,6 +6,8 @@
 
 **状态**：v0.1 已在作者本机安装并验证；v0.2（自建花名册、真正可删除）进行中。当前任务状态见 [PLAN.md](PLAN.md)，最近变更见 [PROGRESS.md](PROGRESS.md)。
 
+**仓库**：[github.com/FrozenYty/dsh-team-control](https://github.com/FrozenYty/dsh-team-control)
+
 ## 为什么需要它
 
 官方实验性 Agent Teams 包（`@deepseek-ai/dsh-experimental-agent-team` 及其工具包与界面包）的花名册，是 Lead 会话日志的折叠：
