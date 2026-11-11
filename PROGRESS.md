@@ -230,3 +230,45 @@
   directly, so the tool wrappers stopped being covered even as coverage numbers rose. Fixed all three, and
   `scripts/check.mjs` now fails any `execute(` signature that does not declare `exec` — verified by
   breaking a signature on purpose (exit 1, named the offending `(args)`) and restoring it (exit 0).
+
+## 2026-11-11 — replacement hands over the record, and the successor starts first
+
+- **P2-05 is delivered without a new tool name, and that was the first decision.** A `replace_member`
+  tool would have duplicated `spawn_member`'s parameters and start path and given the model a third name
+  for one operation. Instead `spawn_member` gained `replace` and `assignment`, and `message_member`
+  gained `assignment` (the moment the Lead tells a member what to do is the moment that record changes).
+  `PLAN.md`'s P2-05 line was reworded to match; P2-08 still carries the live end-to-end check because it
+  needs real model calls and the bundle has not been reinstalled.
+- **The ordering is spawn-then-retire, and the reason is which half is recoverable.** The obvious order —
+  retire, then spawn — loses the predecessor into the trash when the start fails, with its work briefed
+  to nobody. Starting the successor first means a failed start changes nothing (the predecessor is
+  untouched and still live, and the failed reservation is recorded as the successor's `failed` record,
+  named by the thrown error), and a failed retirement returns the successor with
+  `predecessor_retired: false` and the reason, so one more `retire_member` call recovers it. Neither half
+  reports success on its own. The order, the rejected alternatives and the assignment design are ADR
+  0009.
+- **The brief is composed from the record and points at the board.** The successor's prompt is five
+  short lines: its own name, the predecessor's target and label, the recorded assignment, the fact that
+  the predecessor is gone and cannot be messaged, and a pointer to the shared team task board under the
+  predecessor's name — the board is not copied, and the plugin still does not own one. A successor
+  inherits the predecessor's assignment unless the model records a different one, so repeated
+  replacement does not thin the handoff out one generation at a time. An already-retired target is
+  accepted and its tombstone supplies the brief, which is the `retired` row of the state matrix.
+- **The assignment is a durable, capped field, and the cap is enforced at both ends.** `checkAssignment`
+  rejects anything over 1000 characters rather than truncating it, the model-facing parameters carry
+  `maxLength: 1000`, and the domain's record validator refuses an over-long assignment on decode, so an
+  old store cannot grow without limit. It rides on the member record, is reported on every
+  `list_members` row, and stays on the tombstone after retirement. No migration: the field is optional
+  and existing records simply do not have one.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` is 40 tests, 40 passing — the 31 that
+  existed plus nine in `tests/handoff.test.mjs` covering the cap and record validation, the stored and
+  replaced assignment, the brief's content and its short shape, the one-call replacement (successor at
+  generation 2, predecessor tombstoned, assignment inherited, brief actually handed to
+  `startActivation`), the generation rule with and without an explicit name, both half-failures, and
+  replacement from a tombstone; `node scripts/check.mjs` passes.
+- **What stays unverified, stated plainly.** The bundle was not reinstalled, so no live call has run:
+  the widened tool schemas activating, a real successor reading its brief, and the partial-failure paths
+  are covered only by fakes. One runtime fact is deliberately not assumed — whether a spawned teammate
+  can see the shipped team task board tools — which is why the brief says to ask the Lead for the task
+  ids if the board cannot be read. P2-08 is the live end-to-end check.

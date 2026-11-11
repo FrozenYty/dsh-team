@@ -55,7 +55,7 @@ path.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. |
+| `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. With `replace`, the same call retires the predecessor and starts its successor from a handoff brief (§4.4). |
 | `list_members` | Every record with phase, generation, live status and — while resident — context pressure. Retired members stay listed as `retired`. |
 | `retire_member` | Drains the child, moves its persisted Session into the trash directory, and tombstones the record with the trash and original paths. Verified against a finished member and a member mid-turn. |
 | `restore_member` | Moves the trashed artifact back to the path recorded at retirement and clears the tombstone; refuses when a live member already owns the target. |
@@ -170,11 +170,16 @@ generation    1 for the first holder of a name, 2 for its successor, ...
 childId       the subagent Session id, or absent while provisioning
 phase         provisioning | active | dormant | retired | failed
 label         the responsibility text shown to the model
+assignment    what the member is doing, set by the model; at most 1000 characters (§4.4)
 createdAt     ISO timestamp
 retiredAt     ISO timestamp, present only when phase = retired
-briefPath     handoff brief written by the retiring member, when one exists
 predecessor   memberId this member replaced, when it is a successor
 ```
+
+`assignment` is the durable statement a successor is briefed with. It is set with
+`spawn_member.assignment`, replaced with `message_member.assignment`, reported on every `list_members`
+row, and kept on the tombstone after retirement. `briefPath` was drafted for a brief the member writes
+itself; this version does not ask the member for one, so the field does not exist yet (P4-02).
 
 `name` is unique among **current** members. A successor reuses the name with `generation + 1`, which
 the shipped roster cannot do because it treats a name as permanently taken. Records live in one
@@ -186,13 +191,17 @@ per-Lead index keyed by the Lead Session id.
 Every cell is decided before implementation (AGENTS.md §4.8). Events are plugin operations and Harness
 notices; a dash means the event is rejected with a typed reason.
 
-| Phase \ Event | spawn | message | stop | retire | child completes | child fails |
-|---|---|---|---|---|---|---|
-| provisioning | reject | queue until active | reject | mark retired, drain | `active` | `failed` |
-| active | reject | deliver | `active` (turn stopped) | `retired` + drain | `dormant` | `failed` |
-| dormant | reject | deliver, becomes `active` | no-op | `retired` | not applicable | not applicable |
-| retired | reject | reject, typed reason | no-op | no-op | ignore | ignore |
-| failed | reject | reject, typed reason | no-op | `retired` | ignore | ignore |
+| Phase \ Event | spawn | replace | message | stop | retire | child completes | child fails |
+|---|---|---|---|---|---|---|---|
+| provisioning | reject | start successor, then `retired` + drain | queue until active | reject | mark retired, drain | `active` | `failed` |
+| active | reject | start successor, then `retired` + drain | deliver | `active` (turn stopped) | `retired` + drain | `dormant` | `failed` |
+| dormant | reject | start successor, then `retired` | deliver, becomes `active` | no-op | `retired` | not applicable | not applicable |
+| retired | reject | start successor from the tombstone; the retire half is a no-op | reject, typed reason | no-op | no-op | ignore | ignore |
+| failed | reject | start successor, then `retired` | reject, typed reason | no-op | `retired` | ignore | ignore |
+
+`replace` is one model call composed of `spawn` and `retire` (`spawn_member` with `replace`). The two
+halves are ordered deliberately: the successor starts first in every cell, so a start that fails leaves
+the row exactly as it was, and the retire half reports `predecessor_retired: false` when it fails.
 
 `dormant` is deferred to P4-01: the shipped implementation keeps `active` as the lifecycle phase and
 reports live state (`running`, `idle`, `unloaded`) separately, so an unloaded member is visible without a
@@ -201,30 +210,44 @@ second durable phase.
 Two cells are the expensive ones and are called out deliberately:
 
 - **retire while provisioning** — the record becomes `retired` and the in-flight child is drained when
-  it publishes. A member must never come back to life after retirement.
-- **retire while active** — retirement wins over in-flight work. The member writes its brief first, and
-  if it is too degraded to do so the Lead writes it (see 4.4).
+  it publishes. A member must never come back to life after retirement. `replace` on a provisioning
+  member does the same to the predecessor, after the successor has started.
+- **retire while active** — retirement wins over in-flight work. The record's `assignment` is the brief
+  (§4.4); if the model never recorded one, the successor's prompt says so and sends it to the shared
+  task board instead of inventing a summary.
 
 ### 4.4 Retire and replace
 
 Retirement is a protocol, not a deletion, because a member's Session is durable and its work may be
 half-finished:
 
-1. **Brief.** The member is asked for a bounded, fixed-schema handoff brief — goal, done, in progress,
-   next action, files, and what the successor must not redo — written to a path the Lead can read. If
-   the member is unresponsive, degraded, or already failed, the Lead writes the brief instead. A third
-   summarizer is never introduced.
-2. **Reconcile.** The Lead compares the brief against the roster and the working tree before trusting
-   it; a brief that contradicts the repository is a finding, not a plan.
-3. **Drain.** The child is drained through `ctx.subagents.drainChildren(lead, [childId])`, releasing its
-   activation slot and residency.
+1. **Record.** The durable statement of the work is the member's `assignment`, set by the model with
+   `spawn_member.assignment` and kept current with `message_member.assignment`; it is capped at 1000
+   characters, so a record cannot grow without limit. This version has no member-written brief: asking a
+   member for one costs a model round-trip exactly when the member may be unresponsive or already
+   failed. A stored, reusable template stays P4-02.
+2. **Reconcile.** The Lead checks the assignment against the working tree and the shared task board
+   before trusting it; a brief that contradicts the repository is a finding, not a plan.
+3. **Drain.** `retire_member` drains the child through `ctx.subagents.drainChildren(lead, [childId])`,
+   releasing its activation slot and residency.
 4. **Move and tombstone.** The persisted Session moves into the plugin's trash directory, and the record
-   moves to `retired` carrying that path. The workspace archive is the fallback when no artifact can be
-   moved.
-5. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the member,
-   while the roster keeps the trash path for manual recovery.
-6. **Replace (optional).** A successor is spawned with a pointer to the brief — never with the
-   predecessor's transcript — and a read-back gate before it edits anything.
+   moves to `retired` carrying that path and keeping its `assignment`. The workspace archive is the
+   fallback when no artifact can be moved.
+5. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
+   member, while the roster keeps the trash path for manual recovery.
+6. **Replace.** `spawn_member` with `replace: <target>` composes a short, self-contained prompt for the
+   successor: the successor's name, the predecessor's target and label, the recorded assignment, the
+   fact that the predecessor is gone, and a pointer to the shared team task board under the
+   predecessor's name. The board is not copied and not duplicated. It also runs steps 3–5 on the
+   predecessor. **The successor starts first and the predecessor is retired second, in the same call**:
+   a failed start leaves the predecessor untouched and live, and a failed retirement returns
+   `predecessor_retired: false` with the reason, so one more `retire_member` call recovers it. A target
+   already retired is accepted, and its tombstone supplies the brief. ADR 0009 records the ordering and
+   why the alternatives were rejected.
+
+The successor's brief is inherited work, not a copy of the predecessor's state: the successor inherits
+the predecessor's `assignment` unless the model records a different one, so repeated replacement does not
+thin the record out one generation at a time.
 
 ### 4.5 Model-facing surface
 
@@ -236,18 +259,20 @@ target is already unique among addressable members.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child. |
-| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label and live state, plus pressure and `compactable` while resident. |
-| `message_member` | Deliver one message to a live target; a running child sees it at its next step, an unloaded continuable child is cold-resumed. |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member and live state, plus pressure and `compactable` while resident. |
+| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox. |
 | `retire_member` | Drain, move the session artifact to the trash, tombstone the record and refresh the host effects. |
 | `restore_member` | Move a trashed artifact back and return the record to active. |
 | `compact_member` | Force one context compaction on a resident, idle target. |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
-check and the tool result schemas. The shipped roster tools stay enabled: they own the shared task
-board, and adoption makes the members they create retirable. A future task (P2-09) can replace the task
-board and then disable the shipped tool row.
+check and the tool result schemas. Replacement deliberately has no tool of its own: `spawn_member` and
+`message_member` gained one parameter each rather than the model learning a third name for the same job
+(ADR 0009). The shipped roster tools stay enabled: they own the shared task board, and adoption makes the
+members they create retirable. A future task (P2-09) can replace the task board and then disable the
+shipped tool row.
 
 #### 4.5.1 Adoption is the control surface
 
@@ -295,6 +320,9 @@ and still retirable.
   subagent seam is a different generation from the public source tree: the public tree has member names
   and `resolveName`, the installed build does not. Read the installed `lib/index.js` before trusting a
   public example.
+- **The handoff is only as good as the recorded assignment.** The plugin cannot read the shared task
+  board or the predecessor's transcript, so the successor's brief is composed from the record. A member
+  whose assignment was never recorded hands over a label and a pointer to the board, not a summary.
 - **Compaction is profile-wide.** Enabling the backend changes behaviour for every session in the
   profile. It is a shipped feature turned on, not custom code, but it is not scoped to this plugin's
   members.

@@ -6,11 +6,13 @@ A DeepSeek Harness plugin that gives an agent team the lifecycle the shipped one
 retire, remove and replace — with a recoverable session trash, a roster that survives the removal, and
 context tooling for long-running teammates.
 
-**Status**: v0.4 is model-facing only. The Settings panel and its loopback HTTP bridge that shipped in
-v0.3 were removed — the panel was never rendered in a real profile, and its clicks did not work — and
-the same effort went into the model-facing surface, which now covers every subagent an agent spawns
-(ADR 0008). The lifecycle tools themselves are installed and verified in the author's profile. Recent
-changes are in [PROGRESS.md](PROGRESS.md).
+**Status**: v0.5 replaces a member with a handoff: one `spawn_member` call with `replace` starts the
+successor from a short brief and then retires the predecessor (ADR 0009). v0.4 is model-facing only —
+the Settings panel and its loopback HTTP bridge that shipped in v0.3 were removed, because the panel was
+never rendered in a real profile and its clicks did not work — and the same effort went into the
+model-facing surface, which now covers every subagent an agent spawns (ADR 0008). The lifecycle tools
+themselves are installed and verified in the author's profile. Recent changes are in
+[PROGRESS.md](PROGRESS.md).
 
 **Repository**: [github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -35,9 +37,9 @@ This plugin supplies the missing half, without forking the shipped roster.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Start a named member; a successor reuses the base name at the next generation (`reviewer` → `reviewer-g2`). |
-| `list_members` | The roster: target, child session id, phase, generation, live state, and — while resident — context pressure and `compactable`. Adopts members the shipped roster created **and** children spawned with the shipped `subagent` / `subagent_fork` tools, so every subagent the model controls is listed and retirable. |
-| `message_member` | Deliver one message to a live member; an unloaded member is cold-resumed from its own Session. |
+| `spawn_member` | Start a named member, or replace one: with `replace` the successor starts from a handoff brief and the predecessor is retired in the same call. A successor reuses the base name at the next generation (`reviewer` → `reviewer-g2`) unless the model names it. |
+| `list_members` | The roster: target, child session id, phase, generation, the assignment recorded for the member, live state, and — while resident — context pressure and `compactable`. Adopts members the shipped roster created **and** children spawned with the shipped `subagent` / `subagent_fork` tools, so every subagent the model controls is listed and retirable. |
+| `message_member` | Deliver one message to a live member, and optionally replace the assignment recorded for it; an unloaded member is cold-resumed from its own Session. |
 | `stop_member` | Cancel only the current turn; the activation and inbox are kept. |
 | `retire_member` | Drain, move the Session artifact to a recoverable trash directory, and tombstone the record. |
 | `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. |
@@ -76,6 +78,21 @@ rather than repaired, and the effort moved into the model-facing surface above (
 | Fallback | If the artifact cannot be moved, the workspace archive hides the Session instead, and the result says so. |
 | Restore | `restore_member` moves the artifact back to its recorded original path and clears the tombstone. It refuses when a live member already uses the target. |
 
+## Replacing a member hands over its work
+
+`spawn_member` with `replace: <target>` is the whole replacement. The successor starts from a short brief
+that names the predecessor, repeats the assignment recorded for it, says the predecessor is retired and
+gone, and points at the shared team task board under the predecessor's name — the board itself is not
+copied. The successor inherits that assignment unless the model records a new one.
+
+- **The successor starts first; the predecessor is retired second**, in the same call. A start that fails
+  leaves the predecessor untouched and says so; a retirement that fails returns the successor with
+  `predecessor_retired: false`, so one more `retire_member` recovers it (ADR 0009).
+- **The assignment is durable and capped.** `spawn_member.assignment` sets it at spawn, up to 1000
+  characters, and `message_member.assignment` replaces it when the work changes. `list_members` reports
+  it, and it stays on the tombstone after retirement.
+- A target that is already retired is accepted, and its tombstone supplies the brief.
+
 ## Install
 
 ```
@@ -90,6 +107,8 @@ Verification after install:
 - the row activates with `application: applied` and no warnings;
 - `list_members` is callable from a Lead session and reports resident members' pressure;
 - `retire_member` returns `trashed: true` and a `trash_path` on a session that has an artifact;
+- `spawn_member` with `replace` returns `predecessor_retired: true` and a successor at the next
+  generation;
 - `include:compaction-basic` reports status `schema` (not `inactive`).
 
 ## Configuration

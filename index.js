@@ -14,6 +14,11 @@
  * argument validation, the Lead-only authority check, and the tool result schemas, and nothing else.
  * The plugin has no browser half: it is entirely model-facing (ADR 0008).
  *
+ * `spawn_member` with `replace` is the whole replacement: it starts the successor from a short handoff
+ * brief composed from the assignment recorded on the predecessor's record, then retires the
+ * predecessor in the same call (ADR 0009). The work itself stays on the shipped team task board, which
+ * this plugin does not own; the brief points the successor at it.
+ *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
  * `@deepseek-ai/dsh-tools` resolves from the bundle path and fails with ERR_MODULE_NOT_FOUND. Shipped
@@ -36,7 +41,7 @@ import {
   stopMember,
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
-import { PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
+import { ASSIGNMENT_MAX, PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
 import { resolveDataDir } from './trash.js'
 
 export const name = 'team-roster'
@@ -98,11 +103,15 @@ const MEMBER_ROW = {
     label: { type: 'string' },
     status: { type: 'string', enum: ['running', 'idle', 'unloaded', 'unknown'] },
     resident: { type: 'boolean' },
+    assignment: { type: 'string' },
     pressure_tokens: { type: 'integer' },
     context_window: { type: 'integer' },
     usage_ratio: { type: 'number' },
     compactable: { type: 'boolean' },
     note: { type: 'string' },
+    replaced: { type: 'string' },
+    predecessor_retired: { type: 'boolean' },
+    message: { type: 'string' },
   },
 }
 
@@ -136,6 +145,7 @@ const MESSAGE_VALUE = {
     target: { type: 'string' },
     sent: { type: 'boolean' },
     message_id: { type: 'string' },
+    assignment: { type: 'string' },
     message: { type: 'string' },
   },
 }
@@ -280,23 +290,44 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'spawn_member',
-      description: 'Create one named team member. The member runs as a continuable subagent, reports back through a completion notice, and can be retired later. A successor reuses the same base name with the next generation suffix.',
+      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over.',
       parameters: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'label', 'prompt'],
+        required: ['label', 'prompt'],
         properties: {
-          name: { type: 'string', description: 'Lowercase base name: 1-32 letters, digits or hyphens, starting with a letter.' },
+          name: { type: 'string', description: 'Lowercase base name: 1-32 letters, digits or hyphens, starting with a letter. Required unless replace is given; with replace it defaults to the predecessor\'s base name, which yields the next generation.' },
           label: { type: 'string', description: 'Short responsibility text shown in the roster.' },
-          prompt: { type: 'string', description: 'Complete initial task for the member.' },
+          prompt: { type: 'string', description: 'Complete initial task for the member. With replace it is appended after the handoff brief.' },
+          assignment: {
+            type: 'string',
+            maxLength: ASSIGNMENT_MAX,
+            description: `Optional, 1-${ASSIGNMENT_MAX} characters: what this member is responsible for, stated durably. A successor is briefed with it when this member is replaced, and message_member replaces it later.`,
+          },
+          replace: {
+            type: 'string',
+            description: 'Target of an existing member to retire in the same call, such as reviewer. The successor starts first and the predecessor is retired second, so a failed start leaves the predecessor untouched; a failed retirement is reported as predecessor_retired: false. An already-retired target is accepted, and its tombstone supplies the brief.',
+          },
         },
       },
       output: { schema: MEMBER_ROW },
       async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'spawn_member')
         requireLead(ctx, caller, 'spawn_member')
-        if (typeof args.name !== 'string' || typeof args.label !== 'string' || typeof args.prompt !== 'string') {
-          throw new Error('spawn_member: name, label and prompt must be strings')
+        if (typeof args.label !== 'string' || typeof args.prompt !== 'string') {
+          throw new Error('spawn_member: label and prompt must be strings')
+        }
+        if (args.name !== undefined && typeof args.name !== 'string') {
+          throw new Error('spawn_member: name must be a string')
+        }
+        if (args.replace !== undefined && (typeof args.replace !== 'string' || args.replace.length === 0)) {
+          throw new Error('spawn_member: replace must be a non-empty string')
+        }
+        if (args.name === undefined && args.replace === undefined) {
+          throw new Error('spawn_member: name is required unless replace is given')
+        }
+        if (args.assignment !== undefined && typeof args.assignment !== 'string') {
+          throw new Error('spawn_member: assignment must be a string')
         }
         const table = await store
         return await spawnMember({
@@ -304,9 +335,13 @@ function install(agent, ctx, store, hooks, dataDir) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
+          dataDir,
+          hooks,
           name: args.name,
           label: args.label,
           prompt: args.prompt,
+          assignment: args.assignment,
+          replace: args.replace,
           signal: exec.signal,
         })
       },
@@ -314,7 +349,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, live state and, while resident, context pressure. Unknown children are adopted on the first read, and retired members stay listed as retired.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, live state and, while resident, context pressure. Unknown children are adopted on the first read, and retired members stay listed as retired.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -331,7 +366,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A successor can then reuse the base name at the next generation.',
+      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. Its assignment stays on the tombstone for a later successor. To retire a member and install its successor in the same call, use spawn_member with replace.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -393,7 +428,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'message_member',
-      description: 'Send one message to a live member or adopted subagent from list_members. A running child receives it at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. Success means the inbox accepted the message, not that the member has processed it.',
+      description: 'Send one message to a live member or adopted subagent from list_members, and optionally replace the assignment recorded for it. A running child receives the message at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. Success means the inbox accepted the message, not that the member has processed it.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -401,6 +436,11 @@ function install(agent, ctx, store, hooks, dataDir) {
         properties: {
           target: { type: 'string', description: 'Member target from list_members.' },
           message: { type: 'string', description: 'Self-contained message for the member.' },
+          assignment: {
+            type: 'string',
+            maxLength: ASSIGNMENT_MAX,
+            description: `Optional, 1-${ASSIGNMENT_MAX} characters: replaces the assignment recorded for this member, and is stored only after the message is accepted. Use it when the member's work changes, so a later successor is briefed with the current work.`,
+          },
         },
       },
       output: { schema: MESSAGE_VALUE },
@@ -413,6 +453,9 @@ function install(agent, ctx, store, hooks, dataDir) {
         if (typeof args.message !== 'string' || args.message.length === 0) {
           throw new Error('message_member: message must be a non-empty string')
         }
+        if (args.assignment !== undefined && typeof args.assignment !== 'string') {
+          throw new Error('message_member: assignment must be a string')
+        }
         const table = await store
         return await messageMember({
           ctx,
@@ -421,6 +464,7 @@ function install(agent, ctx, store, hooks, dataDir) {
           leadAgent: caller,
           target: args.target,
           message: args.message,
+          assignment: args.assignment,
           signal: exec.signal,
         })
       },

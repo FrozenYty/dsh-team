@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import {
   PHASE,
   adoptMember,
+  checkAssignment,
   findByTarget,
   findRetired,
   hasLiveTarget,
@@ -85,7 +86,33 @@ export function memberRow(ctx, member) {
       }
     }
   }
+  // What the model recorded about the work, so the Lead can see it before replacing the member.
+  if (typeof member.assignment === 'string') row.assignment = member.assignment
   return row
+}
+
+/**
+ * Compose the short, self-contained prompt a cold successor starts from.
+ *
+ * The successor has no transcript of the predecessor and must not be handed one: it needs to know what
+ * the work is, that it is the successor, and that the predecessor is gone. The work itself stays on the
+ * shared team task board, which this plugin does not own, so the brief points at the board by the
+ * predecessor's name instead of copying it.
+ * @param {{successor: string, predecessor: object, prompt: string}} request
+ * @returns {string} the prompt handed to `startActivation`.
+ */
+export function handoffPrompt({ successor, predecessor, prompt }) {
+  const target = targetOf(predecessor)
+  const doing = typeof predecessor.assignment === 'string' && predecessor.assignment.length > 0
+    ? predecessor.assignment
+    : 'not recorded; take it from the shared team task board'
+  return [
+    `You are ${successor}, the successor of ${target}. ${target} has been retired and is gone; it cannot be messaged.`,
+    `Its role was: ${predecessor.label}.`,
+    `What it was doing: ${doing}`,
+    `Its unfinished work is still on the shared team task board under the name "${target}": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.`,
+    `Your task: ${prompt}`,
+  ].join('\n')
 }
 
 /**
@@ -155,15 +182,45 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent }) {
 }
 
 /**
- * Reserve the next generation of a base name and start it as a continuable child.
+ * Reserve the next generation of a base name and start it as a continuable child, optionally retiring
+ * the member it replaces in the same call.
+ *
+ * **Ordering: the successor starts first, the predecessor is retired second.** The other order — retire
+ * then spawn — loses the predecessor when the spawn fails: it is in the trash, its work is briefed to
+ * nobody, and the only way back is `restore_member`. With this order a failed start changes nothing
+ * (the predecessor is untouched and still live, and the failed reservation is recorded) and a failed
+ * retirement leaves two live members, which is recoverable by one more call. Whichever half fails, the
+ * answer says which half it was (`predecessor_retired: false`, or a thrown error that names the live
+ * predecessor) instead of reporting success.
+ *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
- *   name: string, label: string, prompt: string, signal?: AbortSignal}} request
+ *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
+ *   name?: string, label: string, prompt: string, assignment?: string, replace?: string,
+ *   signal?: AbortSignal}} request
  * @returns {Promise<object>} the member row the tool returns.
  */
-export async function spawnMember({ ctx, table, leadSessionId, leadAgent, name, label, prompt, signal }) {
+export async function spawnMember({
+  ctx, table, leadSessionId, leadAgent, dataDir, hooks, name, label, prompt, assignment, replace, signal,
+}) {
   const caller = requireLiveLead('spawn_member', leadSessionId, leadAgent)
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-  const planned = planMember(roster, name, label)
+  const predecessor = replace === undefined
+    ? undefined
+    : roster.members.find((member) => targetOf(member) === replace)
+  if (replace !== undefined && predecessor === undefined) {
+    throw new Error(`spawn_member: no member named "${replace}" in the roster, live or retired`)
+  }
+  const baseName = typeof name === 'string' && name.length > 0 ? name : predecessor?.name
+  if (baseName === undefined) throw new Error('spawn_member: name is required unless replace is given')
+  const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'spawn_member')
+  // A successor continues the predecessor's work, so it inherits the recorded assignment unless the
+  // model records a different one. Without this, a brief would thin out one generation at a time.
+  const planned = planMember(roster, baseName, label, recorded ?? predecessor?.assignment)
+  if (predecessor !== undefined) planned.predecessor = predecessor.memberId
+  const successorTarget = targetOf(planned)
+  const text = predecessor === undefined
+    ? prompt
+    : handoffPrompt({ successor: successorTarget, predecessor, prompt })
   // Persist the reservation before starting anything: a crash must leave a visible member,
   // never an invisible child.
   await writeRoster(table, leadSessionId, withMember(roster, planned))
@@ -174,21 +231,67 @@ export async function spawnMember({ ctx, table, leadSessionId, leadAgent, name, 
       childId: planned.childId,
       provider: 'spawn',
       label,
-      request: { prompt: [{ type: 'text', text: prompt }], parent: caller },
+      request: { prompt: [{ type: 'text', text }], parent: caller },
       signal,
     })
   } catch (error) {
-    const failed = {
-      ...planned,
-      phase: PHASE.failed,
-      note: error instanceof Error ? error.message : String(error),
-    }
-    await updateRoster(table, leadSessionId, (roster) => withMember(roster, failed))
-    throw error
+    const reason = error instanceof Error ? error.message : String(error)
+    const failed = { ...planned, phase: PHASE.failed, note: reason }
+    await updateRoster(table, leadSessionId, (current) => withMember(current, failed))
+    if (predecessor === undefined) throw error
+    throw new Error(
+      `spawn_member: the successor could not start (${reason}); the predecessor "${replace}" was NOT retired and is still live. Its failed reservation is recorded as "${successorTarget}".`,
+    )
   }
   const active = { ...planned, childId: started.childId ?? planned.childId, phase: PHASE.active }
-  await updateRoster(table, leadSessionId, (roster) => withMember(roster, active))
-  return memberRow(ctx, active)
+  await updateRoster(table, leadSessionId, (current) => withMember(current, active))
+  const successor = memberRow(ctx, active)
+  if (predecessor === undefined) return successor
+
+  if (predecessor.phase === PHASE.retired) {
+    return {
+      ...successor,
+      replaced: replace,
+      predecessor_retired: true,
+      message: `Successor ${successorTarget} started from the tombstone's handoff brief; "${replace}" was already retired.`,
+    }
+  }
+
+  let retirement
+  try {
+    retirement = await retireMember({
+      ctx,
+      table,
+      leadSessionId,
+      leadAgent,
+      dataDir,
+      hooks,
+      target: replace,
+      reason: `Replaced by ${successorTarget}`,
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return {
+      ...successor,
+      replaced: replace,
+      predecessor_retired: false,
+      message: `Successor ${successorTarget} is active, but the predecessor "${replace}" could NOT be retired (${reason}). It is still live; retire it with retire_member.`,
+    }
+  }
+  if (retirement.retired !== true) {
+    return {
+      ...successor,
+      replaced: replace,
+      predecessor_retired: false,
+      message: `Successor ${successorTarget} is active, but the predecessor "${replace}" was not retired: ${retirement.message ?? 'no reason reported'}. Retire it with retire_member.`,
+    }
+  }
+  return {
+    ...successor,
+    replaced: replace,
+    predecessor_retired: true,
+    message: `Successor ${successorTarget} started from the handoff brief and the predecessor "${replace}" is retired. ${retirement.message}`,
+  }
 }
 
 /**
@@ -364,16 +467,21 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
 }
 
 /**
- * Deliver one message to a live member.
+ * Deliver one message to a live member, optionally replacing the assignment recorded for it.
+ *
+ * The assignment is the durable statement a successor is briefed with, and the moment the Lead tells a
+ * member what to do is the moment that statement changes. It is stored only after the message is
+ * accepted, so a refused delivery does not silently rewrite the record.
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
- *   target: string, message: string, signal?: AbortSignal}} request
+ *   target: string, message: string, assignment?: string, signal?: AbortSignal}} request
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
-export async function messageMember({ ctx, table, leadSessionId, leadAgent, target, message, signal }) {
+export async function messageMember({ ctx, table, leadSessionId, leadAgent, target, message, assignment, signal }) {
   const caller = requireLiveLead('message_member', leadSessionId, leadAgent)
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const member = findByTarget(roster, target)
   if (member === undefined) throw new Error(`message_member: no live member named "${target}"`)
+  const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'message_member')
   let messageId
   try {
     messageId = await ctx.subagents.sendMessage(
@@ -391,6 +499,10 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
     message: 'Message accepted. A running member sees it at its next step; an unloaded one is resumed.',
   }
   if (typeof messageId === 'string') value.message_id = messageId
+  if (recorded !== undefined) {
+    await updateRoster(table, leadSessionId, (current) => withMember(current, { ...member, assignment: recorded }))
+    value.assignment = recorded
+  }
   return value
 }
 

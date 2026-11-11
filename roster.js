@@ -29,6 +29,30 @@ export const PHASE = {
 /** Model-facing name rules, mirroring what the Harness accepts for child names. */
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
 
+/**
+ * Upper bound on a member's `assignment`, so one record cannot grow without limit. The assignment is
+ * what a successor is briefed with, so it is a short statement of the work, not a transcript.
+ */
+export const ASSIGNMENT_MAX = 1000
+
+/**
+ * Validate and normalize a member assignment.
+ * Throws rather than truncating: a silently shortened assignment would be handed to a successor as if
+ * the model had written it that way.
+ * @param {unknown} value - the model-supplied assignment.
+ * @param {string} source - operation name, so the thrown message names what refused.
+ * @returns {string} the assignment, trimmed.
+ */
+export function checkAssignment(value, source = 'assignment') {
+  if (typeof value !== 'string') throw new Error(`${source}: assignment must be a string`)
+  const text = value.trim()
+  if (text.length === 0) throw new Error(`${source}: assignment must not be empty`)
+  if (text.length > ASSIGNMENT_MAX) {
+    throw new Error(`${source}: assignment is ${text.length} characters; the cap is ${ASSIGNMENT_MAX}`)
+  }
+  return text
+}
+
 /** A member is addressable only while it has not been retired. */
 const ADDRESSABLE = new Set([PHASE.provisioning, PHASE.active, PHASE.failed])
 
@@ -50,6 +74,12 @@ function parseRoster(value) {
       throw new Error('roster member generation must be a positive integer')
     }
     if (typeof PHASE[member.phase] !== 'string') throw new Error(`roster member phase "${String(member.phase)}" is unknown`)
+    if (member.assignment !== undefined) {
+      if (typeof member.assignment !== 'string') throw new Error('roster member assignment must be a string')
+      if (member.assignment.length > ASSIGNMENT_MAX) {
+        throw new Error(`roster member assignment exceeds ${ASSIGNMENT_MAX} characters`)
+      }
+    }
   }
   return value
 }
@@ -162,8 +192,13 @@ export function hasLiveTarget(roster, target) {
  * Reserve the next generation of a base name and return the provisioning record.
  * The caller persists this record before starting the child, so a crash leaves a visible reservation
  * rather than an invisible child.
+ * @param roster - the Lead's current roster.
+ * @param baseName - base name whose next generation is reserved.
+ * @param label - responsibility text shown to the model.
+ * @param assignment - optional already-validated assignment; it is the durable statement of the work a
+ *   successor is briefed with (see `checkAssignment`).
  */
-export function planMember(roster, baseName, label) {
+export function planMember(roster, baseName, label, assignment) {
   if (!NAME_PATTERN.test(baseName)) {
     throw new Error(`member name "${baseName}" must match ${String(NAME_PATTERN)}`)
   }
@@ -179,6 +214,7 @@ export function planMember(roster, baseName, label) {
     label,
     createdAt: new Date().toISOString(),
   }
+  if (typeof assignment === 'string' && assignment.length > 0) planned.assignment = checkAssignment(assignment, 'planMember')
   const target = targetOf(planned)
   const live = roster.members.find((member) => targetOf(member) === target && ADDRESSABLE.has(member.phase))
   if (live !== undefined) throw new Error(`a live member already uses the target "${target}"`)

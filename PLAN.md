@@ -66,8 +66,14 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [x] **P2-04** `retire_member`: drain, archive, tombstone. The handoff brief is deferred to P4-02.
   Done when a retired member stops receiving work, its record says `retired`, and its context is no
   longer reachable through the roster tools.
-- [ ] **P2-05** `replace_member`: retire a member and spawn a successor addressed by the brief.
+- [x] **P2-05** Replacement: retire a member and spawn a successor addressed by the brief.
   Done when the successor starts from the brief pointer, not from the predecessor's transcript.
+  Delivered without a new tool name: `spawn_member` takes `replace` and retires the predecessor in the
+  same call, after the successor has started; `spawn_member.assignment` and `message_member.assignment`
+  record the work a successor is briefed with, capped at 1000 characters; and the brief points at the
+  shipped team task board instead of copying it (ADR 0009). The suite covers the cap, the brief's
+  content, the one-call replacement, both half-failures and the name generations. P2-08 still carries the
+  live end-to-end check.
 - [x] **P2-06** The model-facing surface: `list_members`, `message_member`, `stop_member`.
   Done when every roster tool refuses a retired member with a typed reason.
 - [ ] **P2-07** (re-scoped) Retire the shipped team tool row, after an own task board exists (P2-09).
