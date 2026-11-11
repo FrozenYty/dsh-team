@@ -5,8 +5,9 @@
  * Dependency-free on purpose: the bundle itself must import nothing, and CI should not need an
  * install step to check it. What this proves:
  *
- *   1. the bundle manifest parses and every path it publishes exists;
- *   2. the Host entry parses as ESM and imports no @deepseek-ai package (ADR 0002);
+ *   1. the bundle manifest parses, every path it publishes exists, and every Host module is published;
+ *   2. no Host module imports an @deepseek-ai package (ADR 0002), and the client half has a served
+ *      export, a published file and a module-loader id equal to the package name;
  *   3. locale/en.json and locale/zh.json carry the same keys;
  *   4. the bundle patch declares the rows the README promises;
  *   5. bilingual document pairs exist;
@@ -76,14 +77,47 @@ if (manifest !== undefined) {
   if (!(manifest.files ?? []).some((entry) => entry === 'index.js')) fail('package.json: files must include index.js')
 }
 
-// 2. Host entry: parses, and honours ADR 0002.
-const entry = read('index.js')
-if (entry !== undefined) {
-  if (/from\s+['"]@deepseek-ai\//.test(entry)) {
-    fail('index.js: imports an @deepseek-ai package; ADR 0002 forbids it')
+// 2. Host half: every published module imports no @deepseek-ai package (ADR 0002), and the entry
+//    exports the plugin face. Syntax is checked by `node --check` in CI, not here.
+const hostModules = ['index.js', 'actions.js', 'routes.js', 'roster.js', 'trash.js', 'host-hooks.js']
+const publishedFiles = new Set((manifest?.files ?? []).map((entry) => entry.replace(/^\.\//, '')))
+for (const module of hostModules) {
+  const text = read(module)
+  if (text === undefined) continue
+  if (!publishedFiles.has(module)) fail(`package.json: files must include "${module}"`)
+  if (/from\s+['"]@deepseek-ai\//.test(text)) {
+    fail(`${module}: imports an @deepseek-ai package; ADR 0002 forbids it`)
   }
-  if (/export\s+(async\s+)?function\s+apply\s*\(/.test(entry) === false) {
-    fail('index.js: must export apply(ctx, config)')
+}
+const entry = read('index.js')
+if (entry !== undefined && !/export\s+(async\s+)?function\s+apply\s*\(/.test(entry)) {
+  fail('index.js: must export apply(ctx, config)')
+}
+
+// 2b. Client half: a served bundle needs exports["./client"], a published file, and a module-loader
+//     registration id equal to the package name (the host keys the boot graph by package name).
+const clientDeclaration = manifest?.dsh?.client
+if (clientDeclaration !== undefined) {
+  if (clientDeclaration.platform !== 'web') fail('package.json: dsh.client.platform must be "web"')
+  const clientExport = manifest.exports?.['./client']
+  if (typeof clientExport !== 'string') {
+    fail('package.json: exports["./client"] must point at the client bundle')
+  } else if (!existsSync(join(root, clientExport))) {
+    fail(`package.json: exports["./client"] target "${clientExport}" does not exist`)
+  } else {
+    if (!(manifest.files ?? []).some((listed) => listed === clientExport.replace(/^\.\//, ''))) {
+      fail(`package.json: files must include "${clientExport}"`)
+    }
+    const clientText = read(clientExport)
+    if (clientText !== undefined) {
+      if (!clientText.includes('__ModuleLoader__.load')) {
+        fail(`${clientExport}: must register with window.__ModuleLoader__.load`)
+      }
+      const idQuoted = [`id: '${pluginName}'`, `id: "${pluginName}"`]
+      if (!idQuoted.some((needle) => clientText.includes(needle))) {
+        fail(`${clientExport}: module-loader id must equal the package name "${pluginName}"`)
+      }
+    }
   }
 }
 

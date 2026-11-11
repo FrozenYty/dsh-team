@@ -4,7 +4,7 @@
 
 一个 DeepSeek Harness 插件，给智能体团队补上出厂版本没有的生命周期：成员可以退役、移除、替换——带可恢复的会话回收站、退役后仍存在的花名册，以及针对长跑成员的上下文工具。
 
-**状态**：v0.3 已在作者本机安装并验证；设置页面板尚未开始。当前任务见 [PLAN.md](PLAN.md)，最近变更见 [PROGRESS.md](PROGRESS.md)。
+**状态**：v0.3 的工具已在作者本机安装并验证。设置页面板已实现并带单元测试，但尚未安装、也未实际渲染——见 [PLAN.md](PLAN.md) 的 P3-04。最近变更见 [PROGRESS.md](PROGRESS.md)。
 
 **仓库**：[github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -38,6 +38,18 @@
 - **名额补偿**——在 spawn 期间把旧花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。
 
 bundle 同时启用了出厂默认关闭的 `compaction-basic`。
+
+## 设置页面板
+
+bundle 还带一个设置页（设置 → **团队花名册**），由浏览器半区（`client.js`，注册进 `settings.section` 槽）通过宿主编织的仅回环 JSON 桥（`routes.js`）渲染。
+
+- 列出存储里的全部花名册，按 Lead 会话分组；每行给出成员 target、相态、代次、实时状态与上下文压力。面板不需要会话选择器：存储本身就知道有哪些 Lead。
+- **刷新**按钮，加上面板打开期间每三秒一次的轮询，因此用工具做出的改动能到达面板，无需刷新页面。
+- **退役**带行内确认，已退役成员显示**恢复**。两者调用的是模型工具所用的同一批函数（`actions.js`），因此参数含义、结果字段与失败原因不会在两处走样。
+
+该桥只接受本机回环请求、拒绝跨源 `Origin` 头、请求体上限 64 KiB，错误一律以带状态码的 JSON 返回。Lead 会话未在线时退役成员，会得到可读的失败说明，而不是堆栈。
+
+最后一步是重新安装更新后的 bundle，目前尚未执行：插件激活与面板实际渲染都未验证（PLAN.md P3-04）。
 
 ## 退役不是删除
 
@@ -75,7 +87,7 @@ bundle 是链接安装而不是复制，所以改了模块之后要先 `remove_b
 ## 开发
 
 ```sh
-node --check index.js            # 逐模块
+node --check index.js actions.js routes.js client.js roster.js trash.js host-hooks.js
 node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
@@ -86,7 +98,10 @@ node scripts/check.mjs
 
 | 路径 | 内容 |
 |---|---|
-| `index.js` | Host 插件入口、工具、退役流程 |
+| `index.js` | Host 插件入口、工具定义、Lead 专属权限检查 |
+| `actions.js` | 花名册操作，工具与设置桥共用 |
+| `routes.js` | `/api/team-roster` 桥：state、retire、restore，以及回环/来源防护 |
+| `client.js` | 设置页面板（浏览器半区） |
 | `roster.js` | 持久花名册、代次命名、收养、旧域迁移 |
 | `trash.js` | 会话产物回收站 |
 | `host-hooks.js` | 投影过滤与花名册名额补偿 |

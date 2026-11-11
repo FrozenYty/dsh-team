@@ -217,7 +217,58 @@ P2-06), beside `compact_member` and the shipped task-board tools. The shipped ro
 they own the shared task board, and adoption makes the members they create retirable. A future task
 (P2-09) can replace the task board and then disable the shipped tool row.
 
-## 5. Harness extension points used
+## 5. Settings panel: one operation, two callers
+
+### 5.1 Shared operations
+
+The operation bodies used to live inside `install()`, reachable only from tools. They now live in
+`actions.js` as functions that take their dependencies explicitly: `ctx`, the roster `table`, the Lead
+Session id, and the live Lead `Agent` when one exists. `index.js` keeps argument validation, the Lead-only
+authority check and the tool result schemas; the tools and the bridge call the same functions, so a
+failure reason written for the model cannot diverge from what the panel shows. ADR 0005 records the
+decision.
+
+A route has no model caller, so `leadAgent` is passed in rather than read from `exec.agent`. Retire,
+message and stop need a live Lead for `drainChildren` / `interrupt` / `startActivation`; when that Session
+is not live, retire returns `{ retired: false, message }` and the tool-only operations throw a sentence
+naming the condition — never a `TypeError` from a missing `session` field. Restore needs no live Lead: it
+is a filesystem move plus a record write, so the panel can recover an old team.
+
+### 5.2 Host bridge
+
+Registered in `apply()` as `{ kind: 'prefix', path: '/api/team-roster', handler }` through
+`ctx.webServer.register`. Verified in the installed Harness — the shipped `client-connection` plugin
+registers its `/api` and `/connect` routes the same way: a `handler` receives the raw node request and
+response and owns the response to completion, while a `resource` answers only GET/HEAD. The plugin waits
+for `webServer` with `ctx.inject(['webServer'], ...)`, so a profile without a web server keeps the tools
+and loses only the panel.
+
+| Endpoint | Method | Behaviour |
+|---|---|---|
+| `/api/team-roster/state` | GET | `{ rosters: [{ leadSessionId, leadLive, members }], version }`, built from the store with no session listing |
+| `/api/team-roster/retire` | POST | `{ leadSessionId, target, reason? }` → the `retire_member` result |
+| `/api/team-roster/restore` | POST | `{ leadSessionId, target }` → the `restore_member` result |
+
+A route is outside the Connection fence, so the bridge is its own fence: loopback `remoteAddress` only,
+same-authority `Origin` / `Sec-Fetch-Site` when a browser attaches them, and a 64 KiB cap on a buffered
+JSON body. Failures are JSON with a status: 400 malformed, 403 fence, 404 unknown path, 405 wrong method,
+413 too large, 409 operation failure, 500 unavailable store.
+
+### 5.3 Browser half
+
+`client.js` is plain browser JavaScript loaded through the module table; `exports["./client"]` and the
+package's `dsh.client` block (`platform: web`, `immediately: false`, package injection edges) are what
+make the host compose and serve it. It registers one `settings.section` page (`id: 'team-roster'`,
+order 25) with a locale namespace, so the settings shell owns navigation and the panel owns only its
+content. The panel polls the state endpoint every three seconds while open and refreshes after each
+action; retire has an inline confirmation because it destroys the member's live session.
+
+There is no build step, so the panel uses React from the module table and inline theme tokens
+(`--dsw-alias-*`) for colours. Unverified: the bundle has not been reinstalled, so activation, served
+bundle composition and the rendered page are untested. The unit tests cover the fence, the state builder
+and the route/operation wiring without an HTTP socket.
+
+## 6. Harness extension points used
 
 | Need | Mechanism |
 |---|---|
@@ -233,8 +284,11 @@ they own the shared task board, and adoption makes the members they create retir
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
 | move a retired session aside | `ctx.get('sessionPersistence').stat(id).location.path` + a rename into the trash |
+| serve a mutating HTTP endpoint | `ctx.webServer.register({ kind: 'prefix', path, handler })` from a `ctx.inject(['webServer'], ...)` scope |
+| render a Settings page | Client half declared by `dsh.client`; `ctx.slots.register({ name: 'settings.section', id, order, label, locale }, Component)` |
+| localize the panel | `ctx.locale.register(ns, { en, zh })` in the client half, then the `locale: ns` slot option injects `t` |
 
-## 6. Risks and limits
+## 7. Risks and limits
 
 - **Two rosters during migration.** Until P2-07 lands, the shipped roster and ours can both be visible
   to the model. The patch step is part of the phase gate, not an afterthought.

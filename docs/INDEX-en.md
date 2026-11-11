@@ -29,6 +29,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why does the bundle entry import nothing? | `docs/adr/0002-zero-import-bundle-entry.md` | English |
 | Where does the roster live? | `docs/adr/0003-roster-storage.md` | English |
 | Why does retirement move files, and why does it patch host services? | `docs/adr/0004-retire-through-persistence.md` | English |
+| How does the Settings panel reach the Host, and why is there an HTTP route? | `docs/adr/0005-share-operations-behind-an-http-bridge.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 
@@ -49,7 +50,9 @@ Harness disagree, the repository is wrong.
 
 | If you change | Also update |
 |---|---|
-| a tool name, parameter or result field | `docs/architecture-en.md` §2 or §4.5, `README.md` + `README-zh.md`, `PLAN.md` task text |
+| a tool name, parameter or result field | `docs/architecture-en.md` §2 or §4.5, `actions.js`, `README.md` + `README-zh.md`, `PLAN.md` task text |
+| an operation's behaviour or failure reason | `actions.js`, the tool schema in `index.js`, `routes.js`, `docs/architecture-en.md` §5 |
+| the client half or the `dsh.client` block | `client.js`, `package.json`, `docs/architecture-en.md` §5.3 |
 | a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |

@@ -111,3 +111,35 @@
   moving its directory back by hand. The round trip was then re-tested on a fresh member: retire →
   `trashed: true, trash_path` → restore → `restored: true, path ~/.dsh/sessions/<key>/<member>`, with the
   trash directory emptied and removed.
+- **The route API for the Settings bridge was verified in the installed Harness, not assumed.**
+  `ctx.webServer.register` takes `{ kind: 'exact' | 'prefix', path, handler | resource }`; a `handler`
+  receives the raw node request and response and owns the response to completion (dispatch in
+  `@deepseek-ai/dsh-host-webserver/lib/index.js` lines 459–471), while a `resource` is answered only for
+  GET/HEAD and every other method receives 405 — so a mutating endpoint has to be a handler. The shipped
+  `@deepseek-ai/dsh-client-connection` registers its `/api` prefix and `/connect` exact routes exactly that
+  way (its `lib/index.js`, the `/api` registration at lines 1044–1058). The peer `dsh-team-admin` uses the
+  same shape. The bridge is one `prefix` route at `/api/team-roster`; the plugin waits for `webServer`
+  through `ctx.inject` so a profile without a web server keeps the tools and loses only the panel.
+- **The six lifecycle operations moved out of the tool closures, which is what lets two callers share
+  them.** `actions.js` now owns the bodies of `list_members`, `spawn_member`, `message_member`,
+  `stop_member`, `retire_member` and `restore_member`, taking their dependencies explicitly; `index.js`
+  keeps argument validation, the Lead-only check and the result schemas. A route has no model caller, so
+  the live Lead `Agent` is passed in: retirement without it returns `{ retired: false, message }` naming
+  the condition instead of throwing from a missing `session`, and restore deliberately needs no live Lead
+  because it only moves files and rewrites a record. ADR 0005 records the decision and the rejected
+  alternatives (an RPC channel, a duplicated body, a `resource` route, a push stream).
+- **The panel is a real browser half, but it has never been served.** `client.js` registers a
+  `settings.section` page (`id: 'team-roster'`, order 25), groups members by Lead Session, polls
+  `GET /api/team-roster/state` every three seconds, and puts retire behind an inline confirmation; it
+  uses React from the module table, theme tokens for every colour, and the Client locale service (one
+  namespace with complete English and Chinese dictionaries) rather than a hand-rolled language switch.
+  The `dsh.client` block (`platform`, `immediately`, package injection edges) and the `./client` export
+  are checked by `scripts/check.mjs`, which now also proves no Host module imports an `@deepseek-ai`
+  package and that the loader id equals the package name. Fourteen new tests cover the fence, the route
+  table, the state builder and the no-live-Lead failure; the suite is 36 tests, all passing.
+- **What is unverified, stated plainly.** The bundle was not reinstalled, so: the new modules activating,
+  the client bundle being composed and served, the panel actually rendering, the locale namespace
+  registering in a real page, the loopback/origin fence over a real socket, and a retire→restore round
+  trip through the panel are all untested. `node --test` uses fakes and opens no socket;
+  `scripts/check.mjs` never loads the Harness. P3-04 was added to carry that check, and the P3 gate stays
+  open.

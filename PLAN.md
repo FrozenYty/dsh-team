@@ -94,13 +94,21 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 
 ### P3 — Settings panel
 
-- [ ] **P3-01** Choose the Host-to-Client data bridge.
-  Done when an ADR names the mechanism and why the alternative was rejected.
-- [ ] **P3-02** Read-only roster panel: name, generation, phase, live status, context pressure.
+- [x] **P3-01** Choose the Host-to-Client data bridge.
+  Done when an ADR names the mechanism and why the alternative was rejected. Delivered by ADR 0005: one
+  loopback-only prefix route on `ctx.webServer` plus a `settings.section` client bundle; the RPC registry,
+  a duplicated operation body, a `resource` route and a push stream were the rejected alternatives.
+- [x] **P3-02** Read-only roster panel: name, generation, phase, live status, context pressure.
   Done when the panel renders the live roster and a change in the Host reaches the panel without a page
-  reload.
-- [ ] **P3-03** Retire and replace actions with confirmation.
-  Done when the panel triggers the same operations as the model tools and reports their result.
+  reload. Delivered in code (`client.js` + `GET /api/team-roster/state`, polled while open); the live
+  render is part of P3-04 because the bundle has not been reinstalled.
+- [x] **P3-03** Retire and replace actions with confirmation.
+  Done when the panel triggers the same operations as the model tools and reports their result. Delivered:
+  the tool bodies moved to `actions.js`, and both `POST /retire` and `POST /restore` call those functions.
+- [ ] **P3-04** Live verification of the Settings panel.
+  Done when a reinstalled bundle serves the client half, Settings → Team roster renders the live roster, a
+  change made through a tool appears within one poll, and a retire plus a restore from the panel return
+  the same result objects the tools return. Not done: installing the bundle is the user's decision.
 - [ ] **Gate P3** — the roster is manageable without typing a tool call.
 
 ### P4 — Optional, only after the gate above
