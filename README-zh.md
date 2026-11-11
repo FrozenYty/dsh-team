@@ -36,6 +36,29 @@
 
 每次退役都会产生两个宿主侧效果，二者都带能力探测：宿主会话列表出口会从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 
+## 用起来是什么样
+
+插件没有界面：你用日常语言告诉模型要做什么，由模型调用这些工具，花名册就是这样靠对话管理的。本 README 里的每一项操作，都是模型替你发起的工具调用，而不是你去操作的面板。下面是一次真实交互：一个成员带着 assignment 启动，并被要求待命，随后被替换。
+
+```
+> 把这个求和交给一个帮手，让它先待命。
+spawn_member { name: "handoff-probe", label: …, prompt: …,
+  assignment: "Compute 6 * 7 and reply with the single number, nothing else." }
+← target: "handoff-probe", generation: 1, phase: "active",
+  assignment: "Compute 6 * 7 and reply with the single number, nothing else.", …
+
+> 我用不上它了。换个继任者接过去，并把它退役。
+spawn_member { replace: "handoff-probe", label: …, prompt: … }
+← target: "handoff-probe-g2", generation: 2, replaced: "handoff-probe",
+  predecessor_retired: true,
+  assignment: "Compute 6 * 7 and reply with the single number, nothing else.",
+  message: "Successor handoff-probe-g2 started from the handoff brief and the predecessor "handoff-probe" is retired. …"
+
+handoff-probe-g2（从未见过前任）回复：42
+```
+
+这段对话节选自 [PROGRESS.md](PROGRESS.md) 中记录的一次验收运行。
+
 ## 生命周期
 
 | 步骤 | 行为 |
