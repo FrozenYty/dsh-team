@@ -151,7 +151,33 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 
 已交付：`spawn_member`、`list_members`、`message_member`、`stop_member`、`retire_member`（P2-03、P2-04、P2-06），与 `compact_member` 及官方任务板工具并列。官方花名册工具保持启用：共享任务板归它们所有，而收养机制让它们创建的成员同样可退役。将来可由 P2-09 换掉任务板，再关闭官方工具行。
 
-## 5. 使用的 Harness 扩展点
+## 5. 设置页面板：一份操作，两个调用方
+
+### 5.1 共用操作
+
+操作体原先写在 `install()` 的闭包里，只有工具能调用。现在它们位于 `actions.js`，以显式依赖为参数：`ctx`、花名册 `table`、Lead 会话 id，以及存在时的活 Lead `Agent`。`index.js` 只保留参数校验、Lead 专属权限检查和工具结果 schema；工具与桥调用同一批函数，因此写给模型的失败原因不可能与面板显示的内容走样。决策记录在 ADR 0005。
+
+路由没有模型调用方，所以 `leadAgent` 是**传入**的，而不是从 `exec.agent` 读取。退役、发消息、停止需要活 Lead 才能调用 `drainChildren`／`interrupt`／`startActivation`；该会话不在线时，退役返回 `{ retired: false, message }`，仅工具可用的操作抛出点明条件的句子——绝不是缺 `session` 字段的 `TypeError`。恢复不需要活 Lead：它只是一次文件移动加一次记录写入，所以面板能找回旧团队的成员。
+
+### 5.2 Host 桥
+
+在 `apply()` 里通过 `ctx.webServer.register` 注册为 `{ kind: 'prefix', path: '/api/team-roster', handler }`。已在安装版 Harness 中核实——官方 `client-connection` 插件用它注册 `/api` 与 `/connect`：`handler` 收到原始 node 请求与响应并负责把响应写完，而 `resource` 只响应 GET/HEAD。插件通过 `ctx.inject(['webServer'], ...)` 等待 `webServer`，因此没有 Web 服务器的 profile 仍保留工具，只失去面板。
+
+| 端点 | 方法 | 行为 |
+|---|---|---|
+| `/api/team-roster/state` | GET | `{ rosters: [{ leadSessionId, leadLive, members }], version }`，从存储构建，不列会话 |
+| `/api/team-roster/retire` | POST | `{ leadSessionId, target, reason? }` → `retire_member` 的结果 |
+| `/api/team-roster/restore` | POST | `{ leadSessionId, target }` → `restore_member` 的结果 |
+
+路由位于 Connection 防护之外，所以桥自带防护：只接受回环 `remoteAddress`，浏览器带上时校验同源 `Origin`／`Sec-Fetch-Site`，缓冲 JSON 请求体上限 64 KiB。失败一律是带状态码的 JSON：400 格式错误、403 防护拒绝、404 路径不存在、405 方法不允许、413 过大、409 操作失败、500 存储不可用。
+
+### 5.3 浏览器半区
+
+`client.js` 是普通浏览器 JavaScript，经模块表加载；`exports["./client"]` 与 package 的 `dsh.client` 块（`platform: web`、`immediately: false`、注入边）让宿主组合并提供它。它注册一个 `settings.section` 页面（`id: 'team-roster'`，order 25）并带一个 locale 命名空间，因此设置外壳拥有导航，面板只拥有自己的内容。面板打开期间每三秒轮询 state，并在每次操作后刷新；退役带行内确认，因为它会销毁成员的活会话。
+
+没有构建步骤，所以面板用模块表里的 React，颜色只用主题令牌（`--dsw-alias-*`）。未验证：bundle 尚未重新安装，因此插件激活、bundle 组合与页面渲染都未测试。单元测试覆盖防护、state 构建以及路由与操作的接线，不涉及 HTTP socket。
+
+## 6. 使用的 Harness 扩展点
 
 | 需求 | 机制 |
 |---|---|
@@ -167,8 +193,11 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
 | 补偿官方花名册名额 | 补丁旧花名册的 `maxMembers` getter 与 `spawn`（ADR 0004） |
 | 把退役会话挪开 | `ctx.get('sessionPersistence').stat(id).location.path` + rename 进回收站 |
+| 提供可变更的 HTTP 端点 | 在 `ctx.inject(['webServer'], ...)` 作用域里 `ctx.webServer.register({ kind: 'prefix', path, handler })` |
+| 渲染设置页 | 由 `dsh.client` 声明的浏览器半区；`ctx.slots.register({ name: 'settings.section', id, order, label, locale }, Component)` |
+| 面板本地化 | 浏览器半区 `ctx.locale.register(ns, { en, zh })`，再用 `locale: ns` 槽选项注入 `t` |
 
-## 6. 风险与边界
+## 7. 风险与边界
 
 - **迁移期两个花名册并存**——在 P2-07 落地前，官方花名册和我们自己的都可能对模型可见。补丁步骤是阶段门禁的一部分，不是事后补丁。
 - **没有真正的抹除**——退役成员的会话仍在磁盘上，官方 catalog 也仍知道它存在过。退役是我们花名册里的生命周期事实，不是文件系统删除。

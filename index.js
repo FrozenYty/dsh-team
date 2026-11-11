@@ -10,7 +10,9 @@
  * the switch, and can keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
- * `compact_member`.
+ * `compact_member`. The operation bodies live in `actions.js`, because the Settings panel's HTTP bridge
+ * (`routes.js`) calls the same functions: this file keeps argument validation, the Lead-only authority
+ * check, and the tool result schemas, and nothing else.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -23,25 +25,20 @@
  * The plugin writes no session events. Its durable state lives in one storage domain (ADR 0003).
  */
 
-import { dirname, join } from 'node:path'
-
 import {
-  PHASE,
-  adoptMember,
-  findByTarget,
-  findRetired,
-  hasLiveTarget,
-  liveStateOf,
-  openRosterStore,
-  planMember,
-  readRoster,
-  targetOf,
-  updateRoster,
-  withMember,
-  writeRoster,
-} from './roster.js'
+  ensureAdopted,
+  listMembers,
+  messageMember,
+  pressureOf,
+  retireMember,
+  restoreMember,
+  spawnMember,
+  stopMember,
+} from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
-import { resolveDataDir, restoreSessionArtifact, sessionRootFromSibling, trashMemberSession } from './trash.js'
+import { PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
+import { registerTeamRosterRoutes } from './routes.js'
+import { resolveDataDir } from './trash.js'
 
 export const name = 'team-roster'
 
@@ -73,13 +70,6 @@ function requireLead(ctx, caller, toolName) {
   if (membership === undefined || membership.role !== 'lead') {
     throw new Error(`${toolName} is available to the Team Lead only`)
   }
-}
-
-/** Read live context pressure for one resident member. */
-function pressureOf(ctx, agent) {
-  const { pressureTokens, contextWindow } = ctx.tokenMeter.contextPressure(agent.session)
-  const ratio = contextWindow > 0 ? pressureTokens / contextWindow : undefined
-  return { pressureTokens, contextWindow, ratio }
 }
 
 const COMPACT_VALUE = {
@@ -179,65 +169,16 @@ function leadSessionIdOf(agent) {
   return String(agent.session.id)
 }
 
-/** Project one stored member into its model-facing row. */
-function memberRow(ctx, member) {
-  const live = liveStateOf(ctx, member)
-  const compactor = ctx.get('compaction') !== undefined
-  const row = {
-    target: targetOf(member),
-    phase: member.phase,
-    generation: member.generation,
-    label: member.label,
-    status: live.status,
-    resident: live.resident,
-    compactable: compactor && live.status === 'idle',
-  }
-  if (live.resident) {
-    const agent = ctx.agents.get(member.childId)
-    if (agent !== undefined) {
-      try {
-        const { pressureTokens, contextWindow, ratio } = pressureOf(ctx, agent)
-        // A child that has not issued a model request yet has no measurable window. Assigning
-        // `undefined` would make the tool result non-lossless JSON, which the registry rejects.
-        if (Number.isFinite(pressureTokens)) row.pressure_tokens = pressureTokens
-        if (Number.isFinite(contextWindow)) row.context_window = contextWindow
-        if (typeof ratio === 'number') row.usage_ratio = ratio
-      } catch (error) {
-        row.note = 'Context pressure is not measurable for this member yet.'
-      }
-    }
-  }
-  return row
-}
-
-/**
- * Adopt members the shipped roster created before this plugin owned the roster, so retirement and
- * messaging apply to them too. Idempotent: a member is adopted at most once, matched by child Session id.
- * @returns the roster, including any newly adopted members.
- */
-async function ensureAdopted(ctx, caller, table, leadSessionId) {
-  const roster = readRoster(table, leadSessionId)
-  const known = new Set(roster.members.map((member) => member.childId))
-  const shipped = ctx.agentTeams.listMembers(caller).filter(
-    (member) => member.role === 'teammate' && !known.has(member.id),
-  )
-  if (shipped.length === 0) return roster
-  let next = roster
-  for (const row of shipped) {
-    const adopted = adoptMember(next, row)
-    if (adopted !== undefined) next = withMember(next, adopted)
-  }
-  return await writeRoster(table, leadSessionId, next)
-}
-
 /**
  * Install every Lead-scoped tool.
  * @param agent - exact Team Lead whose model should receive the tools.
  * @param ctx - plugin context.
  * @param store - promise of the roster table; resolved lazily by each roster tool.
+ * @param hooks - host-side effects a retirement refreshes.
+ * @param dataDir - plugin data directory the trash lives under.
  * @returns a disposer that unwinds every registration in reverse order.
  */
-function install(agent, ctx, store, hooks) {
+function install(agent, ctx, store, hooks, dataDir) {
   const scoped = agent.ctx
   const disposers = []
   const register = (disposer) => {
@@ -358,34 +299,16 @@ function install(agent, ctx, store, hooks) {
           throw new Error('spawn_member: name, label and prompt must be strings')
         }
         const table = await store
-        const leadSessionId = leadSessionIdOf(caller)
-        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-        const planned = planMember(roster, args.name, args.label)
-        // Persist the reservation before starting anything: a crash must leave a visible member,
-        // never an invisible child.
-        await writeRoster(table, leadSessionId, withMember(roster, planned))
-        let started
-        try {
-          started = await ctx.subagents.startActivation({
-            delivery: 'parent',
-            childId: planned.childId,
-            provider: 'spawn',
-            label: args.label,
-            request: { prompt: [{ type: 'text', text: args.prompt }], parent: caller },
-            signal: exec.signal,
-          })
-        } catch (error) {
-          const failed = {
-            ...planned,
-            phase: PHASE.failed,
-            note: error instanceof Error ? error.message : String(error),
-          }
-          await updateRoster(table, leadSessionId, (roster) => withMember(roster, failed))
-          throw error
-        }
-        const active = { ...planned, childId: started.childId ?? planned.childId, phase: PHASE.active }
-        await updateRoster(table, leadSessionId, (roster) => withMember(roster, active))
-        return memberRow(ctx, active)
+        return await spawnMember({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          leadAgent: caller,
+          name: args.name,
+          label: args.label,
+          prompt: args.prompt,
+          signal: exec.signal,
+        })
       },
     })))
 
@@ -402,9 +325,7 @@ function install(agent, ctx, store, hooks) {
         const caller = callingAgent(exec.agent, 'list_members')
         requireLead(ctx, caller, 'list_members')
         const table = await store
-        const leadSessionId = leadSessionIdOf(caller)
-        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-        return { members: roster.members.map((member) => memberRow(ctx, member)) }
+        return await listMembers({ ctx, table, leadSessionId: leadSessionIdOf(caller), leadAgent: caller })
       },
     })))
 
@@ -421,76 +342,23 @@ function install(agent, ctx, store, hooks) {
         },
       },
       output: { schema: RETIRE_VALUE },
-      async execute(args, exec) {
+      async execute(args) {
         const caller = callingAgent(exec.agent, 'retire_member')
         requireLead(ctx, caller, 'retire_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('retire_member: target must be a non-empty string')
         }
         const table = await store
-        const leadSessionId = leadSessionIdOf(caller)
-        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-        const member = findByTarget(roster, args.target)
-        if (member === undefined) throw new Error(`retire_member: no live member named "${args.target}"`)
-
-        let drained = false
-        try {
-          await ctx.subagents.drainChildren(caller, [member.childId])
-          drained = true
-        } catch (error) {
-          // A child that never published, or already settled, has nothing to drain. Retirement is a
-          // lifecycle fact owned by the record, so it proceeds.
-        }
-
-        // Move the persisted artifact out of the live store. This is what makes the member disappear from
-        // the host's own discovery, because session-query drops an artifact that is no longer there.
-        // Failure is reported and never fatal: the record is the lifecycle authority.
-        const trash = await trashMemberSession(ctx, {
-          leadSessionId,
-          memberId: member.childId,
-          dataDir: resolveDataDir(),
+        return await retireMember({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          leadAgent: caller,
+          dataDir,
+          hooks,
+          target: args.target,
+          reason: args.reason,
         })
-
-        let archived = false
-        if (!trash.moved) {
-          // The workspace archive is the fallback that hides a session whose artifact could not be moved.
-          const workspace = ctx.get('workspaceRegistry')
-          if (workspace !== undefined) {
-            try {
-              await workspace.archiveSession(member.childId, { stopActivity: true })
-              archived = true
-            } catch (error) {
-              // Archiving is presentation only; it must never block retirement.
-            }
-          }
-        }
-
-        const retired = { ...member, phase: PHASE.retired, retiredAt: new Date().toISOString() }
-        if (typeof args.reason === 'string' && args.reason.length > 0) retired.retireReason = args.reason
-        if (trash.moved && typeof trash.trashPath === 'string') {
-          retired.trashPath = trash.trashPath
-          retired.trashKind = trash.kind === 'file' ? 'file' : 'directory'
-          if (typeof trash.originalPath === 'string') retired.originalPath = trash.originalPath
-        }
-        await updateRoster(table, leadSessionId, (roster) => withMember(roster, retired))
-
-        // Both host effects read tombstones through short caches; refresh now so the member leaves the
-        // projections every client renders and the freed slot is available to the next spawn.
-        hooks.filter.invalidate()
-        void hooks.slots.refresh()
-
-        const value = {
-          target: targetOf(member),
-          retired: true,
-          drained,
-          archived,
-          trashed: trash.moved,
-          message: trash.moved
-            ? 'Member retired: drained, its session moved to the trash directory, and tombstoned.'
-            : `Member retired and tombstoned; the session artifact was not moved (${trash.reason ?? 'unknown'}).`,
-        }
-        if (trash.moved && typeof trash.trashPath === 'string') value.trash_path = trash.trashPath
-        return value
       },
     })))
 
@@ -506,92 +374,20 @@ function install(agent, ctx, store, hooks) {
         },
       },
       output: { schema: RESTORE_VALUE },
-      async execute(args, exec) {
+      async execute(args) {
         const caller = callingAgent(exec.agent, 'restore_member')
         requireLead(ctx, caller, 'restore_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('restore_member: target must be a non-empty string')
         }
         const table = await store
-        const leadSessionId = leadSessionIdOf(caller)
-        const roster = readRoster(table, leadSessionId)
-        const member = findRetired(roster, args.target)
-        if (member === undefined) throw new Error(`restore_member: no retired member named "${args.target}"`)
-        if (hasLiveTarget(roster, args.target)) {
-          throw new Error(`restore_member: a live member already uses "${args.target}"; retire it first`)
-        }
-
-        let restoredPath
-        if (typeof member.trashPath === 'string') {
-          let originalPath = typeof member.originalPath === 'string' ? member.originalPath : undefined
-          if (originalPath === undefined) {
-            // A tombstone written before the original path was recorded. Derive the sessions root from a
-            // sibling still on disk rather than guessing; say so plainly when there is none.
-            const sessionsRoot = await sessionRootFromSibling(
-              ctx.get('sessionPersistence'),
-              roster.members.map((candidate) => candidate.childId),
-              member.childId,
-            )
-            if (sessionsRoot === undefined) {
-              return {
-                target: targetOf(member),
-                restored: false,
-                message: 'The tombstone has a trash path but no recorded original path, and no sibling session is on disk to derive the sessions root from. Move the artifact back by hand and re-add the member.',
-              }
-            }
-            originalPath = join(sessionsRoot, member.childId)
-          }
-          const outcome = await restoreSessionArtifact({
-            trashPath: member.trashPath,
-            originalPath,
-            kind: member.trashKind === 'file' ? 'file' : 'directory',
-          })
-          if (!outcome.restored) {
-            return {
-              target: targetOf(member),
-              restored: false,
-              message: `Nothing was moved back: ${outcome.reason}. The record stays retired.`,
-            }
-          }
-          restoredPath = outcome.path
-        } else {
-          // Retired through the workspace-archive fallback, so unhide instead of moving files.
-          const workspace = ctx.get('workspaceRegistry')
-          if (workspace === undefined) {
-            return {
-              target: targetOf(member),
-              restored: false,
-              message: 'No session artifact was recorded for this member, and no workspace service is available to unhide it. The record stays retired.',
-            }
-          }
-          try {
-            await workspace.unarchiveSession(member.childId)
-          } catch (error) {
-            return {
-              target: targetOf(member),
-              restored: false,
-              message: `The workspace refused to unhide the session (${error instanceof Error ? error.message : String(error)}). The record stays retired.`,
-            }
-          }
-        }
-
-        const revived = { ...member, phase: PHASE.active }
-        delete revived.retiredAt
-        delete revived.retireReason
-        delete revived.trashPath
-        delete revived.trashKind
-        delete revived.originalPath
-        await updateRoster(table, leadSessionId, (current) => withMember(current, revived))
-        hooks.filter.invalidate()
-        void hooks.slots.refresh()
-
-        const value = {
-          target: targetOf(member),
-          restored: true,
-          message: 'Member restored and active again. A restored session may take one client refresh to reappear.',
-        }
-        if (typeof restoredPath === 'string') value.path = restoredPath
-        return value
+        return await restoreMember({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          target: args.target,
+          hooks,
+        })
       },
     })))
 
@@ -618,28 +414,15 @@ function install(agent, ctx, store, hooks) {
           throw new Error('message_member: message must be a non-empty string')
         }
         const table = await store
-        const leadSessionId = leadSessionIdOf(caller)
-        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-        const member = findByTarget(roster, args.target)
-        if (member === undefined) throw new Error(`message_member: no live member named "${args.target}"`)
-        let messageId
-        try {
-          messageId = await ctx.subagents.sendMessage(
-            caller,
-            member.childId,
-            [{ type: 'text', text: args.message }],
-            { signal: exec.signal },
-          )
-        } catch (error) {
-          throw new Error(`message_member: the subagent service rejected the message: ${error instanceof Error ? error.message : String(error)}`)
-        }
-        const value = {
-          target: targetOf(member),
-          sent: true,
-          message: 'Message accepted. A running member sees it at its next step; an unloaded one is resumed.',
-        }
-        if (typeof messageId === 'string') value.message_id = messageId
-        return value
+        return await messageMember({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          leadAgent: caller,
+          target: args.target,
+          message: args.message,
+          signal: exec.signal,
+        })
       },
     })))
 
@@ -655,32 +438,14 @@ function install(agent, ctx, store, hooks) {
         },
       },
       output: { schema: STOP_VALUE },
-      async execute(args, exec) {
+      async execute(args) {
         const caller = callingAgent(exec.agent, 'stop_member')
         requireLead(ctx, caller, 'stop_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('stop_member: target must be a non-empty string')
         }
         const table = await store
-        const leadSessionId = leadSessionIdOf(caller)
-        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-        const member = findByTarget(roster, args.target)
-        if (member === undefined) throw new Error(`stop_member: no live member named "${args.target}"`)
-        if (ctx.agents.get(member.childId) === undefined) {
-          return {
-            target: targetOf(member),
-            stopped: true,
-            resident: false,
-            message: 'The member was not resident; nothing to stop.',
-          }
-        }
-        ctx.subagents.interrupt(member.childId, { kind: 'ancestor', agent: caller })
-        return {
-          target: targetOf(member),
-          stopped: true,
-          resident: true,
-          message: 'Its current turn was cancelled. The activation and its inbox are kept; message_member wakes it again.',
-        }
+        return await stopMember({ ctx, table, leadSessionId: leadSessionIdOf(caller), leadAgent: caller, target: args.target })
       },
     })))
   } catch (error) {
@@ -699,6 +464,7 @@ function install(agent, ctx, store, hooks) {
  */
 export function apply(ctx) {
   const installed = new Map()
+  const dataDir = resolveDataDir()
   // The storage facility is the readiness barrier for the roster; a rejected open surfaces as a tool
   // error on first use instead of an unhandled rejection at load.
   const store = openRosterStore(ctx)
@@ -733,11 +499,20 @@ export function apply(ctx) {
     slots.dispose()
   }, 'team-roster.hostHooks()')
 
+  // The Settings panel's bridge. A profile without a web server (the desktop shell) keeps the tools and
+  // loses only the panel, so the route waits for `webServer` instead of joining the plugin's own inject
+  // list. The registered shape is the raw-node handler the shipped client-connection plugin uses.
+  const registerRoutes = (webCtx) => {
+    registerTeamRosterRoutes(webCtx, { ctx, store, dataDir, hooks, log })
+  }
+  if (ctx.get('webServer') === undefined) ctx.inject(['webServer'], registerRoutes)
+  else registerRoutes(ctx)
+
   const maybeInstall = (agent) => {
     if (installed.has(agent)) return
     const membership = ctx.agentTeams.tryMembership(agent)
     if (membership === undefined || membership.role !== 'lead') return
-    installed.set(agent, install(agent, ctx, store, hooks))
+    installed.set(agent, install(agent, ctx, store, hooks, dataDir))
   }
 
   for (const agent of ctx.agents.list()) maybeInstall(agent)

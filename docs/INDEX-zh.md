@@ -28,6 +28,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么 bundle 入口不导入任何东西？ | `docs/adr/0002-zero-import-bundle-entry.md` | 英文 |
 | 花名册存在哪里？ | `docs/adr/0003-roster-storage.md` | 英文 |
 | 为什么退役要移动文件、还要改宿主服务？ | `docs/adr/0004-retire-through-persistence.md` | 英文 |
+| 设置页面板如何触达 Host，为什么要有 HTTP 路由？ | `docs/adr/0005-share-operations-behind-an-http-bridge.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 
@@ -47,7 +48,9 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 
 | 若你改了 | 同时更新 |
 |---|---|
-| 工具名、参数或返回字段 | `docs/architecture-en.md` §2 或 §4.5、`README.md` + `README-zh.md`、`PLAN.md` 对应任务文字 |
+| 工具名、参数或返回字段 | `docs/architecture-en.md` §2 或 §4.5、`actions.js`、`README.md` + `README-zh.md`、`PLAN.md` 对应任务文字 |
+| 某个操作的行为或失败原因 | `actions.js`、`index.js` 里的工具 schema、`routes.js`、`docs/architecture-en.md` §5 |
+| 浏览器半区或 `dsh.client` 块 | `client.js`、`package.json`、`docs/architecture-en.md` §5.3 |
 | 花名册相态或转移 | `docs/architecture-en.md` §4.3 的状态矩阵；若模型变了，另写 ADR |
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-en.md` §1 |
 | 持久记录结构 | `docs/architecture-en.md` §4.2、一份新 ADR、`PROGRESS.md` 里的迁移说明 |

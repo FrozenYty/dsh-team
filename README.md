@@ -6,8 +6,9 @@ A DeepSeek Harness plugin that gives an agent team the lifecycle the shipped one
 retire, remove and replace — with a recoverable session trash, a roster that survives the removal, and
 context tooling for long-running teammates.
 
-**Status**: v0.3 installed and verified in the author's profile; the Settings panel is still ahead.
-Live task state is in [PLAN.md](PLAN.md); recent changes are in [PROGRESS.md](PROGRESS.md).
+**Status**: the v0.3 tools are installed and verified in the author's profile. The Settings panel is
+written and unit-tested, but has not been installed or rendered yet — P3-04 in [PLAN.md](PLAN.md).
+Recent changes are in [PROGRESS.md](PROGRESS.md).
 
 **Repository**: [github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -50,6 +51,27 @@ Plus two host-side effects, applied for every retirement:
 
 The bundle also enables the shipped `compaction-basic` row, which this profile ships disabled.
 
+## Settings panel
+
+The bundle ships a Settings page (Settings → **Team roster**) as its browser half (`client.js`,
+registered into the `settings.section` slot) over a loopback-only JSON bridge on the Host web server
+(`routes.js`).
+
+- Every roster in the store, grouped by Lead Session, with each member's target, phase, generation, live
+  status and context pressure. The panel needs no session picker: the store already knows its Leads.
+- **Refresh**, plus a three-second poll while the page is open, so a change made through a tool reaches
+  the panel without a page reload.
+- **Retire** behind an inline confirmation, and **Restore** for a retired member. Both call the same
+  functions the model tools call (`actions.js`), so parameter meaning, result fields and failure reasons
+  cannot drift between the two callers.
+
+The bridge refuses non-loopback callers and cross-origin `Origin` headers, caps request bodies at 64 KiB,
+and answers a JSON error with a status. Retiring a member whose Lead Session is not live is reported as a
+readable failure, not a stack trace.
+
+Installing the updated bundle is the last step, and it has not been done: activation and the rendered
+panel are unverified (PLAN.md P3-04).
+
 ## Retirement is not deletion
 
 | Step | Behaviour |
@@ -87,7 +109,7 @@ The roster itself lives in a `storageDomain` domain (ADR 0003), not in a Session
 ## Development
 
 ```sh
-node --check index.js            # per module
+node --check index.js actions.js routes.js client.js roster.js trash.js host-hooks.js
 node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
@@ -101,7 +123,10 @@ pass means what a green run means.
 
 | Path | What |
 |---|---|
-| `index.js` | Host plugin entry, tools, retirement flow |
+| `index.js` | Host plugin entry, tool definitions, Lead-only authority check |
+| `actions.js` | The roster operations, shared by the tools and the Settings bridge |
+| `routes.js` | `/api/team-roster` bridge: state, retire, restore, and the loopback/origin fence |
+| `client.js` | Settings panel (browser half) |
 | `roster.js` | Durable roster, name generations, adoption, legacy-domain migration |
 | `trash.js` | Session-artifact recovery directory |
 | `host-hooks.js` | Projection filter and roster slot credit |
