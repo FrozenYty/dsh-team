@@ -24,7 +24,18 @@ is used as-is, and anything else fails the load with the field, the value and th
 it `absent`: that projection accepts only a native Schemastery graph, which a zero-import bundle cannot
 provide, and the field is validated in `apply` instead.
 
-## 2. v0.1, shipped
+## 2. What shipped, and when
+
+A short map, not a changelog: each release below names what it added and the section that owns it today.
+
+- **v0.1** — the compaction backend enabled profile-wide (§2.1) and the context tools (§2.2).
+- **v0.2** — the owned roster: spawn, message, stop, retire and restore (§4.5), the retirement protocol
+  and its handoff (§4.4), the trash move (§2.5), and the two optional host-side effects a retirement
+  refreshes (§2.4).
+- **v0.4** — the model-only surface (ADR 0008): the Settings panel and its HTTP bridge were deleted, and
+  adoption grew to cover every descendant a Lead controls (§4.5.1).
+- **v0.7–v0.8** — the trash is bounded per Lead, and the bound is the bundle's `trashLimit` config field
+  (§2.5, ADR 0011, ADR 0012).
 
 ### 2.1 Compaction is enabled
 
@@ -43,13 +54,9 @@ which this profile also leaves unmounted, so the row stays `absent` even when en
 
 ### 2.2 Context tools
 
-Every Lead-scoped tool registers on the exact Agent context of a Team Lead (`agent/created`), and unwinds
-on `agent/disposed`. No official tool name is shadowed and no session event is written.
-
-| Tool | Behaviour |
-|---|---|
-| `list_members` | the roster: phase, generation, label, live state, and — while resident — `pressure_tokens`, `context_window`, `usage_ratio` and `compactable`. |
-| `compact_member` | `ctx.compaction.compactNow(agent, signal)` on one resident idle member, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
+v0.1 shipped the context tools; §4.5 owns their current rows. Every Lead-scoped tool registers on the
+exact Agent context of a Team Lead (`agent/created`), and unwinds on `agent/disposed`. No official tool
+name is shadowed and no session event is written.
 
 `member_context` existed in v0.1 and was removed: its rows duplicated `list_members`, and it read the
 shipped roster rather than this plugin's.
@@ -59,36 +66,15 @@ Measured limitation that shapes the design: a local child is unloaded when it go
 demand; waking it with a message and letting automatic compaction run at its next step is the durable
 path.
 
-### 2.3 Own roster tools (v0.2, verified live)
+### 2.3 Own roster tools
 
-| Tool | Behaviour |
-|---|---|
-| `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. With `replace`, the same call retires the predecessor and starts its successor from a handoff brief (§4.4). |
-| `list_members` | Every record with phase, generation, live status and — while resident — context pressure. Retired members stay listed as `retired`. |
-| `retire_member` | Drains the child, tombstones the record with the trash and original paths — and with whether the workspace archive hid the session instead — and moves the persisted Session into the trash directory. Retiring an already-retired member is a no-op that answers `retired: true, drained: false, reason: 'already-retired'`. Verified against a finished member and a member mid-turn. |
-| `restore_member` | Moves the trashed artifact back to the path recorded at retirement and clears the tombstone; refuses when a live member already owns the target. A restore with no tombstone to invert is a no-op success, and the result's `reason` names which branch ran. |
-| `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`. A running member receives it at its next step; an unloaded member is cold-resumed from its own Session. Verified live: a delivered message woke an unloaded member, which replied. |
-| `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`. Cancels the current turn only; the activation, slot and inbox are kept. Verified live: a member running a long command was interrupted and left no closing message. |
+v0.2 shipped the owned roster and its tools. §4.5 owns the tool surface, §4.4 the retirement protocol,
+§4.5.1 adoption, and §4.2 the record those tools read and write.
 
-**Adoption.** The roster picks up every member and subagent a Lead controls that it does not already
-know, the first time it is read.
-
-- Members the shipped team roster created: the record reuses the child Session id as its identity, keeps
-  the shipped name, and starts `active`.
-- Every descendant the subagent registry reports, including children spawned with the shipped `subagent`
-  and `subagent_fork` tools. The read is `ctx.subagents.listDescendants(rootSessionId, signal)` on the
-  installed seam (`dsh-subagent` `0.2.2-rc.1`, `lib/index.js`: the service method at lines 3181–3183,
-  the traversal at lines 2380–2446). Each child row is
-  `{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`; `kind: 'diagnostic'`
-  rows for a branch that could not be read are skipped. A child with a label is named from it through the
-  same normalization a shipped name goes through; an unlabeled child is named `subagent-<id>`.
-
-So `retire_member`, `message_member` and `stop_member` apply to children this plugin never spawned —
-exactly the population that was invisible before. Adoption is idempotent and matched by child id, and the
-tombstone is what keeps it that way: draining a child does not remove its row from the parent's durable
-`subagentCatalog`, so a retired record must stay in the roster or the next read would adopt the member
-back. A one-shot child is adopted like any other and can be stopped or retired; it cannot be
-cold-resumed, so `message_member` reaches it only while it is resident.
+Adoption (§4.5.1) is what makes `retire_member`, `message_member` and `stop_member` apply to children
+this plugin never spawned — exactly the population that was invisible before. A one-shot child is
+adopted like any other and can be stopped or retired; it cannot be cold-resumed, so `message_member`
+reaches it only while it is resident.
 
 Records live in one `storageDomain` domain keyed by the Lead Session id (ADR 0003). Naming rule:
 generation 1 is the bare base name; generation 2 and later is `<base>-g<N>`, so a replacement never
@@ -117,35 +103,26 @@ copied so a caller's reference stays valid.
 
 ### 2.5 Retirement moves the artifact
 
-`retire_member` drains the child, writes the tombstone — carrying the trash path the move is about to
-use and a `trashState: 'pending'` marker — and then moves the persisted Session into
-`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, confirming the record with
-`trashState: 'done'`. The order is deliberate: the record is retired before anything touches the
-filesystem, so a crash between the two leaves a `retired` row beside an artifact that is either still in
-place or already in the trash — recoverable in both cases, because `pending` says the move may or may not
-have happened and restore looks in the trash first. The reverse order would leave a trashed session
-behind an `active` record, which no later read could explain. The move is what removes the member from the
-host's own discovery, since session-query drops an artifact that no longer exists. The move itself deletes
-nothing: the cross-device fallback is the only branch there that removes the source, and when no artifact
-can be moved the workspace archive hides the Session (`archived: true`, `trashState: 'none'`, and the
-intended trash fields are dropped); the record and the result say which of the two happened.
+`retire_member` tombstones the record *before* it touches the filesystem, carrying the trash path the
+move is about to use and a `trashState: 'pending'` marker, then moves the persisted Session into
+`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/` and confirms the record with
+`trashState: 'done'`; §4.4 owns those steps. The order is deliberate: a crash between the two leaves a
+`retired` row beside an artifact that is either still in place or already in the trash — recoverable in
+both cases, because `pending` says the move may or may not have happened and restore looks in the trash
+first. The reverse order would leave a trashed session behind an `active` record, which no later read
+could explain.
 
-A retirement that actually moved an artifact in then enforces the per-Lead retention cap (ADR 0011) in the
-same call, because that move is the one moment the trash grew: the oldest entries past the **effective**
-cap — the `trashLimit` config value `apply` resolved, or `DEFAULT_TRASH_LIMIT` (20) when the profile
-configures nothing — are removed, each removed tombstone keeps its `trashPath` and becomes
-`trashState: 'pruned'`, and the result reports how many went in `pruned` and which cap was applied.
-Nothing is swept on a timer or on a read; a `pending` move is counted but never pruned; and only direct
-children of that one Lead's trash directory whose name and tombstone both parse are candidates. What
-`apply` reads is a config field, not a literal in the code (ADR 0012), and it deletes only the
-plugin's own trash copies — the platform has no Session-deletion API, and its only "hide it" mechanism is
-the reversible workspace archive, which cannot bound bytes.
+The move is what removes the member from the host's own discovery, since session-query drops an artifact
+that no longer exists, and it deletes nothing: the cross-device fallback is the only branch there that
+removes the source, and when no artifact can be moved the workspace archive hides the Session
+(`archived: true`, `trashState: 'none'`, and the intended trash fields are dropped). Restoration is the
+inverse and equally explicit: the record keeps the original path and the artifact kind (`trashKind` — the
+Session directory or a single artifact file), so `restore_member` is a move rather than a guess; §4.5
+owns the result branches and the refusals.
 
-Restoration is the inverse and equally explicit: the record keeps the original path and the artifact
-kind (`trashKind` — the Session directory or a single artifact file), so `restore_member` is a move
-rather than a guess, and its result says which branch ran: the move back, the workspace unhide, or a
-record that was already active. It never overwrites an existing destination, refuses a target a live member already owns,
-and leaves the record retired when the move cannot be made.
+A retirement that actually moved an artifact in also enforces the per-Lead cap in the same call (§4.4
+step 5, ADR 0011, ADR 0012): the move is the one moment the trash grows, so nothing is swept on a timer
+and nothing is swept on a read.
 
 ## 3. Why the shipped roster is not extended
 
@@ -241,10 +218,10 @@ nor an omission. "Same base" means spawning the name whose earlier holder is in 
 
 | Phase \ Event | adopt | spawn (same base) | replace | message | stop | compact | retire | restore |
 |---|---|---|---|---|---|---|---|---|
-| `provisioning` | not produced by adoption — an adopted record starts `active` or `failed` | reserves the next generation; this row is untouched | successor starts, then this reservation is drained and tombstoned | delivered through `sendMessage`; a child that has not published yet is refused by the subagent service and the error is reported | no-op unless the child is already resident, then its turn is cancelled | refusal `not-resident` until it is resident and idle | drain, then tombstone; the artifact usually cannot be moved yet, so `trashed: false` and the archive branch decides | no-op success — there is no tombstone to invert |
+| `provisioning` | not produced by adoption — an adopted record starts `active` or `failed` | reserves the next generation; this row is untouched | successor starts, then this reservation is drained and tombstoned | delivered through `sendMessage`; a child that has not published yet is refused by the subagent service and the error is reported | no-op unless the child is already resident, then its turn is cancelled | refusal `not-resident` until it is resident and idle | drain, then tombstone; the artifact usually cannot be moved yet, so `trashed: false` and the archive branch decides | refusal `not-retired` — only `active` is the no-op success (`restored: true, reason: 'already-active'`) |
 | `active` | no-op — identity is the child id, so a known child is never adopted twice | reserves the next generation; this row is untouched | successor starts from the brief, then this member is drained and tombstoned | delivered; a running child sees it at its next step, an unloaded one is cold-resumed | current turn cancelled; activation, inbox and record kept | compacts in place when resident and idle; refusal `busy` while running, `not-resident` when unloaded | drain, tombstone (`pending`), move and confirm, refresh the host effects | no-op success: `restored: true, reason: 'already-active'` |
 | `retired` | no-op — the tombstone holds the child id, which is what stops re-adoption | allowed: a new generation of the base starts with no replacement link (§2.3) | successor starts from the tombstone's brief; the retire half is a no-op (`reason: 'already-retired'`) | refusal `retired` | refusal `retired` | refusal — only `provisioning` and `active` are addressable | repeat: no-op success, `retired: true, drained: false, reason: 'already-retired'` | moves the artifact back, or runs the workspace unhide branch; `reason` names which one ran. A `trashState: 'pruned'` tombstone instead refuses with `restored: false, reason: 'pruned'` and never calls the workspace |
-| `failed` | no-op — known child id | reserves the next generation; this row is untouched | successor starts, then this record is tombstoned | refusal `failed` — the child never started, so there is nothing to receive it | refusal `failed` | refusal — only `provisioning` and `active` are addressable | accepted and tombstoned; there is usually nothing to drain or move | no-op success — there is nothing to invert, because the record is not a tombstone |
+| `failed` | no-op — known child id | reserves the next generation; this row is untouched | successor starts, then this record is tombstoned | refusal `failed` — the child never started, so there is nothing to receive it | refusal `failed` | refusal — only `provisioning` and `active` are addressable | accepted and tombstoned; there is usually nothing to drain or move | refusal `not-retired` — only `active` is the no-op success (`restored: true, reason: 'already-active'`) |
 
 Harness notices are the events no plugin operation can prevent:
 
@@ -309,8 +286,11 @@ half-finished. What `retire_member` does, in the order the code does it:
 5. **Bound the trash, only here.** A retirement that moved an artifact in removes the entries past the
    **effective** cap from this Lead's trash directory, oldest first; the cap is the `trashLimit` config
    field `apply` resolved (default `DEFAULT_TRASH_LIMIT`, 20), not a constant in the code; each removed
-   tombstone keeps its `trashPath` and becomes `trashState: 'pruned'` (ADR 0011, ADR 0012). A retirement
-   that moved nothing prunes nothing. No timer and no read-time sweep exists.
+   tombstone keeps its `trashPath` and becomes `trashState: 'pruned'` (ADR 0011, ADR 0012). Only direct
+   children whose name and tombstone both parse are candidates, a `pending` move is counted against the
+   cap but never pruned, and only this plugin's own trash copies are deleted — the platform has no
+   Session-deletion API, and its only "hide it" mechanism is a reversible archive that cannot bound
+   bytes. A retirement that moved nothing prunes nothing. No timer and no read-time sweep exists.
 6. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
    member, while the roster keeps the trash path for manual recovery.
 7. **Report.** The result carries `retired`, `drained`, `archived`, `trashed`, `pruned` (0 when nothing
@@ -354,12 +334,12 @@ so a failed projection cannot disable every tool.
 | Tool | Behaviour |
 |---|---|
 | `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). |
-| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member and live state, plus pressure and `compactable` while resident. |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`. |
 | `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, and a repeat is a no-op that answers `reason: 'already-retired'`. |
-| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, a restore with nothing to invert is a no-op success rather than an error, and a pruned tombstone answers `reason: 'pruned'` without touching the workspace. |
-| `compact_member` | Force one context compaction on a resident, idle target. |
+| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, and a pruned tombstone answers `reason: 'pruned'` without touching the workspace. |
+| `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
 check and the tool result schemas. Replacement deliberately has no tool of its own: `spawn_member` and
@@ -371,11 +351,14 @@ shipped tool row.
 #### 4.5.1 Adoption is the control surface
 
 `ensureAdopted` (`actions.js`) is what makes the surface complete: it reads the shipped team roster and
-the subagent registry, and records every unknown child as a member. The registry read is
+the subagent registry, and records every unknown child as a member. A member adopted from the shipped
+roster keeps its shipped name and starts `active`. The registry read is
 `ctx.subagents.listDescendants(rootSessionId, signal)` (installed seam `dsh-subagent` `0.2.2-rc.1`,
 `lib/index.js` lines 3181–3183 delegating to 2380–2446); child rows are
 `{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`, and
-`kind: 'diagnostic'` rows are skipped. Adoption is idempotent by child id, and the retired record is the
+`kind: 'diagnostic'` rows are skipped. A child with a label is named from it through the same
+normalization a shipped name goes through; an unlabeled child is named `subagent-<id>`. Adoption is
+idempotent by child id, and the retired record is the
 tombstone that keeps it that way, because draining a child does not remove its row from the parent's
 durable catalog. Message delivery is addressed through the Lead's direct-child authority, while a
 retirement proceeds even when the drain refuses. The shipped depth limit is 1, so every descendant is a
@@ -391,7 +374,7 @@ and still retirable.
 | tool registration | `agent.ctx.tools.register(definition)`, definition in canonical JSON Schema |
 | context pressure | `ctx.tokenMeter.contextPressure(session)` |
 | compaction | `ctx.get('compaction').compactNow(agent, signal)` |
-| membership test | `ctx.agentTeams.tryMembership(agent)` (v0.1 only) |
+| membership test | `ctx.agentTeams.tryMembership(agent)` |
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
 | list every subagent descendant | `ctx.subagents.listDescendants(rootSessionId, signal)`; rows carry `id`, `mode`, `label?`, `parentId` and `depth` |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |

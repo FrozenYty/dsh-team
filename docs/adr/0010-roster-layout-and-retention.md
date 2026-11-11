@@ -18,7 +18,7 @@ neither document had been wrong on purpose, which is why it survived four releas
 
 The same audit found a second fact that had never been written down at all: **nothing is ever deleted.**
 A retirement keeps its tombstone forever and leaves the moved Session artifact in
-`$DSH_HOME/team-roster/trash/<lead>/<member>-<ms>/` forever.
+`~/.dsh/team-roster/trash/<lead>/<member>-<ms>/` forever.
 
 ## Decision
 

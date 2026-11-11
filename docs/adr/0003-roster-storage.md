@@ -33,8 +33,9 @@ The domain is declared with a hand-written spec and a duck-typed schema whose on
 because a linked bundle cannot import `defineDomain` or `zod` (ADR 0002) and the `open()` path only ever
 calls `.parse` on the schema.
 
-The domain uses the default single-file layout, a `version`, and `compatibleVersions`, so an incompatible
-upgrade fails loudly instead of reading old records as absent.
+The domain declares `version: 1` and takes the default single-file layout, with no `compatibleVersions`:
+the single-file reader refuses a stored version outside the accepted set (`version-mismatch`) instead of
+reading old records as absent, so an incompatible upgrade fails loudly.
 
 ## Rationale
 

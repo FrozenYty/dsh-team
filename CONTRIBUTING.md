@@ -26,7 +26,7 @@ chore(ci): run the repository checks on pull requests
 ```
 
 Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`.
-Modules: `plugin`, `bundle`, `roster`, `ui`, `docs`, `ci`.
+Modules: `plugin`, `bundle`, `roster`, `docs`, `ci`.
 
 One commit does one thing. If the message needs “and”, split the commit.
 
@@ -52,13 +52,20 @@ that trailer as another contributor.
 
 `scripts/check.mjs` verifies, without loading the Harness:
 
-- `package.json` parses and every path in `files` exists;
+- `package.json` parses, `dsh.bundle.patch` points at the patch, and every path in `files` exists;
+- `index.js` is published and exports `apply(ctx, config)`;
+- each Host module (`index.js`, `actions.js`, `roster.js`, `trash.js`, `host-hooks.js`) is published and
+  imports no `@deepseek-ai` package (ADR 0002);
+- every `execute(` in `index.js` declares `(args, exec)` — the wrapper signature the unit tests cannot
+  cover;
 - `locale/en.json` and `locale/zh.json` carry the same keys;
-- `cordis.patch.yml` parses as a patch array;
-- no document in the repository contains an absolute machine path.
+- `cordis.patch.yml` parses as a patch array, enables `compaction-basic` and inserts this plugin's row;
+- the three bilingual document pairs exist;
+- no shared document contains an absolute machine path.
 
-It cannot prove the plugin activates. That requires installing the bundle into a profile, which is a
-manual step with a real side effect — see the README.
+It does not check entry syntax — `node --check` does that, as the table above says. Neither command can
+prove the plugin activates. That requires installing the bundle into a profile, which is a manual step
+with a real side effect — see the README.
 
 ## 5. Files
 
@@ -83,7 +90,8 @@ Root files are single-language and change often; `docs/` files are bilingual and
 folder names. Write commands relative to the repository root.
 
 - **Every design document carries an owner line** under its title:
-  `> Owner: @handle · Revisit when: <trigger>`. A trigger, not a date.
+  `> Owner: @handle · Revisit when: <trigger>`. A trigger, not a date. An ADR is the exception: it
+  carries a `## Revisit when` section at the end instead, so the header line is not repeated there.
 - **A decision that is expensive to reverse becomes an ADR**, not a paragraph in `PROGRESS.md`.
 
 ## 7. Definition of done
@@ -91,5 +99,6 @@ folder names. Write commands relative to the repository root.
 - [ ] `check` is green on the PR
 - [ ] The PR template is filled in
 - [ ] Bilingual pairs updated in the same commit
-- [ ] The task box in `PLAN.md` is ticked by whoever merged
+- [ ] The task box in `PLAN.md` is ticked in the same PR that delivers the task — nobody ticks it for
+      someone else
 - [ ] `docs/INDEX-en.md` and `INDEX-zh.md` updated if a document was added, renamed or removed
