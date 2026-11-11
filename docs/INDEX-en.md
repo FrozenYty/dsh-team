@@ -38,6 +38,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the roster one record per Lead, and why is nothing ever deleted? | `docs/adr/0010-roster-layout-and-retention.md` — point 3 superseded by 0011 | English |
 | Why is the trash capped, and what happens to a pruned member? | `docs/adr/0011-trash-retention.md` — point 1 superseded by 0012 | English |
 | Why is the trash cap a config field, and why does the entry declare no Config schema? | `docs/adr/0012-configurable-retention.md` | English |
+| Why do one-shot members leave on their own, and why does the sweep need evidence? | `docs/adr/0013-ephemeral-members.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

@@ -159,7 +159,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 
 ### P4 — Optional, only after the Gate P2 above
 
-- [ ] **P4-01** Ephemeral members: auto-retire on completion.
+- [x] **P4-01** Ephemeral members: auto-retire on completion.
+  Done when a member spawned with `ephemeral: true` leaves the roster through the normal retirement path
+  once it has run and stopped, without a `retire_member` call, while a member that never ran and one still
+  running are never retired.
+  Delivered (v0.9.0, ADR 0013): `spawn_member.ephemeral` records the flag, `list_members` reports it, a
+  lazy sweep at the start of `list_members` and `spawn_member` retires a member that carries `startedAt`
+  and is no longer resident, `message_member` clears the flag, and a triggering result reports `swept`
+  and `swept_targets` when it retired anything. The sweep is the existing `retire_member` protocol. There
+  is no completion event to hook: the installed seam's descendant `activity` is only
+  `running | inactive`, and `inactive` also covers a child that never started, so the sweep requires the
+  plugin's own `startedAt` plus a non-resident live registry (`dsh-subagent` 0.2.2-rc.1
+  `lib/index.js:2435`). The live end-to-end check on a real profile is the owner's install decision.
 - [ ] **P4-02** A stored, reusable handoff-brief template.
 - [ ] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
   P4-03 until v0.8.0; that ID belongs to the retention task, and two tasks sharing one ID made the

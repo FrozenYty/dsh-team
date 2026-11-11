@@ -18,7 +18,8 @@ const DOMAIN_NAME = 'team_roster'
 /** The domain this plugin used before it was renamed; read once so an existing roster is not orphaned. */
 const LEGACY_DOMAIN_NAME = 'team_control'
 
-/** Lifecycle phases. `dormant` is deliberately absent: P4-01 adds it with the completion hook. */
+/** Lifecycle phases. `dormant` is deliberately absent: P4-01 needed no new phase, because an ephemeral
+ * member keeps its phase and is retired by a lazy sweep once it has run and stopped (ADR 0013). */
 export const PHASE = {
   provisioning: 'provisioning',
   active: 'active',
@@ -129,6 +130,14 @@ function parseRoster(value) {
       if (member.assignment.length > ASSIGNMENT_MAX) {
         throw new Error(`roster member assignment exceeds ${ASSIGNMENT_MAX} characters`)
       }
+    }
+    // The P4-01 pair. Both are optional, so every record written before this feature loads unchanged;
+    // a record that carries them must carry them in the shape the sweep reasons about.
+    if (member.ephemeral !== undefined && typeof member.ephemeral !== 'boolean') {
+      throw new Error('roster member ephemeral must be a boolean')
+    }
+    if (member.startedAt !== undefined && (typeof member.startedAt !== 'string' || member.startedAt === '')) {
+      throw new Error('roster member startedAt must be a non-empty string')
     }
     // Every tool selects a member by its target, and the lookup takes the first match. A record that
     // holds one target twice would resolve silently to whichever member was written first, so it is
@@ -262,8 +271,11 @@ export function hasLiveTarget(roster, target) {
  * @param label - responsibility text shown to the model.
  * @param assignment - optional already-validated assignment; it is the durable statement of the work a
  *   successor is briefed with (see `checkAssignment`).
+ * @param ephemeral - true to record the member as one-shot: a lazy sweep retires it once it has run and
+ *   stopped (ADR 0013). Only `true` is stored, so a record for a normal member is byte-identical to one
+ *   written before this flag existed.
  */
-export function planMember(roster, baseName, label, assignment) {
+export function planMember(roster, baseName, label, assignment, ephemeral = false) {
   if (!NAME_PATTERN.test(baseName)) {
     throw new Error(`member name "${baseName}" must match ${String(NAME_PATTERN)}`)
   }
@@ -281,6 +293,7 @@ export function planMember(roster, baseName, label, assignment) {
     createdAt: new Date().toISOString(),
   }
   if (typeof assignment === 'string' && assignment.length > 0) planned.assignment = checkAssignment(assignment, 'planMember')
+  if (ephemeral === true) planned.ephemeral = true
   const target = targetOf(planned)
   const live = roster.members.find((member) => targetOf(member) === target && ADDRESSABLE.has(member.phase))
   if (live !== undefined) throw new Error(`a live member already uses the target "${target}"`)
