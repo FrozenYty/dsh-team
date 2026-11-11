@@ -170,11 +170,15 @@ export function installSlotCredit(ctx, options) {
       } catch (error) {
         extra = 0
       }
+      // `live.current` is one process-wide field and the real `maxMembers` read happens later, inside
+      // `roster.spawn`'s transact. Restore the previous value rather than zero, so a spawn that is
+      // itself caught by an outer spawn (or interleaved with one) does not lose the outer credit.
+      const previous = live.current
       live.current = extra
       try {
         return await originalSpawn.call(this, caller, request)
       } finally {
-        live.current = 0
+        live.current = previous
       }
     }
   }

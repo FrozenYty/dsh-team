@@ -100,49 +100,96 @@ export async function moveSessionArtifact({
 }
 
 /**
- * Move one member's persisted session into this plugin's trash.
- * Every failure is reported, never thrown: retirement is a lifecycle fact, and a storage problem must
- * not leave the roster claiming a member is still live.
+ * Decide where one member's persisted session belongs in the trash, without moving anything yet.
+ *
+ * Retirement writes its tombstone before the move, so the intended trash path has to exist as a value
+ * first: that is what lets a crash between the tombstone and the move leave a record pointing at the
+ * place the artifact was meant to go. Returns a reason instead of throwing, like every other failure
+ * on this path.
  * @param {object} ctx - host plugin context.
- * @param {{leadSessionId: string, memberId: string, dataDir: string, now?: number, renameFn?: typeof rename}} request
- * @returns {Promise<{moved: boolean, trashPath?: string, originalPath?: string, kind?: 'directory'|'file', reason?: string}>}
+ * @param {{leadSessionId: string, memberId: string, dataDir: string, now?: number}} request
+ * @returns {Promise<
+ *   {planned: true, trashPath: string, originalPath: string, kind: 'directory'|'file',
+ *    source: {path: string, isDirectory: boolean}, trashRoot: string, dirName: string}
+ *   | {planned: false, reason: string}>}
  */
-export async function trashMemberSession(ctx, request) {
+export async function planMemberTrash(ctx, request) {
   const { leadSessionId, memberId, dataDir } = request
   const stamp = Number.isFinite(request.now) ? Number(request.now) : Date.now()
   const persistence = typeof ctx.get === 'function' ? ctx.get('sessionPersistence') : undefined
   if (persistence === undefined || typeof persistence.stat !== 'function') {
-    return { moved: false, reason: 'no-persistence' }
+    return { planned: false, reason: 'no-persistence' }
   }
   let snapshot
   try {
     snapshot = await persistence.stat(memberId)
   } catch (error) {
-    return { moved: false, reason: `stat-failed: ${error instanceof Error ? error.message : String(error)}` }
+    return { planned: false, reason: `stat-failed: ${error instanceof Error ? error.message : String(error)}` }
   }
   const locationPath = snapshot?.location?.path
   if (typeof locationPath !== 'string' || locationPath === '') {
-    return { moved: false, reason: 'no-artifact' }
+    return { planned: false, reason: 'no-artifact' }
   }
   const source = await resolveSource(locationPath, memberId)
-  if (source === undefined) return { moved: false, reason: 'artifact-missing' }
+  if (source === undefined) return { planned: false, reason: 'artifact-missing' }
+  const trashRoot = join(dataDir, 'trash', leadSessionId)
+  const dirName = `${memberId}-${stamp}`
+  return {
+    planned: true,
+    trashPath: join(trashRoot, dirName),
+    originalPath: source.path,
+    kind: source.isDirectory ? 'directory' : 'file',
+    source,
+    trashRoot,
+    dirName,
+  }
+}
+
+/**
+ * Move the artifact a plan named. Every failure is reported, never thrown: retirement is a lifecycle
+ * fact owned by the record, and a storage problem must not leave the roster claiming a member is live.
+ * @param {object} plan - result of `planMemberTrash` with `planned: true`.
+ * @param {{renameFn?: typeof rename}} request - test seam for the cross-device branch.
+ * @returns {Promise<{moved: true} | {moved: false, reason: string}>}
+ */
+export async function applyMemberTrash(plan, request = {}) {
   try {
-    const trashPath = await moveSessionArtifact({
-      sourcePath: source.path,
-      isDirectory: source.isDirectory,
-      trashRoot: join(dataDir, 'trash', leadSessionId),
-      dirName: `${memberId}-${stamp}`,
+    await moveSessionArtifact({
+      sourcePath: plan.source.path,
+      isDirectory: plan.source.isDirectory,
+      trashRoot: plan.trashRoot,
+      dirName: plan.dirName,
       ...request.renameFn === undefined ? {} : { renameFn: request.renameFn },
     })
-    return {
-      moved: true,
-      trashPath,
-      originalPath: source.path,
-      kind: source.isDirectory ? 'directory' : 'file',
-    }
+    return { moved: true }
   } catch (error) {
     return { moved: false, reason: `move-failed: ${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+/**
+ * Move one member's persisted session into this plugin's trash.
+ * Kept as the plan-then-move pair above; callers that must tombstone first use those two directly.
+ * @param {object} ctx - host plugin context.
+ * @param {{leadSessionId: string, memberId: string, dataDir: string, now?: number, renameFn?: typeof rename}} request
+ * @returns {Promise<{moved: boolean, trashPath?: string, originalPath?: string, kind?: 'directory'|'file', reason?: string}>}
+ */
+export async function trashMemberSession(ctx, request) {
+  const plan = await planMemberTrash(ctx, request)
+  if (!plan.planned) return { moved: false, reason: plan.reason }
+  const outcome = await applyMemberTrash(plan, request)
+  if (!outcome.moved) return { moved: false, reason: outcome.reason }
+  return { moved: true, trashPath: plan.trashPath, originalPath: plan.originalPath, kind: plan.kind }
+}
+
+/**
+ * Whether one path exists. A tombstone can outlive the move it was written for, so restoring tells
+ * "the artifact was never moved" from "the artifact disappeared" by looking where it came from.
+ * @param {string} path - absolute path to test.
+ * @returns {Promise<boolean>} whether the path exists.
+ */
+export async function pathExists(path) {
+  return (await lstat(path).catch(() => undefined)) !== undefined
 }
 
 /**

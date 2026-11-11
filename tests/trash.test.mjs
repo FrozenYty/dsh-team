@@ -6,8 +6,10 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import {
+  applyMemberTrash,
   decodeSegment,
   moveSessionArtifact,
+  planMemberTrash,
   resolveDataDir,
   resolveSource,
   restoreSessionArtifact,
@@ -89,6 +91,36 @@ test('trashMemberSession moves the reported artifact and reports where it went',
   assert.equal(result.kind, 'directory')
   assert.equal(result.originalPath, member)
   assert.equal(existsSync(member), false)
+})
+
+test('planning a move names the destination before anything moves', async () => {
+  // Retirement writes its tombstone before the move, so the path has to be known first and the plan
+  // must not touch the filesystem.
+  const root = await scratch()
+  const member = join(root, 'sessions', 'member-7')
+  await mkdir(member, { recursive: true })
+  await writeFile(join(member, 'session.jsonl'), 'log')
+  const ctx = { get: () => ({ stat: async () => ({ location: { path: member } }) }) }
+
+  const plan = await planMemberTrash(ctx, {
+    leadSessionId: 'lead-1',
+    memberId: 'member-7',
+    dataDir: join(root, 'data'),
+    now: 1700000000000,
+  })
+  assert.equal(plan.planned, true)
+  assert.equal(plan.trashPath, join(root, 'data', 'trash', 'lead-1', 'member-7-1700000000000'))
+  assert.equal(existsSync(member), true, 'planning moves nothing')
+  assert.equal(existsSync(plan.trashPath), false)
+
+  assert.deepEqual(await applyMemberTrash(plan), { moved: true })
+  assert.equal(existsSync(member), false)
+  assert.equal(await readFile(join(plan.trashPath, 'session.jsonl'), 'utf8'), 'log')
+})
+
+test('a plan that cannot name an artifact says why instead of pretending to move one', async () => {
+  const noService = await planMemberTrash({ get: () => undefined }, { leadSessionId: 'l', memberId: 'm', dataDir: 'd' })
+  assert.deepEqual(noService, { planned: false, reason: 'no-persistence' })
 })
 
 test('a trashed directory moves back to the path it came from', async () => {

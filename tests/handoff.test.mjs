@@ -1,29 +1,21 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { handoffPrompt, messageMember, retireMember, spawnMember } from '../actions.js'
-import { ASSIGNMENT_MAX, PHASE, ROSTER_SPEC, checkAssignment, readRoster } from '../roster.js'
-
-/** A roster table with the two methods the lifecycle uses. */
-function memoryTable({ failRetirement = false } = {}) {
-  const rows = new Map()
-  return {
-    get: (key) => rows.get(key),
-    put: async (key, value) => {
-      if (failRetirement && value.members.some((member) => member.phase === PHASE.retired)) {
-        throw new Error('the storage domain refused the tombstone')
-      }
-      rows.set(key, value)
-    },
-  }
-}
+import { handoffPrompt, messageMember, retireMember, restoreMember, spawnMember, stopMember } from '../actions.js'
+import { ASSIGNMENT_MAX, PHASE, ROSTER_SPEC, checkAssignment, findAnyTarget, planMember, readRoster, updateRoster } from '../roster.js'
+import { memoryTable } from './memory-table.mjs'
 
 /**
- * A context fake carrying what spawn, retire and message read. `failStartFrom` makes the n-th child
- * start fail, so a failed start can be exercised without failing the first spawn.
+ * A context fake carrying what spawn, retire, message and stop read. `failStartFrom` makes the n-th
+ * child start fail, so a failed start can be exercised without failing the first spawn.
  */
 function fakeCtx({ failStartFrom = Number.POSITIVE_INFINITY } = {}) {
   const started = []
+  const sent = []
+  const drained = []
   let starts = 0
   return {
     agentTeams: { listMembers: () => [] },
@@ -35,12 +27,18 @@ function fakeCtx({ failStartFrom = Number.POSITIVE_INFINITY } = {}) {
         started.push(request)
         return { childId: request.childId }
       },
-      drainChildren: async () => {},
-      sendMessage: async () => 'message-1',
+      drainChildren: async (caller, childIds) => { drained.push(...childIds) },
+      sendMessage: async (caller, childId, messages) => {
+        sent.push({ childId, text: messages[0]?.text })
+        return 'message-1'
+      },
+      interrupt: () => {},
     },
     agents: { get: () => undefined },
     get: () => undefined,
     started,
+    sent,
+    drained,
   }
 }
 
@@ -258,4 +256,229 @@ test('a retired predecessor can still be replaced from its tombstone', async () 
   assert.match(replaced.message, /already retired/)
   assert.equal(memberNamed(table, 'reviewer', 2).assignment, 'Finish the parser unit tests.')
   assert.match(ctx.started.at(-1).request.prompt[0].text, /Finish the parser unit tests\./)
+})
+
+test('retiring an already-retired member is the matrix no-op with a typed reason', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  const first = await retireMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(first.retired, true)
+
+  const again = await retireMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(again.retired, true)
+  assert.equal(again.drained, false)
+  assert.equal(again.reason, 'already-retired')
+  assert.deepEqual(JSON.parse(JSON.stringify(again)), again, 'the no-op result stays lossless JSON')
+
+  // The tombstone is untouched — no second drain, no second move.
+  const record = memberNamed(table, 'reviewer', 1)
+  assert.equal(record.phase, PHASE.retired)
+  assert.equal(record.trashState, 'none')
+  assert.equal(readRoster(table, 'lead-1').members.length, 1)
+})
+
+test('retiring a genuinely unknown target still refuses', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await assert.rejects(
+    () => retireMember(call(ctx, table, { target: 'ghost' })),
+    /no member named "ghost"/,
+  )
+  await assert.rejects(
+    () => restoreMember(call(ctx, table, { target: 'ghost' })),
+    /no member named "ghost"/,
+  )
+})
+
+test('restoring an active member is the matrix no-op with a typed reason', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await retireMember(call(ctx, table, { target: 'reviewer' }))
+  const first = await restoreMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(first.restored, true)
+
+  const again = await restoreMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(again.restored, true)
+  assert.equal(again.reason, 'already-active')
+  assert.equal(memberNamed(table, 'reviewer', 1).phase, PHASE.active)
+})
+
+test('a message to a retired, failed or unknown target is a typed refusal', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await retireMember(call(ctx, table, { target: 'reviewer' }))
+
+  const retired = await messageMember(call(ctx, table, { target: 'reviewer', message: 'are you there?' }))
+  assert.equal(retired.sent, false)
+  assert.equal(retired.reason, 'retired')
+
+  await updateRoster(table, 'lead-1', (current) => ({
+    ...current,
+    members: current.members.map((member) => ({ ...member, phase: PHASE.failed })),
+  }))
+  const failed = await messageMember(call(ctx, table, { target: 'reviewer', message: 'x' }))
+  assert.equal(failed.sent, false)
+  assert.equal(failed.reason, 'failed')
+
+  const missing = await messageMember(call(ctx, table, { target: 'ghost', message: 'x' }))
+  assert.equal(missing.sent, false)
+  assert.equal(missing.reason, 'missing')
+  assert.notEqual(missing.message, retired.message, 'a tombstone and a never-existed target are different answers')
+  assert.deepEqual(JSON.parse(JSON.stringify(missing)), missing)
+
+  const stopped = await stopMember(call(ctx, table, { target: 'ghost' }))
+  assert.equal(stopped.stopped, false)
+  assert.equal(stopped.reason, 'missing')
+  assert.equal(ctx.sent.length, 0, 'a refused delivery never reaches the subagent service')
+})
+
+test('a stop on a retired target is a typed refusal', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await retireMember(call(ctx, table, { target: 'reviewer' }))
+  const stopped = await stopMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(stopped.stopped, false)
+  assert.equal(stopped.reason, 'retired')
+})
+
+test('a failed member can still be retired: it is the cleanup operation', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx({ failStartFrom: 2 })
+  await firstReviewer(ctx, table)
+  await assert.rejects(
+    () => spawnMember(call(ctx, table, { name: 'probe', label: 'Probe', prompt: 'x' })),
+    /capacity limit/,
+  )
+  const refused = await messageMember(call(ctx, table, { target: 'probe', message: 'x' }))
+  assert.equal(refused.sent, false)
+  assert.equal(refused.reason, 'failed')
+  const retired = await retireMember(call(ctx, table, { target: 'probe' }))
+  assert.equal(retired.retired, true)
+  assert.equal(memberNamed(table, 'probe', 1).phase, PHASE.retired)
+})
+
+test('the tombstone is written before the workspace-archive branch runs', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  let phaseDuringArchive
+  ctx.get = (name) => (name === 'workspaceRegistry'
+    ? {
+      archiveSession: async () => {
+        phaseDuringArchive = readRoster(table, 'lead-1').members[0]?.phase
+      },
+    }
+    : undefined)
+  await firstReviewer(ctx, table)
+
+  const retired = await retireMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(retired.archived, true)
+  assert.equal(retired.trashed, false)
+  assert.equal(phaseDuringArchive, PHASE.retired, 'the record is already a tombstone when the archive runs')
+})
+
+test('a retirement records archived only for the branch that ran, never beside a trash path', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'team-roster-retire-'))
+  const memberDir = join(root, 'sessions', 'artifact')
+  await mkdir(memberDir, { recursive: true })
+  await writeFile(join(memberDir, 'session.jsonl'), 'log')
+  const ctx = fakeCtx()
+  ctx.get = (name) => (name === 'sessionPersistence' ? { stat: async () => ({ location: { path: memberDir } }) } : undefined)
+  const table = memoryTable()
+  await firstReviewer(ctx, table)
+
+  const retired = await retireMember(call(ctx, table, { target: 'reviewer', dataDir: join(root, 'data') }))
+  assert.equal(retired.trashed, true)
+  assert.equal(retired.archived, false)
+  const record = memberNamed(table, 'reviewer', 1)
+  assert.equal(typeof record.trashPath, 'string')
+  assert.equal(record.trashState, 'done')
+  assert.equal(record.archived, false, 'archived means the archive ran, and here a move did')
+
+  const restored = await restoreMember(call(ctx, table, { target: 'reviewer', dataDir: join(root, 'data') }))
+  assert.equal(restored.restored, true)
+  assert.equal(restored.reason, 'moved-back')
+  assert.equal(memberNamed(table, 'reviewer', 1).phase, PHASE.active)
+})
+
+test('a pending tombstone whose move never happened is reactivated, not refused', async () => {
+  // The crash window the tombstone-first ordering creates: the tombstone is committed, the artifact
+  // never reached the trash, and the process is gone. Its original path still holds the session.
+  const root = await mkdtemp(join(tmpdir(), 'team-roster-crash-'))
+  const original = join(root, 'sessions', 'artifact')
+  await mkdir(original, { recursive: true })
+  const planned = planMember({ leadSessionId: 'lead-1', members: [] }, 'reviewer', 'Check the diff')
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({
+    leadSessionId: 'lead-1',
+    members: [{
+      ...planned,
+      phase: PHASE.retired,
+      archived: false,
+      trashState: 'pending',
+      trashPath: join(root, 'trash', 'lead-1', 'artifact-1'),
+      trashKind: 'directory',
+      originalPath: original,
+    }],
+  }))
+
+  let unarchived = 0
+  const ctx = fakeCtx()
+  ctx.get = (name) => (name === 'workspaceRegistry' ? { unarchiveSession: async () => { unarchived += 1 } } : undefined)
+  const restored = await restoreMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(restored.restored, true)
+  assert.equal(restored.reason, 'never-moved')
+  assert.equal(unarchived, 0)
+  assert.equal(memberNamed(table, 'reviewer', 1).phase, PHASE.active)
+})
+
+test('restoring a tombstone that archived nothing does not call the workspace', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  const retired = await retireMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(retired.archived, false, 'no persistence and no workspace: neither branch ran')
+
+  let unarchived = 0
+  const withWorkspace = {
+    ...ctx,
+    get: () => ({ unarchiveSession: async () => { unarchived += 1 } }),
+  }
+  const restored = await restoreMember(call(withWorkspace, table, { target: 'reviewer' }))
+  assert.equal(restored.restored, true)
+  assert.equal(restored.reason, 'not-archived', 'it names the branch that ran instead of claiming an unarchive')
+  assert.equal(unarchived, 0, 'the workspace is never asked to unhide a session it never hid')
+})
+
+test('a retirement that lands while the spawn is in flight keeps the tombstone and drains the child', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  ctx.subagents.startActivation = async (request) => {
+    // A concurrent retirement commits while this spawn is suspended inside startActivation.
+    await updateRoster(table, 'lead-1', (current) => ({
+      ...current,
+      members: current.members.map((member) => (member.name === 'probe'
+        ? { ...member, phase: PHASE.retired, archived: false, trashState: 'none' }
+        : member)),
+    }))
+    return { childId: request.childId }
+  }
+
+  const born = await spawnMember(call(ctx, table, { name: 'probe', label: 'Probe the cache', prompt: 'Start.' }))
+  assert.equal(born.phase, PHASE.retired, 'the tombstone wins over the activation that published later')
+  const record = memberNamed(table, 'probe', 1)
+  assert.equal(record.phase, PHASE.retired)
+  assert.deepEqual(ctx.drained, [record.childId], 'the child that published was drained when it published')
+})
+
+test('a retirement that archived nothing is still a tombstone the live lookup ignores', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await firstReviewer(ctx, table)
+  await retireMember(call(ctx, table, { target: 'reviewer' }))
+  assert.equal(findAnyTarget(readRoster(table, 'lead-1'), 'reviewer').phase, PHASE.retired)
 })

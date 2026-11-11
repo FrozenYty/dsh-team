@@ -53,8 +53,12 @@ export function checkAssignment(value, source = 'assignment') {
   return text
 }
 
-/** A member is addressable only while it has not been retired. */
-const ADDRESSABLE = new Set([PHASE.provisioning, PHASE.active, PHASE.failed])
+/**
+ * A member is addressable only while it is live. A `failed` member is still listed, and can be
+ * retired, but nothing can be delivered to it: the state matrix refuses a message or a stop with a
+ * typed reason, and this set is what keeps that refusal out of the `live` lookup.
+ */
+const ADDRESSABLE = new Set([PHASE.provisioning, PHASE.active])
 
 /** Validate one roster record. Throws on anything the roster cannot represent. */
 function parseRoster(value) {
@@ -65,6 +69,7 @@ function parseRoster(value) {
     throw new Error('roster.leadSessionId must be a non-empty string')
   }
   if (!Array.isArray(value.members)) throw new Error('roster.members must be an array')
+  const targets = new Set()
   for (const member of value.members) {
     if (typeof member?.memberId !== 'string') throw new Error('roster member needs a memberId')
     if (typeof member.name !== 'string' || !NAME_PATTERN.test(member.name)) {
@@ -80,6 +85,14 @@ function parseRoster(value) {
         throw new Error(`roster member assignment exceeds ${ASSIGNMENT_MAX} characters`)
       }
     }
+    // Every tool selects a member by its target, and the lookup takes the first match. A record that
+    // holds one target twice would resolve silently to whichever member was written first, so it is
+    // refused when the record is loaded rather than guessed at when it is used.
+    const target = targetOf(member)
+    if (targets.has(target)) {
+      throw new Error(`roster member target "${target}" is held by more than one member`)
+    }
+    targets.add(target)
   }
   return value
 }
@@ -139,26 +152,33 @@ export function readRoster(table, leadSessionId) {
   return table.get(leadSessionId) ?? { leadSessionId, members: [] }
 }
 
-/** Persist a roster, stamping the write time. */
-export async function writeRoster(table, leadSessionId, roster) {
-  const next = { ...roster, leadSessionId, updatedAt: new Date().toISOString() }
-  await table.put(leadSessionId, next)
-  return next
+/** Stamp a roster as the record for one Lead, validating what is about to be stored. */
+function stampRoster(roster, leadSessionId) {
+  return parseRoster({ ...roster, leadSessionId, updatedAt: new Date().toISOString() })
 }
 
 /**
- * Atomically change one Lead's roster.
- * The table's `update` is a compare-free read-modify-write serialized by the storage facility, which is
- * the only serialization available to a plugin here.
+ * Atomically change one Lead's roster, through the storage table's own serialized `update`.
+ *
+ * The table runs the whole read-modify-write on its single write chain and hands the mutation the
+ * record as it is when that write reaches the front of the chain — not the snapshot the caller read
+ * before its last `await`. That is what stops a mutation computed across a discovery read, a drain or
+ * a file move from putting a tombstone back to life.
+ *
+ * `update` refuses a key that does not exist yet, so the first mutation seeds an empty record with
+ * `put` and then applies itself to that seed. The mutation must be synchronous: the table stores
+ * exactly what the function returns.
+ *
  * @param table - roster table.
  * @param leadSessionId - Lead whose roster changes.
- * @param mutate - pure function from the current roster to the next one.
+ * @param mutate - synchronous function from the current roster to the next one.
  * @returns the persisted roster.
  */
 export async function updateRoster(table, leadSessionId, mutate) {
-  const current = readRoster(table, leadSessionId)
-  const next = mutate(current)
-  return await writeRoster(table, leadSessionId, { ...next, leadSessionId })
+  if (table.get(leadSessionId) === undefined) {
+    await table.put(leadSessionId, stampRoster({ leadSessionId, members: [] }, leadSessionId))
+  }
+  return await table.update(leadSessionId, (current) => stampRoster(mutate(current), leadSessionId))
 }
 
 /** The model-facing target of a member. Generation 1 keeps the bare name. */
@@ -166,21 +186,21 @@ export function targetOf(member) {
   return member.generation === 1 ? member.name : `${member.name}-g${member.generation}`
 }
 
-/** Find one addressable member by its model-facing target. */
+/** Find one live member by its model-facing target. */
 export function findByTarget(roster, target) {
   return roster.members.find((member) => targetOf(member) === target && ADDRESSABLE.has(member.phase))
 }
 
 /**
- * Find one retired member by its model-facing target.
- * Retired records stay in the roster so a tombstone keeps its identity, its generation and, when a
- * session artifact was moved, the path needed to restore it.
+ * Find one member by its model-facing target in any phase, tombstone included.
+ * This is the lookup the lifecycle operations use when a repeat has to answer for itself instead of
+ * being reported as an unknown target.
  * @param roster - one Lead's roster.
  * @param target - model-facing target.
- * @returns the retired member, or undefined.
+ * @returns the member, or undefined.
  */
-export function findRetired(roster, target) {
-  return roster.members.find((member) => targetOf(member) === target && member.phase === PHASE.retired)
+export function findAnyTarget(roster, target) {
+  return roster.members.find((member) => targetOf(member) === target)
 }
 
 /** Whether a target is already used by a live member. */

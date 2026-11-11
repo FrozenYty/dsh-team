@@ -20,7 +20,7 @@ import {
   adoptMember,
   checkAssignment,
   findByTarget,
-  findRetired,
+  findAnyTarget,
   hasLiveTarget,
   liveStateOf,
   planMember,
@@ -28,9 +28,14 @@ import {
   targetOf,
   updateRoster,
   withMember,
-  writeRoster,
 } from './roster.js'
-import { restoreSessionArtifact, sessionRootFromSibling, trashMemberSession } from './trash.js'
+import {
+  applyMemberTrash,
+  pathExists,
+  planMemberTrash,
+  restoreSessionArtifact,
+  sessionRootFromSibling,
+} from './trash.js'
 
 /**
  * Fail with one sentence when an operation needs the live Lead Agent and this process does not hold it.
@@ -80,7 +85,7 @@ export function memberRow(ctx, member) {
         // `undefined` would make the tool result non-lossless JSON, which the registry rejects.
         if (Number.isFinite(pressureTokens)) row.pressure_tokens = pressureTokens
         if (Number.isFinite(contextWindow)) row.context_window = contextWindow
-        if (typeof ratio === 'number') row.usage_ratio = ratio
+        if (Number.isFinite(ratio)) row.usage_ratio = ratio
       } catch (error) {
         row.note = 'Context pressure is not measurable for this member yet.'
       }
@@ -136,12 +141,45 @@ async function descendantsOf(ctx, rootSessionId) {
 }
 
 /**
+ * Every member the shipped team roster reports for one caller.
+ *
+ * The same rule as the subagent registry above: the shipped roster is a projection over the Lead's
+ * append-only Team log, and a rejected transition leaves that projection in a permanent failure state
+ * (`docs/architecture-en.md` §3). Discovery is best-effort, so a broken projection degrades to
+ * "nothing new to adopt" instead of failing every roster tool — including the retirement that exists
+ * to repair that team.
+ *
+ * @param ctx - plugin context, with `agentTeams` injected.
+ * @param caller - the calling Lead Agent.
+ * @returns shipped-roster rows, or an empty list when the projection cannot answer.
+ */
+function listedMembersOf(ctx, caller) {
+  try {
+    return ctx.agentTeams.listMembers(caller)
+  } catch {
+    return []
+  }
+}
+
+/**
  * Adopt every member this agent controls but the roster does not know yet: what the shipped team roster
  * created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. Idempotent: a
  * child is adopted at most once, matched by its child Session id, and a retired record keeps its
  * tombstone so the surviving catalog entry cannot bring the member back.
  *
- * @returns the roster, including any newly adopted members.
+ * The write is one mutation of the current record, not a rewrite of the snapshot this call read. A
+ * discovery read can be slow (the subagent registry walks the catalogs), and a retirement committed
+ * while it was suspended must survive: the mutation re-checks every candidate against the record as it
+ * is now, so it can add a member but can never put a tombstone back to life.
+ *
+ * A `provisioning` record is a reservation made before its child was started. If the child never
+ * published — the process died between the reservation and the activation, or the activation produced
+ * no child — nothing will ever move that row to `active`, so the read reconciles it: a published child
+ * becomes `active`, and a stranded reservation becomes `failed` (visible, and retirable, instead of a
+ * phantom that stays provisioning forever). A spawn that is still in flight rewrites the row itself
+ * when it publishes.
+ *
+ * @returns the roster, including any newly adopted or reconciled members.
  */
 export async function ensureAdopted(ctx, caller, table, leadSessionId) {
   const roster = readRoster(table, leadSessionId)
@@ -152,22 +190,42 @@ export async function ensureAdopted(ctx, caller, table, leadSessionId) {
     seen.add(row.id)
     candidates.push(row)
   }
-  for (const member of ctx.agentTeams.listMembers(caller)) {
+  for (const member of listedMembersOf(ctx, caller)) {
     if (member.role !== 'teammate') continue
     add({ id: member.id, name: member.name, description: member.description, status: member.status })
   }
-  for (const row of await descendantsOf(ctx, caller.session.id)) {
+  const descendants = await descendantsOf(ctx, caller.session.id)
+  const published = new Set()
+  for (const row of descendants) {
     if (row.kind !== 'child') continue
+    published.add(row.id)
     const label = typeof row.label === 'string' && row.label.length > 0 ? row.label : `Subagent ${row.id}`
     add({ id: row.id, name: label, description: label, status: 'active' })
   }
-  if (candidates.length === 0) return roster
-  let next = roster
-  for (const row of candidates) {
-    const adopted = adoptMember(next, row)
-    if (adopted !== undefined) next = withMember(next, adopted)
-  }
-  return await writeRoster(table, leadSessionId, next)
+  const current = readRoster(table, leadSessionId)
+  const stranded = current.members.some((member) => member.phase === PHASE.provisioning)
+  if (candidates.length === 0 && !stranded) return current
+  return await updateRoster(table, leadSessionId, (latest) => {
+    let next = latest
+    for (const row of candidates) {
+      if (next.members.some((member) => member.childId === row.id)) continue
+      const adopted = adoptMember(next, row)
+      if (adopted !== undefined) next = withMember(next, adopted)
+    }
+    for (const member of latest.members) {
+      if (member.phase !== PHASE.provisioning) continue
+      if (ctx.agents.get(member.childId) !== undefined || published.has(member.childId)) {
+        next = withMember(next, { ...member, phase: PHASE.active })
+      } else {
+        next = withMember(next, {
+          ...member,
+          phase: PHASE.failed,
+          note: 'The reservation never published a child; the record is reconciled as failed.',
+        })
+      }
+    }
+    return next
+  })
 }
 
 /**
@@ -223,7 +281,7 @@ export async function spawnMember({
     : handoffPrompt({ successor: successorTarget, predecessor, prompt })
   // Persist the reservation before starting anything: a crash must leave a visible member,
   // never an invisible child.
-  await writeRoster(table, leadSessionId, withMember(roster, planned))
+  await updateRoster(table, leadSessionId, (current) => withMember(current, planned))
   let started
   try {
     started = await ctx.subagents.startActivation({
@@ -237,15 +295,43 @@ export async function spawnMember({
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     const failed = { ...planned, phase: PHASE.failed, note: reason }
-    await updateRoster(table, leadSessionId, (current) => withMember(current, failed))
+    await updateRoster(table, leadSessionId, (current) => {
+      const existing = current.members.find((member) => member.memberId === planned.memberId)
+      // Retired while this spawn was in flight: the tombstone wins over the failed reservation.
+      if (existing !== undefined && existing.phase === PHASE.retired) return current
+      return withMember(current, failed)
+    })
     if (predecessor === undefined) throw error
     throw new Error(
       `spawn_member: the successor could not start (${reason}); the predecessor "${replace}" was NOT retired and is still live. Its failed reservation is recorded as "${successorTarget}".`,
     )
   }
   const active = { ...planned, childId: started.childId ?? planned.childId, phase: PHASE.active }
-  await updateRoster(table, leadSessionId, (current) => withMember(current, active))
-  const successor = memberRow(ctx, active)
+  const persisted = await updateRoster(table, leadSessionId, (current) => {
+    const existing = current.members.find((member) => member.memberId === planned.memberId)
+    // Retired while the start was in flight: keep the tombstone (and its paths), but record the child
+    // that did publish, so a restore moves the right Session and `list_members` shows the right id.
+    if (existing !== undefined && existing.phase === PHASE.retired) {
+      return withMember(current, { ...existing, childId: active.childId })
+    }
+    return withMember(current, active)
+  })
+  const settled = persisted.members.find((member) => member.memberId === planned.memberId) ?? active
+  const successor = memberRow(ctx, settled)
+  if (settled.phase === PHASE.retired) {
+    // A retirement committed between the reservation and the activation. Draining happens here,
+    // when the child finally publishes: the retire that ran earlier had no child to drain.
+    try {
+      await ctx.subagents.drainChildren(caller, [active.childId])
+    } catch (error) {
+      // Draining releases the slot; the record is already retired either way.
+    }
+    return {
+      ...successor,
+      ...predecessor === undefined ? {} : { replaced: replace, predecessor_retired: false },
+      message: `The member was retired while its spawn was in flight; the record stays retired and the child it published was drained.${predecessor === undefined ? '' : ` The predecessor "${replace}" was NOT retired.`}`,
+    }
+  }
   if (predecessor === undefined) return successor
 
   if (predecessor.phase === PHASE.retired) {
@@ -295,7 +381,25 @@ export async function spawnMember({
 }
 
 /**
- * Retire one member: drain, move its persisted Session aside, tombstone the record, refresh host effects.
+ * Retire one member: drain, tombstone the record, move its persisted Session aside, confirm the record.
+ *
+ * The tombstone is written **before** the artifact moves, carrying the intended trash path and a
+ * `trashState: 'pending'` marker. What a crash at each point now leaves behind:
+ *
+ *   1. after the tombstone, before the move — the member is retired in the roster while its artifact is
+ *      still in the live store. `restore_member` sees the pending marker, finds no artifact in the
+ *      trash, finds the original still where it was, and reactivates the record: there is nothing to
+ *      move back.
+ *   2. during the move — as (1), except the artifact may already be in the trash; restore looks there
+ *      first, so it moves it back when it is there.
+ *   3. before the confirming write — the record still says `pending` while the artifact is safe in the
+ *      trash. `pending` reads as "the move may or may not have happened", which is exactly how
+ *      `restore_member` treats it, so this window is no different from (1) except where the artifact is.
+ *
+ * The move failing at runtime is reported, never silent: the intended trash fields are dropped, the
+ * workspace archive is the fallback that hides a session no artifact could be moved from, and the
+ * record says which of the two actually happened (`trashState`, `archived`). `archived` is true only
+ * when that fallback ran, so a tombstone never carries both a `trashPath` and `archived: true`.
  *
  * Without a live Lead Agent there is nothing to drain through, so the operation refuses with a reason
  * instead of throwing. The tool path always runs in the Lead's own Agent context; the guard exists so a
@@ -315,8 +419,21 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     }
   }
   const roster = await ensureAdopted(ctx, leadAgent, table, leadSessionId)
-  const member = findByTarget(roster, target)
-  if (member === undefined) throw new Error(`retire_member: no live member named "${target}"`)
+  const member = findAnyTarget(roster, target)
+  if (member === undefined) {
+    throw new Error(`retire_member: no member named "${target}" in the roster, live or retired`)
+  }
+  if (member.phase === PHASE.retired) {
+    // The `retired` row of the state matrix: a repeat is a no-op, not a failure and not an unknown
+    // target. Nothing is drained, nothing is moved, and the tombstone is left exactly as it is.
+    return {
+      target: targetOf(member),
+      retired: true,
+      drained: false,
+      reason: 'already-retired',
+      message: `"${target}" is already retired; nothing was drained and no artifact was moved.`,
+    }
+  }
 
   let drained = false
   try {
@@ -327,17 +444,42 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     // lifecycle fact owned by the record, so it proceeds.
   }
 
-  // Move the persisted artifact out of the live store. This is what makes the member disappear from
-  // the host's own discovery, because session-query drops an artifact that is no longer there.
-  // Failure is reported and never fatal: the record is the lifecycle authority.
-  const trash = await trashMemberSession(ctx, {
-    leadSessionId,
-    memberId: member.childId,
-    dataDir,
+  const retireReason = typeof reason === 'string' && reason.length > 0 ? reason : undefined
+  const retiredAt = new Date().toISOString()
+  /** Build one tombstone from the record as it is now, plus the fields this call contributes. */
+  const tombstoneOf = (existing, fields) => {
+    const base = { ...(existing ?? member), phase: PHASE.retired, retiredAt, archived: false, ...fields }
+    if (retireReason !== undefined) base.retireReason = retireReason
+    return base
+  }
+
+  // Step 1: the tombstone, with the trash path the move is about to use.
+  const plan = await planMemberTrash(ctx, { leadSessionId, memberId: member.childId, dataDir })
+  await updateRoster(table, leadSessionId, (current) => {
+    const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
+    const fields = plan.planned
+      ? {
+        trashPath: plan.trashPath,
+        trashKind: plan.kind === 'file' ? 'file' : 'directory',
+        originalPath: plan.originalPath,
+        trashState: 'pending',
+      }
+      : { trashState: 'none' }
+    return withMember(current, tombstoneOf(existing, fields))
   })
 
+  // Step 2: move the persisted artifact out of the live store. This is what makes the member disappear
+  // from the host's own discovery, because session-query drops an artifact that is no longer there.
+  let moved = false
+  let moveReason = plan.planned ? undefined : plan.reason
+  if (plan.planned) {
+    const outcome = await applyMemberTrash(plan)
+    moved = outcome.moved
+    if (!outcome.moved) moveReason = outcome.reason
+  }
+
   let archived = false
-  if (!trash.moved) {
+  if (!moved) {
     // The workspace archive is the fallback that hides a session whose artifact could not be moved.
     const workspace = ctx.get('workspaceRegistry')
     if (workspace !== undefined) {
@@ -350,14 +492,26 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     }
   }
 
-  const retired = { ...member, phase: PHASE.retired, retiredAt: new Date().toISOString() }
-  if (typeof reason === 'string' && reason.length > 0) retired.retireReason = reason
-  if (trash.moved && typeof trash.trashPath === 'string') {
-    retired.trashPath = trash.trashPath
-    retired.trashKind = trash.kind === 'file' ? 'file' : 'directory'
-    if (typeof trash.originalPath === 'string') retired.originalPath = trash.originalPath
-  }
-  await updateRoster(table, leadSessionId, (roster) => withMember(roster, retired))
+  // Step 3: confirm what actually happened. A tombstone that still named a trash path the artifact
+  // never reached would send `restore_member` to the wrong place.
+  const persisted = await updateRoster(table, leadSessionId, (current) => {
+    const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
+    const next = tombstoneOf(existing, {})
+    next.archived = archived
+    if (moved) {
+      next.trashPath = plan.trashPath
+      next.trashKind = plan.kind === 'file' ? 'file' : 'directory'
+      next.originalPath = plan.originalPath
+      next.trashState = 'done'
+    } else {
+      delete next.trashPath
+      delete next.trashKind
+      delete next.originalPath
+      next.trashState = 'none'
+    }
+    return withMember(current, next)
+  })
+  const record = persisted.members.find((candidate) => candidate.memberId === member.memberId)
 
   // Both host effects read tombstones through short caches; refresh now so the member leaves the
   // projections every client renders and the freed slot is available to the next spawn.
@@ -369,31 +523,67 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     retired: true,
     drained,
     archived,
-    trashed: trash.moved,
-    message: trash.moved
+    trashed: moved,
+    message: moved
       ? 'Member retired: drained, its session moved to the trash directory, and tombstoned.'
-      : `Member retired and tombstoned; the session artifact was not moved (${trash.reason ?? 'unknown'}).`,
+      : `Member retired and tombstoned; the session artifact was not moved (${moveReason ?? 'unknown'}).`,
   }
-  if (trash.moved && typeof trash.trashPath === 'string') value.trash_path = trash.trashPath
+  if (typeof record?.trashPath === 'string') value.trash_path = record.trashPath
   return value
 }
 
 /**
  * Move a retired member's Session back and return the record to active. This one needs no live Lead:
  * it is a filesystem move plus a record write, so it can recover a team whose Lead Session is closed.
+ *
+ * The result names the branch that actually ran (`reason`), because three different things can be
+ * undone and one of them is nothing:
+ *
+ *   - `moved-back` — the artifact was in the trash and moved to its recorded original path;
+ *   - `never-moved` — a `trashState: 'pending'` tombstone whose artifact never reached the trash (the
+ *     crash window of `retireMember`); the artifact is still where it belongs, so the record is simply
+ *     reactivated;
+ *   - `unarchived` — retirement used the workspace-archive fallback, so the session is unhidden;
+ *   - `not-archived` — the tombstone records that neither a move nor the archive fallback ran, so
+ *     reactivating the record is the whole recovery. No workspace call is made and no success is
+ *     claimed for one.
+ *
+ * A repeat (an already-active target) is the state matrix's no-op: `restored: true`, reason
+ * `already-active`. A tombstone from a version that did not record `archived` is treated as the
+ * archive fallback, which is the only branch that version could have taken without a trash path.
+ *
  * @param {{ctx: object, table: object, leadSessionId: string, target: string,
  *   hooks: {filter: {invalidate: Function}, slots: {refresh: Function}}}} request
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
 export async function restoreMember({ ctx, table, leadSessionId, target, hooks }) {
   const roster = readRoster(table, leadSessionId)
-  const member = findRetired(roster, target)
-  if (member === undefined) throw new Error(`restore_member: no retired member named "${target}"`)
+  const member = findAnyTarget(roster, target)
+  if (member === undefined) {
+    throw new Error(`restore_member: no member named "${target}" in the roster, live or retired`)
+  }
+  if (member.phase !== PHASE.retired) {
+    if (member.phase === PHASE.active) {
+      return {
+        target: targetOf(member),
+        restored: true,
+        reason: 'already-active',
+        message: `"${target}" is already active; there is no tombstone to restore.`,
+      }
+    }
+    return {
+      target: targetOf(member),
+      restored: false,
+      reason: 'not-retired',
+      message: `"${target}" is ${member.phase}, not retired; there is nothing to restore.`,
+    }
+  }
   if (hasLiveTarget(roster, target)) {
     throw new Error(`restore_member: a live member already uses "${target}"; retire it first`)
   }
 
   let restoredPath
+  let branch
   if (typeof member.trashPath === 'string') {
     let originalPath = typeof member.originalPath === 'string' ? member.originalPath : undefined
     if (originalPath === undefined) {
@@ -418,14 +608,27 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
       originalPath,
       kind: member.trashKind === 'file' ? 'file' : 'directory',
     })
-    if (!outcome.restored) {
+    if (outcome.restored) {
+      branch = 'moved-back'
+      restoredPath = outcome.path
+    } else if (
+      outcome.reason === 'trash-missing'
+      && member.trashState === 'pending'
+      && await pathExists(originalPath)
+    ) {
+      branch = 'never-moved'
+      restoredPath = originalPath
+    } else {
       return {
         target: targetOf(member),
         restored: false,
         message: `Nothing was moved back: ${outcome.reason}. The record stays retired.`,
       }
     }
-    restoredPath = outcome.path
+  } else if (member.archived === false) {
+    // Retirement recorded that neither the move nor the workspace archive ran. Reactivating the record
+    // is the whole recovery; calling the workspace here would claim a branch that did nothing.
+    branch = 'not-archived'
   } else {
     // Retired through the workspace-archive fallback, so unhide instead of moving files.
     const workspace = ctx.get('workspaceRegistry')
@@ -438,6 +641,7 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
     }
     try {
       await workspace.unarchiveSession(member.childId)
+      branch = 'unarchived'
     } catch (error) {
       return {
         target: targetOf(member),
@@ -447,23 +651,59 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
     }
   }
 
-  const revived = { ...member, phase: PHASE.active }
-  delete revived.retiredAt
-  delete revived.retireReason
-  delete revived.trashPath
-  delete revived.trashKind
-  delete revived.originalPath
-  await updateRoster(table, leadSessionId, (current) => withMember(current, revived))
+  // Rebuild the record from the one on disk, so a concurrent change to another member survives.
+  const persisted = await updateRoster(table, leadSessionId, (current) => {
+    const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
+    if (existing === undefined || existing.phase !== PHASE.retired) return current
+    const revived = { ...existing, phase: PHASE.active }
+    delete revived.retiredAt
+    delete revived.retireReason
+    delete revived.trashPath
+    delete revived.trashKind
+    delete revived.originalPath
+    delete revived.trashState
+    delete revived.archived
+    return withMember(current, revived)
+  })
+  const record = persisted.members.find((candidate) => candidate.memberId === member.memberId) ?? member
   hooks.filter.invalidate()
   void hooks.slots.refresh()
 
   const value = {
-    target: targetOf(member),
+    target: targetOf(record),
     restored: true,
+    reason: branch,
     message: 'Member restored and active again. A restored session may take one client refresh to reappear.',
   }
   if (typeof restoredPath === 'string') value.path = restoredPath
   return value
+}
+
+/**
+ * The refusal one delivery-shaped operation answers for a target it cannot act on.
+ *
+ * The addressable set is `provisioning | active`; everything else is named by the state it is in, so a
+ * message to a tombstone can never read like a message to a target that never existed. The operation,
+ * not the caller, composes the sentence: the callers are the tools and a refusal is a result.
+ * @param {object} roster - one Lead's roster.
+ * @param {string} target - model-facing target.
+ * @returns {{reason: 'retired'|'failed'|'missing', message: string, member?: object}}
+ */
+function refusalFor(roster, target) {
+  const member = findAnyTarget(roster, target)
+  if (member === undefined) {
+    return { reason: 'missing', message: `No member named "${target}" is in this roster.` }
+  }
+  if (member.phase === PHASE.retired) {
+    return {
+      reason: 'retired',
+      message: `"${target}" is retired and cannot be reached. A retired member keeps its tombstone; spawn_member with replace starts its successor.`,
+    }
+  }
+  return {
+    reason: 'failed',
+    message: `"${target}" is failed and cannot be reached. Retire it with retire_member, or replace it with spawn_member.`,
+  }
 }
 
 /**
@@ -480,7 +720,10 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
   const caller = requireLiveLead('message_member', leadSessionId, leadAgent)
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const member = findByTarget(roster, target)
-  if (member === undefined) throw new Error(`message_member: no live member named "${target}"`)
+  if (member === undefined) {
+    const refusal = refusalFor(roster, target)
+    return { target, sent: false, reason: refusal.reason, message: refusal.message }
+  }
   const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'message_member')
   let messageId
   try {
@@ -500,7 +743,12 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
   }
   if (typeof messageId === 'string') value.message_id = messageId
   if (recorded !== undefined) {
-    await updateRoster(table, leadSessionId, (current) => withMember(current, { ...member, assignment: recorded }))
+    // Rebuild from the record on disk, so a concurrent edit to another member survives and a tombstone
+    // written while the message was in flight is not overwritten with a stale snapshot.
+    await updateRoster(table, leadSessionId, (current) => {
+      const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
+      return withMember(current, { ...(existing ?? member), assignment: recorded })
+    })
     value.assignment = recorded
   }
   return value
@@ -515,7 +763,10 @@ export async function stopMember({ ctx, table, leadSessionId, leadAgent, target 
   const caller = requireLiveLead('stop_member', leadSessionId, leadAgent)
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const member = findByTarget(roster, target)
-  if (member === undefined) throw new Error(`stop_member: no live member named "${target}"`)
+  if (member === undefined) {
+    const refusal = refusalFor(roster, target)
+    return { target, stopped: false, reason: refusal.reason, message: refusal.message }
+  }
   if (ctx.agents.get(member.childId) === undefined) {
     return {
       target: targetOf(member),

@@ -89,6 +89,37 @@ test('slot credit raises the shipped limit only for the spawning Lead', async ()
   assert.equal(roster.maxMembers, 2)
 })
 
+test('a nested spawn keeps the outer Lead credit after the inner one finishes', async () => {
+  // `live.current` is one process-wide field and the effective limit is read later, inside the real
+  // spawn's transact. Resetting it to zero in the inner `finally` would silently drop the outer
+  // Lead's credit for the rest of that spawn.
+  const roster = {
+    maxMembers: 2,
+    membership: (caller) => ({ root: { id: caller.leadId } }),
+    async spawn(caller) {
+      const before = this.maxMembers
+      const nested = caller.nested === undefined ? undefined : await this.spawn(caller.nested)
+      return { before, after: this.maxMembers, nested, leadId: caller.leadId }
+    },
+  }
+  const service = { roster }
+  const ctx = { get: (name) => (name === 'agentTeams' ? service : undefined) }
+  const installed = installSlotCredit(ctx, {
+    readRetiredByTeam: async () => new Map([['lead-1', 3]]),
+  })
+  assert.equal(installed.installed, true)
+  await installed.refresh()
+
+  const outer = await roster.spawn({ leadId: 'lead-1', nested: { leadId: 'lead-2' } })
+  assert.equal(outer.before, 5, 'the spawning Lead sees its own credit')
+  assert.equal(outer.nested.after, 2, 'the nested spawn sees only its own Lead credit')
+  assert.equal(outer.after, 5, 'the outer credit is restored, not zeroed')
+  assert.equal(roster.maxMembers, 2)
+
+  installed.dispose()
+  assert.equal(roster.maxMembers, 2)
+})
+
 test('slot credit is skipped when the roster shape is absent', () => {
   const installed = installSlotCredit({ get: () => ({ roster: {} }) }, { readRetiredByTeam: async () => new Map() })
   assert.equal(installed.installed, false)
