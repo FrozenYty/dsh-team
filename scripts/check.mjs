@@ -92,6 +92,16 @@ const entry = read('index.js')
 if (entry !== undefined && !/export\s+(async\s+)?function\s+apply\s*\(/.test(entry)) {
   fail('index.js: must export apply(ctx, config)')
 }
+// Every tool wrapper takes the host execution context. A signature that omits `exec` while its body
+// reads `exec.agent` is a ReferenceError only when the model calls the tool: retired, restored and
+// stopped members all failed that way while the unit tests passed, because those call actions.js
+// directly and never enter the wrapper.
+for (const match of entry?.matchAll(/async\s+execute\s*\(([^)]*)\)/g) ?? []) {
+  const parameters = match[1].split(',').map((name) => name.trim())
+  if (!parameters.includes('exec')) {
+    fail(`index.js: every execute must declare (args, exec); found (${match[1].trim()})`)
+  }
+}
 
 // 3. Locale parity.
 const keysOf = (value, prefix = '') => Object.entries(value ?? {})

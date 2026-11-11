@@ -99,6 +99,12 @@ a local pass means the same thing as a green run.
 into a profile and calling the tools is the only real check, and it is the user's call each time.
 Never claim a tool works because the install printed `applied`.
 
+A tool wrapper is not covered by the unit tests. They call `actions.js` directly, so a mistake that lives
+only in `index.js`'s `execute` reaches the model and nothing else — which is how `retire_member`,
+`restore_member` and `stop_member` all shipped reading an undeclared `exec`. `scripts/check.mjs` rejects
+an `execute(` that does not declare `(args, exec)` for that reason; everything else about a wrapper needs a
+live tool call.
+
 Report in three parts:
 
 1. **What changed** — files and behaviour, not intentions.

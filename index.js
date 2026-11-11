@@ -342,7 +342,7 @@ function install(agent, ctx, store, hooks, dataDir) {
         },
       },
       output: { schema: RETIRE_VALUE },
-      async execute(args) {
+      async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'retire_member')
         requireLead(ctx, caller, 'retire_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
@@ -374,7 +374,7 @@ function install(agent, ctx, store, hooks, dataDir) {
         },
       },
       output: { schema: RESTORE_VALUE },
-      async execute(args) {
+      async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'restore_member')
         requireLead(ctx, caller, 'restore_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
@@ -438,7 +438,7 @@ function install(agent, ctx, store, hooks, dataDir) {
         },
       },
       output: { schema: STOP_VALUE },
-      async execute(args) {
+      async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'stop_member')
         requireLead(ctx, caller, 'stop_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
