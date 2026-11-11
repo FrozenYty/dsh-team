@@ -65,3 +65,18 @@
   `check` context required, strict up-to-date enforced, and force pushes and branch deletion refused;
   an earlier entry in this file says “private for now”, which was true when it was written and is the
   reason this entry exists rather than an edit to it.
+- **The members that could not be removed are now removable, and nothing was torn down to get there.**
+  Instead of disabling the shipped team tool row (which would have taken the shared task board with it),
+  the roster **adopts** what the shipped roster created — identity is the child Session id, the name is
+  kept, phase starts `active`. Seven of this session's shipped members were adopted on the first read,
+  and `verify-compaction` was then retired for real: `drained: true, archived: true, phase: retired`.
+  That is the population the user could not touch before.
+- **Messaging and turn-level stop were added and both exercised against a real child.** `message_member`
+  delivered to an unloaded member and cold-resumed it (the member replied), then took a second message
+  that started a long command; `stop_member` cancelled that turn through
+  `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent })` and the Harness reported the child
+  “was stopped before it finished”. Stopping keeps the activation and inbox; only retirement drains.
+- **`member_context` was removed, not deprecated.** Its rows duplicated `list_members` and it read the
+  shipped roster rather than ours, so it would have been wrong for every member this plugin owns.
+  Pressure and `compactable` now ride on the `list_members` row, and `compact_member` resolves through
+  the owned roster.

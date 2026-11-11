@@ -1,29 +1,28 @@
 /**
- * Team Control — inspect and reclaim context for Agent Teams members.
+ * Team Control — a team roster whose members can be retired, removed and replaced.
  *
- * v0.1 (Host half). Adds two Team-Lead-only tools beside the official
- * experimental Agent Teams tool set:
+ * Host half. It owns the roster (`roster.js`), exposes it as Lead-scoped tools, and compacts one
+ * member's context in place. The shipped team tool row is disabled by the bundle patch so only one
+ * roster answers the model; the shipped roster *service* stays mounted so this plugin can adopt the
+ * members it created before the switch, and can keep using its Lead membership test.
  *
- *   - `member_context`  reports every member's context pressure.
- *   - `compact_member`  force-compacts one idle member in place.
+ * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
+ * `compact_member`.
  *
- * WHY THIS FILE IMPORTS NOTHING
- * A profile-installed bundle is linked from its workspace directory, so a bare
- * import such as `@deepseek-ai/dsh-tools` resolves from the bundle path and
- * fails with ERR_MODULE_NOT_FOUND. Shipped packages resolve only from inside the
- * dsh installation, and the installed first-party market plugin likewise imports
- * no dsh package. Tool definitions are therefore built as plain canonical JSON
- * Schema objects, which is exactly the `ToolDefinition` shape the registry
- * consumes (`ctx.tools.register` checks `output.schema` + `output.render` and
- * projects `parameters` straight to the model).
+ * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
+ * A profile-installed bundle is linked from its workspace directory, so a bare import such as
+ * `@deepseek-ai/dsh-tools` resolves from the bundle path and fails with ERR_MODULE_NOT_FOUND. Shipped
+ * packages resolve only from inside the dsh installation, and the installed first-party market plugin
+ * likewise imports no dsh package. Tool definitions are therefore built as plain canonical JSON Schema
+ * objects, which is exactly the `ToolDefinition` shape the registry consumes (`ctx.tools.register`
+ * checks `output.schema` + `output.render` and projects `parameters` straight to the model).
  *
- * The plugin writes no session events and changes no roster semantics. It is
- * inert in profiles without Agent Teams, and it never shadows an official tool
- * name: it only adds the two below.
+ * The plugin writes no session events. Its durable state lives in one storage domain (ADR 0003).
  */
 
 import {
   PHASE,
+  adoptMember,
   findByTarget,
   liveStateOf,
   openRosterStore,
@@ -38,9 +37,6 @@ import {
 export const name = 'team-control'
 
 export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
-
-/** Usage ratio at or above which `member_context` flags a member as under pressure. */
-const WARN_USAGE_RATIO = 0.75
 
 /** Build a registry-ready definition from canonical JSON Schemas. */
 function defineTool(options) {
@@ -70,47 +66,11 @@ function requireLead(ctx, caller, toolName) {
   }
 }
 
-/** Resolve one roster row by member name, then by raw session id. */
-function findMember(ctx, caller, target) {
-  const members = ctx.agentTeams.listMembers(caller)
-  return members.find((member) => member.name === target)
-    ?? members.find((member) => member.id === target)
-    ?? undefined
-}
-
 /** Read live context pressure for one resident member. */
 function pressureOf(ctx, agent) {
   const { pressureTokens, contextWindow } = ctx.tokenMeter.contextPressure(agent.session)
   const ratio = contextWindow > 0 ? pressureTokens / contextWindow : undefined
   return { pressureTokens, contextWindow, ratio }
-}
-
-const MEMBER_CONTEXT_ROW = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['target', 'role', 'status', 'resident', 'under_pressure', 'compactable'],
-  properties: {
-    target: { type: 'string' },
-    role: { type: 'string', enum: ['lead', 'teammate'] },
-    status: { type: 'string', enum: ['running', 'inactive', 'provisioning', 'failed', 'unknown'] },
-    resident: { type: 'boolean' },
-    pressure_tokens: { type: 'integer' },
-    context_window: { type: 'integer' },
-    usage_ratio: { type: 'number' },
-    under_pressure: { type: 'boolean' },
-    compactable: { type: 'boolean' },
-    note: { type: 'string' },
-  },
-}
-
-const MEMBER_CONTEXT_VALUE = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['members', 'compactor'],
-  properties: {
-    members: { type: 'array', items: MEMBER_CONTEXT_ROW },
-    compactor: { type: 'string', enum: ['available', 'unavailable'] },
-  },
 }
 
 const COMPACT_VALUE = {
@@ -141,6 +101,8 @@ const MEMBER_ROW = {
     resident: { type: 'boolean' },
     pressure_tokens: { type: 'integer' },
     context_window: { type: 'integer' },
+    usage_ratio: { type: 'number' },
+    compactable: { type: 'boolean' },
     note: { type: 'string' },
   },
 }
@@ -165,6 +127,30 @@ const RETIRE_VALUE = {
   },
 }
 
+const MESSAGE_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['target', 'sent'],
+  properties: {
+    target: { type: 'string' },
+    sent: { type: 'boolean' },
+    message_id: { type: 'string' },
+    message: { type: 'string' },
+  },
+}
+
+const STOP_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['target', 'stopped'],
+  properties: {
+    target: { type: 'string' },
+    stopped: { type: 'boolean' },
+    resident: { type: 'boolean' },
+    message: { type: 'string' },
+  },
+}
+
 /** The durable roster key for one Lead. */
 function leadSessionIdOf(agent) {
   return String(agent.session.id)
@@ -173,6 +159,7 @@ function leadSessionIdOf(agent) {
 /** Project one stored member into its model-facing row. */
 function memberRow(ctx, member) {
   const live = liveStateOf(ctx, member)
+  const compactor = ctx.get('compaction') !== undefined
   const row = {
     target: targetOf(member),
     phase: member.phase,
@@ -180,22 +167,44 @@ function memberRow(ctx, member) {
     label: member.label,
     status: live.status,
     resident: live.resident,
+    compactable: compactor && live.status === 'idle',
   }
   if (live.resident) {
     const agent = ctx.agents.get(member.childId)
     if (agent !== undefined) {
       try {
-        const { pressureTokens, contextWindow } = ctx.tokenMeter.contextPressure(agent.session)
+        const { pressureTokens, contextWindow, ratio } = pressureOf(ctx, agent)
         // A child that has not issued a model request yet has no measurable window. Assigning
         // `undefined` would make the tool result non-lossless JSON, which the registry rejects.
         if (Number.isFinite(pressureTokens)) row.pressure_tokens = pressureTokens
         if (Number.isFinite(contextWindow)) row.context_window = contextWindow
+        if (typeof ratio === 'number') row.usage_ratio = ratio
       } catch (error) {
         row.note = 'Context pressure is not measurable for this member yet.'
       }
     }
   }
   return row
+}
+
+/**
+ * Adopt members the shipped roster created before this plugin owned the roster, so retirement and
+ * messaging apply to them too. Idempotent: a member is adopted at most once, matched by child Session id.
+ * @returns the roster, including any newly adopted members.
+ */
+async function ensureAdopted(ctx, caller, table, leadSessionId) {
+  const roster = readRoster(table, leadSessionId)
+  const known = new Set(roster.members.map((member) => member.childId))
+  const shipped = ctx.agentTeams.listMembers(caller).filter(
+    (member) => member.role === 'teammate' && !known.has(member.id),
+  )
+  if (shipped.length === 0) return roster
+  let next = roster
+  for (const row of shipped) {
+    const adopted = adoptMember(next, row)
+    if (adopted !== undefined) next = withMember(next, adopted)
+  }
+  return await writeRoster(table, leadSessionId, next)
 }
 
 /**
@@ -214,51 +223,8 @@ function install(agent, ctx, store) {
 
   try {
     register(scoped.tools.register(defineTool({
-      name: 'member_context',
-      description: 'Report every Agent Teams member\'s live context pressure, in tokens and as a window ratio. Read it before deciding whether a member needs compacting. The Lead row is included.',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {},
-      },
-      output: { schema: MEMBER_CONTEXT_VALUE },
-      execute(_args, exec) {
-        const caller = callingAgent(exec.agent, 'member_context')
-        requireLead(ctx, caller, 'member_context')
-        const compaction = ctx.get('compaction')
-        const members = ctx.agentTeams.listMembers(caller).map((member) => {
-          const row = {
-            target: member.name,
-            role: member.role,
-            status: member.status ?? 'unknown',
-            resident: false,
-            under_pressure: false,
-            compactable: false,
-          }
-          const live = ctx.agents.get(member.id)
-          if (live === undefined) {
-            row.note = 'Not resident: an idle child is unloaded. Send it a message to wake it; automatic compaction then reduces its pressure before the next model step.'
-            return row
-          }
-          row.resident = true
-          const { pressureTokens, contextWindow, ratio } = pressureOf(ctx, live)
-          if (Number.isFinite(pressureTokens)) row.pressure_tokens = pressureTokens
-          if (Number.isFinite(contextWindow)) row.context_window = contextWindow
-          if (typeof ratio === 'number') row.usage_ratio = ratio
-          row.under_pressure = ratio !== undefined && ratio >= WARN_USAGE_RATIO
-          row.compactable = compaction !== undefined && live.status !== 'running'
-          if (live.status === 'running') {
-            row.note = 'A running member cannot be compacted; interrupt it or wait for its turn to end.'
-          }
-          return row
-        })
-        return { members, compactor: compaction === undefined ? 'unavailable' : 'available' }
-      },
-    })))
-
-    register(scoped.tools.register(defineTool({
       name: 'compact_member',
-      description: 'Force one context compaction on an in-place resident, idle Agent Teams member, keeping its identity and session. It costs one summarization model call and does nothing when no safe older range can be condensed. An idle child is normally unloaded, so this usually applies only while the member is still resident; to reduce a finished member\'s pressure, wake it with send_message and let its automatic compaction run.',
+      description: 'Force one context compaction on an in-place resident, idle member, keeping its identity and session. It costs one summarization model call and does nothing when no safe older range can be condensed. An idle child is normally unloaded, so this usually applies only while the member is still resident; to reduce a finished member\'s pressure, wake it with message_member and let its automatic compaction run.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -266,7 +232,7 @@ function install(agent, ctx, store) {
         properties: {
           target: {
             type: 'string',
-            description: 'Member target: the name from list_agents, or the session id.',
+            description: 'Member target from list_members, such as reviewer or reviewer-g2.',
           },
         },
       },
@@ -277,16 +243,20 @@ function install(agent, ctx, store) {
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('compact_member: target must be a non-empty string')
         }
-        const member = findMember(ctx, caller, args.target)
-        if (member === undefined) throw new Error(`compact_member: no Team member named "${args.target}"`)
+        const table = await store
+        const leadSessionId = leadSessionIdOf(caller)
+        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+        const member = findByTarget(roster, args.target)
+        if (member === undefined) throw new Error(`compact_member: no live member named "${args.target}"`)
+        const memberTarget = targetOf(member)
 
         const compaction = ctx.get('compaction')
         if (compaction === undefined) throw new Error('compact_member: no compaction backend is mounted in this profile')
 
-        const live = ctx.agents.get(member.id)
+        const live = ctx.agents.get(member.childId)
         if (live === undefined) {
           return {
-            target: member.name,
+            target: memberTarget,
             compacted: false,
             reason: 'not-resident',
             message: 'This member is not resident: an idle child is unloaded, and a resumed member compacts itself automatically at its next step. Send it a message to wake it if its pressure needs reducing.',
@@ -294,7 +264,7 @@ function install(agent, ctx, store) {
         }
         if (live.status === 'running') {
           return {
-            target: member.name,
+            target: memberTarget,
             compacted: false,
             reason: 'busy',
             message: 'The member is running a turn. Wait for it to go idle, or interrupt it, then retry.',
@@ -314,7 +284,7 @@ function install(agent, ctx, store) {
           result = await compaction.compactNow(live, exec.signal)
         } catch (error) {
           return {
-            target: member.name,
+            target: memberTarget,
             compacted: false,
             reason: 'failed',
             ...numberField('before_tokens', before),
@@ -323,7 +293,7 @@ function install(agent, ctx, store) {
         }
         if (result === null || result === undefined) {
           return {
-            target: member.name,
+            target: memberTarget,
             compacted: false,
             reason: 'nothing-to-compact',
             ...numberField('before_tokens', before),
@@ -332,7 +302,7 @@ function install(agent, ctx, store) {
           }
         }
         const value = {
-          target: member.name,
+          target: memberTarget,
           compacted: true,
           reason: 'done',
           ...numberField('before_tokens', before),
@@ -366,10 +336,11 @@ function install(agent, ctx, store) {
         }
         const table = await store
         const leadSessionId = leadSessionIdOf(caller)
-        const planned = planMember(readRoster(table, leadSessionId), args.name, args.label)
+        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+        const planned = planMember(roster, args.name, args.label)
         // Persist the reservation before starting anything: a crash must leave a visible member,
         // never an invisible child.
-        await writeRoster(table, leadSessionId, withMember(readRoster(table, leadSessionId), planned))
+        await writeRoster(table, leadSessionId, withMember(roster, planned))
         let started
         try {
           started = await ctx.subagents.startActivation({
@@ -397,7 +368,7 @@ function install(agent, ctx, store) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member of this roster with its lifecycle phase and live state. Retired members stay listed with phase retired. Use this instead of list_agents for members created by spawn_member.',
+      description: 'List every member of this roster with its lifecycle phase, live state and, while resident, its context pressure. Retired members stay listed as retired. Members the shipped roster created before this plugin existed are adopted on first use.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -408,7 +379,8 @@ function install(agent, ctx, store) {
         const caller = callingAgent(exec.agent, 'list_members')
         requireLead(ctx, caller, 'list_members')
         const table = await store
-        const roster = readRoster(table, leadSessionIdOf(caller))
+        const leadSessionId = leadSessionIdOf(caller)
+        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
         return { members: roster.members.map((member) => memberRow(ctx, member)) }
       },
     })))
@@ -434,7 +406,8 @@ function install(agent, ctx, store) {
         }
         const table = await store
         const leadSessionId = leadSessionIdOf(caller)
-        const member = findByTarget(readRoster(table, leadSessionId), args.target)
+        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+        const member = findByTarget(roster, args.target)
         if (member === undefined) throw new Error(`retire_member: no live member named "${args.target}"`)
 
         let drained = false
@@ -466,6 +439,95 @@ function install(agent, ctx, store) {
           drained,
           archived,
           message: 'Member retired: drained, tombstoned, and archived when the workspace service is available.',
+        }
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'message_member',
+      description: 'Send one message to a live member. A running member receives it at its next step; an unloaded member is resumed from its own Session. A retired member cannot be messaged. Success means the inbox accepted the message, not that the member has processed it.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['target', 'message'],
+        properties: {
+          target: { type: 'string', description: 'Member target from list_members.' },
+          message: { type: 'string', description: 'Self-contained message for the member.' },
+        },
+      },
+      output: { schema: MESSAGE_VALUE },
+      async execute(args, exec) {
+        const caller = callingAgent(exec.agent, 'message_member')
+        requireLead(ctx, caller, 'message_member')
+        if (typeof args.target !== 'string' || args.target.length === 0) {
+          throw new Error('message_member: target must be a non-empty string')
+        }
+        if (typeof args.message !== 'string' || args.message.length === 0) {
+          throw new Error('message_member: message must be a non-empty string')
+        }
+        const table = await store
+        const leadSessionId = leadSessionIdOf(caller)
+        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+        const member = findByTarget(roster, args.target)
+        if (member === undefined) throw new Error(`message_member: no live member named "${args.target}"`)
+        let messageId
+        try {
+          messageId = await ctx.subagents.sendMessage(
+            caller,
+            member.childId,
+            [{ type: 'text', text: args.message }],
+            { signal: exec.signal },
+          )
+        } catch (error) {
+          throw new Error(`message_member: the subagent service rejected the message: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        const value = {
+          target: targetOf(member),
+          sent: true,
+          message: 'Message accepted. A running member sees it at its next step; an unloaded one is resumed.',
+        }
+        if (typeof messageId === 'string') value.message_id = messageId
+        return value
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'stop_member',
+      description: 'Cancel one member\'s current turn immediately. The activation, its inbox and its record are kept, so a later message resumes it; use retire_member to end a member for good.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['target'],
+        properties: {
+          target: { type: 'string', description: 'Member target from list_members.' },
+        },
+      },
+      output: { schema: STOP_VALUE },
+      async execute(args, exec) {
+        const caller = callingAgent(exec.agent, 'stop_member')
+        requireLead(ctx, caller, 'stop_member')
+        if (typeof args.target !== 'string' || args.target.length === 0) {
+          throw new Error('stop_member: target must be a non-empty string')
+        }
+        const table = await store
+        const leadSessionId = leadSessionIdOf(caller)
+        const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+        const member = findByTarget(roster, args.target)
+        if (member === undefined) throw new Error(`stop_member: no live member named "${args.target}"`)
+        if (ctx.agents.get(member.childId) === undefined) {
+          return {
+            target: targetOf(member),
+            stopped: true,
+            resident: false,
+            message: 'The member was not resident; nothing to stop.',
+          }
+        }
+        ctx.subagents.interrupt(member.childId, { kind: 'ancestor', agent: caller })
+        return {
+          target: targetOf(member),
+          stopped: true,
+          resident: true,
+          message: 'Its current turn was cancelled. The activation and its inbox are kept; message_member wakes it again.',
         }
       },
     })))

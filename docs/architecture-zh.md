@@ -24,14 +24,16 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 `command-compact`（`/compact`）刻意**不**启用：它需要 `commands` 服务，而本 profile 同样没有挂载，所以即使启用该行也只会停在 `absent`。
 
-### 2.2 两个 Lead 专属工具
+### 2.2 上下文工具
 
-两者都注册在 Team Lead 的确切 Agent 上下文上（`agent/created`），并在 `agent/disposed` 时卸载。不遮蔽任何官方工具名，也不写任何会话事件。
+每个 Lead 专属工具都注册在 Team Lead 的确切 Agent 上下文上（`agent/created`），并在 `agent/disposed` 时卸载。不遮蔽任何官方工具名，也不写任何会话事件。
 
 | 工具 | 行为 |
 |---|---|
-| `member_context` | 每个成员一行：角色、实时状态、是否驻留、`pressure_tokens`、`context_window`、`usage_ratio`、`under_pressure`、`compactable` 和一条说明。同时报告压缩器是否挂载。 |
-| `compact_member` | 对单个成员调用 `ctx.compaction.compactNow(agent, signal)`，返回结构化结果而不是抛异常：`done`、`busy`、`not-resident`、`nothing-to-compact`、`failed`。 |
+| `list_members` | 花名册：相态、代次、标签、实时状态，驻留时还给出 `pressure_tokens`、`context_window`、`usage_ratio` 与 `compactable`。 |
+| `compact_member` | 对单个驻留且空闲的成员调用 `ctx.compaction.compactNow(agent, signal)`，返回结构化结果而不是抛异常：`done`、`busy`、`not-resident`、`nothing-to-compact`、`failed`。 |
+
+`member_context` 存在于 v0.1，已移除：它的行与 `list_members` 重复，而且读的是官方花名册而不是本插件的。
 
 实测到的限制塑造了后续设计：本地子代理空闲即被卸载，而 `compactNow()` 要求 Agent 驻留且空闲。因此“对已完成的成员按需压缩”几乎没有窗口；可行路径是用消息唤醒它，让自动压缩在它下一步之前生效。
 
@@ -42,6 +44,10 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 | `spawn_member` | 先占用一个带代次的名字并**持久化这条预留**，再通过 `ctx.subagents.startActivation` 以生成的 `childId` 和 `delivery: 'parent'` 启动可续聊子代理。启动失败会留下一条可见的 `failed` 记录，绝不会留下看不见的子代理。 |
 | `list_members` | 每条记录给出相态、代次、实时状态，驻留时还给出上下文压力。已退役成员仍以 `retired` 列出。 |
 | `retire_member` | 排空子代理、用 `ctx.workspaceRegistry.archiveSession` 归档其会话、给记录立碑。对“已结束的成员”和“正在跑的成员”两种情形都实测通过。 |
+| `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`。运行中的成员在下一步收到；已卸载的成员从自己的会话冷恢复。实测：投递唤醒了卸载成员并得到回复。 |
+| `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`。只取消当前轮，保留激活、名额与收件箱。实测：成员正跑长命令时被中断，且没有留下收尾消息。 |
+
+**收养。** 官方花名册创建的成员，会在本花名册第一次被读取时被收养：记录以子代理会话 id 作为身份、沿用官方名字、相态为 `active`。因此 `retire_member`、`message_member`、`stop_member` 对本插件从未创建过的成员同样有效——而这正是以前完全无法移除的那批成员。收养是幂等的，按子代理 id 匹配。
 
 记录存在一个以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。命名规则：代次 1 用裸名字；代次 2 起用 `<base>-g<N>`，因此继任者绝不会与已退役的名字相撞。退役后再用同一个基名创建，就是替换操作：`probe-a` 退役、`probe-a-g2` 启动，两条记录都在。
 
@@ -124,8 +130,7 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 
 ### 4.5 模型侧接口
 
-已交付：`spawn_member`、`list_members`、`retire_member`（P2-03、P2-04），与 v0.1 的上下文工具并列。
-计划中：`message_member`、`stop_member`（P2-06），以及禁用官方花名册行的 bundle 补丁（P2-07），避免两个花名册说法不一致。
+已交付：`spawn_member`、`list_members`、`message_member`、`stop_member`、`retire_member`（P2-03、P2-04、P2-06），与 `compact_member` 及官方任务板工具并列。官方花名册工具保持启用：共享任务板归它们所有，而收养机制让它们创建的成员同样可退役。将来可由 P2-09 换掉任务板，再关闭官方工具行。
 
 ## 5. 使用的 Harness 扩展点
 

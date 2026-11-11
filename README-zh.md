@@ -25,12 +25,14 @@
 | 能力 | 状态 |
 |---|---|
 | 启用官方 `compaction-basic` 压缩后端（profile 级） | v0.1 已交付 |
-| `member_context`——每个成员的上下文压力、是否驻留/空闲 | v0.1 已交付 |
-| `compact_member`——就地压缩指定成员 | v0.1 已交付 |
-| `spawn_member`／`list_members`／`retire_member`——自建持久花名册，代次命名 | v0.2 已交付并实测 |
+| `list_members`——花名册，含相态、实时状态与上下文压力 | v0.2 |
+| `compact_member`——就地压缩一个驻留且空闲的成员 | v0.1，已改为基于自建花名册 |
+| `spawn_member`／`retire_member`——代次命名；真正退役 | v0.2 |
+| `message_member`／`stop_member`——投递消息；只停当前轮、不退役 | v0.2 |
+| 收养官方花名册创建的成员，使它们同样可退役 | v0.2 |
 | 设置页团队面板 | 计划中 |
 
-**迁移期有两个花名册。** `list_agents` 报的仍是官方团队花名册；`list_members` 报的是本插件自建的花名册。二者不是同一集合——官方花名册无法删除成员。在 P2-07 关闭官方花名册工具之前，用 `spawn_member` 创建的成员一律用 `list_members` 查看，不要把两者混用。
+**一套花名册，两个写入方。** 官方团队工具保持挂载（共享任务板归它们所有），而它们创建的成员会在下次读取时被本插件**收养**进自己的花名册，因此 `retire_member` 对"不是本插件创建"的成员同样有效——这正是重点：v0.2 之前它们根本无法被移除。退役是本插件的持久事实：排空子代理、归档其会话、给记录立碑。不删除任何东西，官方花名册仍会列出它创建过的成员。
 
 v0.1 的能力说明见 [docs/architecture-zh.md](docs/architecture-zh.md)，自建花名册的设计决策见 [docs/adr/0001](docs/adr/0001-own-roster-on-subagents.md)。
 

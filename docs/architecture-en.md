@@ -32,15 +32,18 @@ the same row in a higher patch layer.
 `command-compact` (`/compact`) is deliberately **not** enabled: it requires the `commands` service,
 which this profile also leaves unmounted, so the row stays `absent` even when enabled.
 
-### 2.2 Two Lead-only tools
+### 2.2 Context tools
 
-Both register on the exact Agent context of a Team Lead (`agent/created`), and unwind on
-`agent/disposed`. No official tool name is shadowed and no session event is written.
+Every Lead-scoped tool registers on the exact Agent context of a Team Lead (`agent/created`), and unwinds
+on `agent/disposed`. No official tool name is shadowed and no session event is written.
 
 | Tool | Behaviour |
 |---|---|
-| `member_context` | one row per member: role, live status, resident, `pressure_tokens`, `context_window`, `usage_ratio`, `under_pressure`, `compactable`, note. Also reports whether a compactor is mounted. |
-| `compact_member` | `ctx.compaction.compactNow(agent, signal)` on one member, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
+| `list_members` | the roster: phase, generation, label, live state, and — while resident — `pressure_tokens`, `context_window`, `usage_ratio` and `compactable`. |
+| `compact_member` | `ctx.compaction.compactNow(agent, signal)` on one resident idle member, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
+
+`member_context` existed in v0.1 and was removed: its rows duplicated `list_members`, and it read the
+shipped roster rather than this plugin's.
 
 Measured limitation that shapes the design: a local child is unloaded when it goes idle, and
 `compactNow()` requires a resident idle Agent. A finished teammate therefore cannot be compacted on
@@ -54,6 +57,13 @@ path.
 | `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. |
 | `list_members` | Every record with phase, generation, live status and — while resident — context pressure. Retired members stay listed as `retired`. |
 | `retire_member` | Drains the child, archives its Session through `ctx.workspaceRegistry.archiveSession`, and tombstones the record. Verified against both a finished member and a member mid-turn. |
+| `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`. A running member receives it at its next step; an unloaded member is cold-resumed from its own Session. Verified live: a delivered message woke an unloaded member, which replied. |
+| `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`. Cancels the current turn only; the activation, slot and inbox are kept. Verified live: a member running a long command was interrupted and left no closing message. |
+
+**Adoption.** Members the shipped roster created are adopted into this roster the first time it is read:
+the record reuses the child Session id as its identity, keeps the shipped name, and starts `active`. So
+`retire_member`, `message_member` and `stop_member` apply to members this plugin never spawned — which is
+exactly the population that could not be removed before. Adoption is idempotent, matched by child id.
 
 Records live in one `storageDomain` domain keyed by the Lead Session id (ADR 0003). Naming rule:
 generation 1 is the bare base name; generation 2 and later is `<base>-g<N>`, so a replacement never
@@ -172,9 +182,10 @@ half-finished:
 
 ### 4.5 Model-facing surface
 
-Shipped: `spawn_member`, `list_members`, `retire_member` (P2-03, P2-04), beside the v0.1 context tools.
-Planned: `message_member` and `stop_member` (P2-06), and the bundle patch that disables the shipped
-roster row so two rosters never disagree (P2-07).
+Shipped: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member` (P2-03, P2-04,
+P2-06), beside `compact_member` and the shipped task-board tools. The shipped roster tools stay enabled:
+they own the shared task board, and adoption makes the members they create retirable. A future task
+(P2-09) can replace the task board and then disable the shipped tool row.
 
 ## 5. Harness extension points used
 
