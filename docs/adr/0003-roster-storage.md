@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** —
+- **Superseded by [0010](0010-roster-layout-and-retention.md)** for the record layout only. This ADR's
+  "one record per member plus a per-Lead index" was never implemented; the store, the hand-written spec
+  and the single-file warning below all still stand.
 
 ## Context
 
