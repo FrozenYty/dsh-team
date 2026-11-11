@@ -56,6 +56,32 @@ shipped roster's effective `maxMembers` rises by that Lead's retired count, so o
 slot. Separately, the patch enables the shipped `compaction-basic` row with `disabled: false`, so
 automatic compaction covers every agent in the process, subagents included.
 
+## In use
+
+There is no interface to open: you ask the model in ordinary language and it calls these tools, so the
+roster is managed by conversation. Every operation in this README is a tool call the model makes on your
+behalf, never a panel you operate. Below is one real exchange: a member is spawned with an assignment and
+told to stand by, then replaced.
+
+```
+> Give the sum to a helper and tell it to stand by.
+spawn_member { name: "handoff-probe", label: …, prompt: …,
+  assignment: "Compute 6 * 7 and reply with the single number, nothing else." }
+← target: "handoff-probe", generation: 1, phase: "active",
+  assignment: "Compute 6 * 7 and reply with the single number, nothing else.", …
+
+> I don't need it any more. Replace it with a successor and retire it.
+spawn_member { replace: "handoff-probe", label: …, prompt: … }
+← target: "handoff-probe-g2", generation: 2, replaced: "handoff-probe",
+  predecessor_retired: true,
+  assignment: "Compute 6 * 7 and reply with the single number, nothing else.",
+  message: "Successor handoff-probe-g2 started from the handoff brief and the predecessor "handoff-probe" is retired. …"
+
+handoff-probe-g2, which never saw its predecessor, replies: 42
+```
+
+The walkthrough is abridged from an acceptance run recorded in [PROGRESS.md](PROGRESS.md).
+
 ## The lifecycle
 
 | Step | Behaviour |
