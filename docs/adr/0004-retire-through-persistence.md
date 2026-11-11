@@ -57,6 +57,11 @@ the feature instead of failing the plugin.
   unload, and mark themselves so a reload neither wraps twice nor compounds.
 - Retirement writes outside the Session log. The trash directory is recoverable by hand, and the record
   points at it; there is deliberately no `rm` outside the cross-device move fallback.
+
+  > **Extended by [0011](0011-trash-retention.md):** a retirement that moved an artifact in now also
+  > removes the oldest artifacts past the fixed per-Lead cap, so removals are no longer only the
+  > cross-device fallback. Everything else in this consequence stands; the trash is still recoverable by
+  > hand and the record still points at where the artifact went.
 - A retired member cannot be resumed: its artifact is gone from the live store. That is the intended
   meaning of retirement, and why `message_member` refuses a retired target.
 

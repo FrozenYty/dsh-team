@@ -155,6 +155,8 @@ const RETIRE_VALUE = {
     archived: { type: 'boolean' },
     trashed: { type: 'boolean' },
     trash_path: { type: 'string' },
+    // How many older artifacts the per-Lead trash cap removed in this same call; 0 in every other case.
+    pruned: { type: 'integer' },
     // `already-retired` on the state matrix's no-op row; absent on the retirements that happened.
     reason: { type: 'string' },
     message: { type: 'string' },
@@ -185,7 +187,7 @@ const RESTORE_VALUE = {
     target: { type: 'string' },
     restored: { type: 'boolean' },
     // Which branch actually ran: moved-back, never-moved, unarchived, not-archived, already-active,
-    // or not-retired for a refusal.
+    // pruned (the retention cap removed the artifact), or not-retired for a refusal.
     reason: { type: 'string' },
     path: { type: 'string' },
     message: { type: 'string' },
@@ -400,7 +402,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. Its assignment stays on the tombstone for a later successor. To retire a member and install its successor in the same call, use spawn_member with replace.',
+      description: 'Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most 20 retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -433,7 +435,7 @@ function install(agent, ctx, store, hooks, dataDir) {
 
     register(scoped.tools.register(defineTool({
       name: 'restore_member',
-      description: 'Bring a retired member back: move its trashed session to the path it came from and return the record to active. It refuses when a live member already uses the target, and reports why when no artifact was recorded. A restored session may take one client refresh to reappear.',
+      description: 'Bring a retired member back: move its trashed session to the path it came from and return the record to active. It refuses when a live member already uses the target, reports why when no artifact was recorded, and answers reason "pruned" when the trash retention cap already removed the artifact — a pruned member cannot be restored. A restored session may take one client refresh to reappear.',
       parameters: {
         type: 'object',
         additionalProperties: false,

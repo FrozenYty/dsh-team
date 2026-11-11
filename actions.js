@@ -17,6 +17,7 @@ import { join } from 'node:path'
 
 import {
   PHASE,
+  TRASH_STATE,
   adoptMember,
   checkAssignment,
   findByTarget,
@@ -30,9 +31,11 @@ import {
   withMember,
 } from './roster.js'
 import {
+  TRASH_LIMIT,
   applyMemberTrash,
   pathExists,
   planMemberTrash,
+  pruneLeadTrash,
   restoreSessionArtifact,
   sessionRootFromSibling,
 } from './trash.js'
@@ -401,6 +404,13 @@ export async function spawnMember({
  * record says which of the two actually happened (`trashState`, `archived`). `archived` is true only
  * when that fallback ran, so a tombstone never carries both a `trashPath` and `archived: true`.
  *
+ * A retirement that actually moved an artifact in then enforces the per-Lead retention cap in the same
+ * call (ADR 0011), because that is the moment the trash grew. It removes the oldest entries past
+ * `TRASH_LIMIT`, flips each removed tombstone to `trashState: 'pruned'` while keeping its `trashPath`,
+ * and reports how many went in `pruned`. A retirement that moved nothing leaves the trash alone. The
+ * platform has no Session-deletion API, so this is the only deletion on the path, and it touches only
+ * this plugin's own trash copies.
+ *
  * Without a live Lead Agent there is nothing to drain through, so the operation refuses with a reason
  * instead of throwing. The tool path always runs in the Lead's own Agent context; the guard exists so a
  * caller that does not hold the Agent gets a sentence rather than a `TypeError`.
@@ -415,6 +425,7 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     return {
       target,
       retired: false,
+      pruned: 0,
       message: `The Lead Session ${leadSessionId} is not live in this Harness process, so its member cannot be drained. Open that Session again and retry.`,
     }
   }
@@ -430,6 +441,7 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
       target: targetOf(member),
       retired: true,
       drained: false,
+      pruned: 0,
       reason: 'already-retired',
       message: `"${target}" is already retired; nothing was drained and no artifact was moved.`,
     }
@@ -462,9 +474,9 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
         trashPath: plan.trashPath,
         trashKind: plan.kind === 'file' ? 'file' : 'directory',
         originalPath: plan.originalPath,
-        trashState: 'pending',
+        trashState: TRASH_STATE.pending,
       }
-      : { trashState: 'none' }
+      : { trashState: TRASH_STATE.none }
     return withMember(current, tombstoneOf(existing, fields))
   })
 
@@ -502,16 +514,38 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
       next.trashPath = plan.trashPath
       next.trashKind = plan.kind === 'file' ? 'file' : 'directory'
       next.originalPath = plan.originalPath
-      next.trashState = 'done'
+      next.trashState = TRASH_STATE.done
     } else {
       delete next.trashPath
       delete next.trashKind
       delete next.originalPath
-      next.trashState = 'none'
+      next.trashState = TRASH_STATE.none
     }
     return withMember(current, next)
   })
   const record = persisted.members.find((candidate) => candidate.memberId === member.memberId)
+
+  // Step 4: bound this Lead's trash, and only here. The move above is the one moment a retirement
+  // grows the trash, so it is the one moment the cap is enforced — no timer, no sweep on read. A
+  // pruned tombstone keeps its `trashPath` (it still says where the artifact went) and is marked
+  // `pruned`, which is what makes `restore_member` refuse with a typed reason instead of lying.
+  let pruned = 0
+  if (moved) {
+    const outcome = await pruneLeadTrash({ trashRoot: plan.trashRoot, members: persisted.members })
+    pruned = outcome.pruned
+    if (pruned > 0) {
+      const removedIds = new Set(outcome.removed.map((entry) => entry.memberId))
+      await updateRoster(table, leadSessionId, (current) => {
+        let next = current
+        for (const candidate of current.members) {
+          if (removedIds.has(candidate.memberId)) {
+            next = withMember(next, { ...candidate, trashState: TRASH_STATE.pruned })
+          }
+        }
+        return next
+      })
+    }
+  }
 
   // Both host effects read tombstones through short caches; refresh now so the member leaves the
   // projections every client renders and the freed slot is available to the next spawn.
@@ -524,9 +558,13 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     drained,
     archived,
     trashed: moved,
+    pruned,
     message: moved
       ? 'Member retired: drained, its session moved to the trash directory, and tombstoned.'
       : `Member retired and tombstoned; the session artifact was not moved (${moveReason ?? 'unknown'}).`,
+  }
+  if (pruned > 0) {
+    value.message += ` Retention removed ${pruned} older ${pruned === 1 ? 'artifact' : 'artifacts'} from this Lead's trash: it keeps at most ${TRASH_LIMIT}, oldest first, because the platform offers no Session deletion of its own (ADR 0011).`
   }
   if (typeof record?.trashPath === 'string') value.trash_path = record.trashPath
   return value
@@ -547,6 +585,11 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
  *   - `not-archived` — the tombstone records that neither a move nor the archive fallback ran, so
  *     reactivating the record is the whole recovery. No workspace call is made and no success is
  *     claimed for one.
+ *
+ * A tombstone whose `trashState` is `pruned` is a refusal, not a branch: the retention cap removed the
+ * artifact, so the answer is `restored: false, reason: 'pruned'` and the workspace service is never
+ * called (ADR 0011). Moving nothing and claiming a restore is the false-success defect this operation
+ * has already been repaired for twice.
  *
  * A repeat (an already-active target) is the state matrix's no-op: `restored: true`, reason
  * `already-active`. A tombstone from a version that did not record `archived` is treated as the
@@ -581,6 +624,17 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
   if (hasLiveTarget(roster, target)) {
     throw new Error(`restore_member: a live member already uses "${target}"; retire it first`)
   }
+  if (member.trashState === TRASH_STATE.pruned) {
+    // The retention cap removed the artifact, so there is nothing to move back — and the workspace
+    // must not be asked to unhide a session it never hid. The tombstone keeps its `trashPath`, which
+    // is why this check comes before the trash-path branch below (ADR 0011).
+    return {
+      target: targetOf(member),
+      restored: false,
+      reason: 'pruned',
+      message: `"${target}" was pruned by the trash retention cap: the artifact at ${String(member.trashPath)} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue.`,
+    }
+  }
 
   let restoredPath
   let branch
@@ -613,7 +667,7 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
       restoredPath = outcome.path
     } else if (
       outcome.reason === 'trash-missing'
-      && member.trashState === 'pending'
+      && member.trashState === TRASH_STATE.pending
       && await pathExists(originalPath)
     ) {
       branch = 'never-moved'

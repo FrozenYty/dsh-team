@@ -3,18 +3,33 @@
  *
  * Retirement must be recoverable, so the member's persisted session is *moved* into a trash directory
  * instead of being deleted. The move also drops the artifact out of the session-query index, which is
- * what makes the member disappear from the host's own lists; that effect is why this module exists and
- * why nothing here ever calls `rm` except the cross-device fallback.
+ * what makes the member disappear from the host's own lists; that effect is why this module exists.
+ *
+ * Two branches are allowed to remove bytes, and no others: the cross-device move fallback removes the
+ * source it has already copied, and `pruneLeadTrash` removes the oldest artifacts once a Lead's trash
+ * passes `TRASH_LIMIT` (ADR 0011). A pruned artifact is gone for good, which is why the tombstone keeps
+ * saying where it went.
  *
  * No `@deepseek-ai/*` import: a profile-linked bundle cannot resolve those packages (ADR 0002).
  */
 
-import { cp, lstat, mkdir, rename, rm, rmdir } from 'node:fs/promises'
+import { cp, lstat, mkdir, readdir, rename, rm, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 /** Environment override for the plugin data directory; tests use it too. */
 const DATA_DIR_ENV = 'DSH_TEAM_ROSTER_DATA_DIR'
+
+/**
+ * How many retired sessions one Lead's trash keeps.
+ *
+ * Fixed on purpose, mirroring the shipped Agent Teams roster, which bounds its members with the
+ * `maxMembers` constant instead of a config key: this is a safety cap, not a preference, so changing
+ * it means editing this one line. The unit is one Lead's trash directory and the content is whole
+ * Session artifacts, so 20 keeps a long recent history recoverable while bounding the growth; every
+ * retirement past it removes exactly one older artifact, oldest first (ADR 0011).
+ */
+export const TRASH_LIMIT = 20
 
 /**
  * Resolve the plugin data directory.
@@ -59,7 +74,8 @@ export async function resolveSource(locationPath, memberId) {
 
 /**
  * Move one artifact into the trash root. `rename` first; a cross-device error falls back to copy + remove
- * of the source, which is the only branch allowed to delete anything.
+ * of the source, the one branch here that removes anything (the retention cap removes entries later,
+ * never a source on the move path).
  * @param {{sourcePath: string, isDirectory?: boolean, trashRoot: string, dirName: string, renameFn?: typeof rename}} options
  * @returns {Promise<string>} the trash directory that now holds the artifact.
  */
@@ -262,4 +278,108 @@ export async function restoreSessionArtifact(request) {
   // Drop the per-Lead trash directory once it has no entries left; `rmdir` refuses a non-empty one.
   await rmdir(dirname(trashPath)).catch(() => undefined)
   return { restored: true, path: originalPath }
+}
+
+/**
+ * Parse one trash directory name, `<memberId>-<ms>`, exactly as retirement writes it.
+ *
+ * The leading `.+` is greedy, so a member id that itself contains hyphens — a UUID, or an adopted
+ * child Session id — splits at the last one and keeps its stamp. A name this plugin did not write
+ * returns undefined and is therefore left alone; the trash is a directory an operator can also put
+ * things in, and retention must never touch what it cannot account for.
+ * @param {string} name - one direct child's name.
+ * @returns {{memberId: string, stamp: number}|undefined}
+ */
+export function parseTrashDirName(name) {
+  const match = /^(.+)-(\d+)$/.exec(name)
+  if (match === null) return undefined
+  const [, memberId, digits] = match
+  const stamp = Number(digits)
+  if (!Number.isSafeInteger(stamp)) return undefined
+  // Conservative identity rule: a Session id is letters, digits and these separators. Anything else
+  // is not a name this plugin wrote and is not considered.
+  if (memberId.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(memberId)) return undefined
+  return { memberId, stamp }
+}
+
+/**
+ * Bound one Lead's trash to `TRASH_LIMIT` artifacts, oldest first. The one deletion this plugin does
+ * on its own bytes: the platform has no Session-deletion API, so a cap that does not remove its own
+ * trash copies does not bound anything (ADR 0011).
+ *
+ * Conservative by construction:
+ *
+ *   - only direct children of this one Lead's trash directory are considered;
+ *   - only names shaped `<memberId>-<ms>` with a plausible member id and a numeric stamp qualify, and
+ *     only when a member record points at that exact path — a foreign name, a file, or an entry no
+ *     tombstone accounts for is left where it is;
+ *   - only a `trashState: 'done'` record may be removed. A `pending` move may or may not have landed,
+ *     so its entry is counted against the cap but never deleted.
+ *
+ * The caller has already confirmed the move and holds the roster, so nothing here writes a record: it
+ * answers which entries it removed and the caller flips those tombstones to `trashState: 'pruned'`.
+ *
+ * @param {{trashRoot: string, limit?: number, members?: object[]}} request - `members` is the Lead's
+ *   roster member array; `limit` exists for the tests and defaults to the fixed cap.
+ * @returns {Promise<{pruned: number, removed: Array<{memberId: string, trashPath: string}>}>}
+ */
+export async function pruneLeadTrash({ trashRoot, limit = TRASH_LIMIT, members = [] }) {
+  const none = { pruned: 0, removed: [] }
+  if (typeof trashRoot !== 'string' || trashRoot.trim() === '') return none
+  const entries = await readdir(trashRoot, { withFileTypes: true }).catch(() => undefined)
+  if (entries === undefined) return none
+
+  // The tombstone is the authority: an artifact is a candidate only when a record says the move
+  // landed (or is still in flight) and that this is where it went.
+  //
+  // `trashState` arrived with the cap in 0.7.0, so every tombstone written before it carries a
+  // `trashPath` and no state at all. A record with a path but no state has completed its move — the
+  // field simply did not exist yet — and treating it as anything else leaves the whole legacy trash
+  // permanently exempt, which is exactly what the first live run of the cap did.
+  const byPath = new Map()
+  for (const member of members) {
+    if (typeof member?.trashPath !== 'string' || member.trashPath === '') continue
+    byPath.set(resolve(member.trashPath), { ...member, trashState: member.trashState ?? 'done' })
+  }
+
+  const candidates = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const parsed = parseTrashDirName(entry.name)
+    if (parsed === undefined) continue
+    const trashPath = join(trashRoot, entry.name)
+    const member = byPath.get(resolve(trashPath))
+    if (member === undefined) continue
+    if (member.trashState !== 'done' && member.trashState !== 'pending') continue
+    candidates.push({ ...parsed, name: entry.name, trashPath, trashState: member.trashState })
+  }
+
+  const excess = candidates.length - limit
+  if (excess <= 0) return none
+
+  // Oldest first, by the millisecond stamp the name carries. A candidate always carries one, so the
+  // mtime fallback the design allows for an unparseable name is subsumed by the candidacy rule; the
+  // branch below is kept so widening that rule cannot silently change the order. Identical stamps
+  // fall back to the name, which keeps the order deterministic.
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.stamp)) {
+      const info = await lstat(candidate.trashPath).catch(() => undefined)
+      candidate.stamp = info?.mtimeMs ?? 0
+    }
+  }
+  candidates.sort((a, b) => a.stamp - b.stamp || (a.name < b.name ? -1 : 1))
+
+  const removed = []
+  for (const candidate of candidates) {
+    if (removed.length >= excess) break
+    if (candidate.trashState !== 'done') continue
+    try {
+      await rm(candidate.trashPath, { recursive: true, force: true })
+    } catch (error) {
+      // A file that refuses to go is reported by staying there, and the record keeps saying `done`.
+      continue
+    }
+    removed.push({ memberId: candidate.memberId, trashPath: candidate.trashPath })
+  }
+  return { pruned: removed.length, removed }
 }

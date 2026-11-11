@@ -26,6 +26,21 @@ export const PHASE = {
   failed: 'failed',
 }
 
+/**
+ * How far a retirement's artifact move got.
+ *
+ * `pruned` means the move landed and the artifact was later removed by the per-Lead retention cap
+ * (ADR 0011): the tombstone keeps `trashPath` — it still says where the artifact went — and differs
+ * from `done` in that the bytes are gone, so `restore_member` answers `pruned` instead of moving
+ * anything back.
+ */
+export const TRASH_STATE = {
+  pending: 'pending',
+  done: 'done',
+  none: 'none',
+  pruned: 'pruned',
+}
+
 /** Model-facing name rules, mirroring what the Harness accepts for child names. */
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
 
@@ -106,6 +121,9 @@ function parseRoster(value) {
       throw new Error('roster member generation must be a positive integer')
     }
     if (typeof PHASE[member.phase] !== 'string') throw new Error(`roster member phase "${String(member.phase)}" is unknown`)
+    if (member.trashState !== undefined && typeof TRASH_STATE[member.trashState] !== 'string') {
+      throw new Error(`roster member trashState "${String(member.trashState)}" is unknown`)
+    }
     if (member.assignment !== undefined) {
       if (typeof member.assignment !== 'string') throw new Error('roster member assignment must be a string')
       if (member.assignment.length > ASSIGNMENT_MAX) {
