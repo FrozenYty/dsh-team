@@ -1,0 +1,32 @@
+## 2026-11-11
+
+- **The repository exists, and it inherits the documentation rules of its neighbour.** Created as
+  `dsh-team-control` with the same shape as the other long-lived projects on this machine: `AGENTS.md`
+  for assistants, `CONTRIBUTING.md` for branches and commits, `PLAN.md` as the only task source,
+  `PROGRESS.md` append-only, bilingual documents in `docs/`, and one ADR per decision that is expensive
+  to reverse. `scripts/check.mjs` is the local gate — it proves the manifest, the entry syntax, locale
+  parity and the absence of machine-specific paths, and it deliberately cannot prove the plugin works.
+- **v0.1 was delivered and verified before the repository existed; it is recorded here so the record
+  starts complete.** The bundle now enables the shipped `compaction-basic` row (it shipped `inactive`,
+  which is why no agent had ever condensed anything) and adds two Team-Lead-only tools,
+  `member_context` and `compact_member`. Verified live: the row's status moved from `inactive` to
+  `schema`, `member_context` reports `compactor: available` with real token numbers, and the profile's
+  `command-compact` row was returned to its default after an experiment showed it cannot activate
+  without the unmounted `commands` service.
+- **The manual compaction idea was downgraded on measurement, not on taste.** A local child is unloaded
+  when it goes idle, and `compactNow()` requires a resident idle Agent, so a “compact this finished
+  member” button has almost no window to act in. The durable mechanism is automatic compaction at
+  wake/step time, which is what enabling the backend provides. `compact_member` stays, documented as
+  the narrow tool it is.
+- **Decision recorded in ADR 0001: stop extending the shipped roster, own it.** The shipped roster is a
+  fold over an append-only log with a closed phase set; a synthetic “retired” event does not fail
+  safely, it poisons the projection for that Lead. Upstream is replacing that design with plain
+  subagents and still defers deletion. The plugin will therefore own the roster on `ctx.subagents`,
+  with generation-suffixed names and a real retired state.
+- **Decision recorded in ADR 0002: the bundle entry imports nothing.** A profile bundle is linked from
+  its workspace path, so a bare `@deepseek-ai/*` import fails with `ERR_MODULE_NOT_FOUND` — the installed
+  first-party market plugin avoids dsh imports for the same reason. Tool definitions are built as
+  canonical JSON Schema objects instead.
+- **Two spikes are open and named in `PLAN.md`.** P2-01 needs the durable-storage API, P2-02 needs the
+  exact subagent lifecycle semantics including whether a retired child can be hidden from the app. Both
+  are being answered from the installed asar, not from memory.

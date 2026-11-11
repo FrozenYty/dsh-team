@@ -1,0 +1,21 @@
+# Team Control bundle patch.
+#
+# 1. Enable the shipped compaction backend. The row is present in the composed
+#    profile but inactive, so nothing condenses today: an agent has no automatic
+#    reduction, and a teammate (or the Lead) grows unchecked toward the window.
+#    `@deepseek-ai/dsh-compaction-basic` is a shipped package, so this bundle
+#    declares no dependency on it; the row resolves from the dsh installation.
+#
+#    Deliberately NOT enabled here: `command-compact` (`/compact`). It needs the
+#    `commands` service, which this profile also leaves unmounted, so enabling
+#    the row alone leaves it `absent`. Turning that chain on is a separate
+#    decision.
+#
+# 2. Insert this bundle's own Host plugin.
+- id: compaction-basic
+  disabled: false
+
+- insert:
+    - id: team-control
+      name: '@local/team-control'
+      config: {}

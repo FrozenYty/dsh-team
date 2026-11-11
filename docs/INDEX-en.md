@@ -1,0 +1,62 @@
+# Document index
+
+[中文](INDEX-zh.md)
+
+What is in this repository, which document answers what, and what else has to change alongside a
+given change. Read this before adding or moving a document.
+
+## 1. Reading order
+
+```
+README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the ADR that touches your change
+```
+
+1. `README.md` — what the plugin is and how to install it.
+2. `PLAN.md` — the only task source. Open work lives here.
+3. `PROGRESS.md` — why the current state looks like this. Append-only.
+4. `docs/architecture-en.md` — how the pieces fit, including the roster state matrix.
+5. `docs/adr/` — the decisions that are expensive to reverse.
+
+## 2. Document map
+
+| Question | Document | Language |
+|---|---|---|
+| What is this, and how do I install it? | `README.md` | pair |
+| What is left to do, and what does done mean? | `PLAN.md` | English |
+| What changed recently, and why? | `PROGRESS.md` | English |
+| How do agents and the roster fit together? | `docs/architecture-en.md` | pair |
+| Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
+| Why does the bundle entry import nothing? | `docs/adr/0002-zero-import-bundle-entry.md` | English |
+| How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
+| What are an assistant's rules here? | `AGENTS.md` | English |
+
+## 3. Authority
+
+When two documents disagree, the later one wins in this order:
+
+1. an accepted ADR,
+2. `docs/architecture-en.md`,
+3. `PLAN.md`,
+4. `README.md`,
+5. `PROGRESS.md` (a historical record — it describes what was true then, and is never corrected).
+
+The installed Harness beats all of them on Harness behaviour. If this repository and the running
+Harness disagree, the repository is wrong.
+
+## 4. What else changes alongside a change
+
+| If you change | Also update |
+|---|---|
+| a tool name, parameter or result field | `docs/architecture-en.md` §2 or §4.5, `README.md` + `README-zh.md`, `PLAN.md` task text |
+| a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |
+| a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
+| the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
+| a document added, renamed or removed | this file and `INDEX-zh.md` |
+| anything that alters the install procedure | `README.md` + `README-zh.md` |
+
+## 5. Not in this repository
+
+- The Harness itself. Its APIs are read from the installed application, not vendored here.
+- The profile. Installing this bundle changes the author's profile; the profile is not tracked.
+- The research that produced ADR 0001 and ADR 0002. It lives outside the repository, in the session's
+  research folder; the ADRs carry the conclusions that still matter.
