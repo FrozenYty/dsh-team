@@ -43,8 +43,8 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 |---|---|
 | `spawn_member` | 先占用一个带代次的名字并**持久化这条预留**，再通过 `ctx.subagents.startActivation` 以生成的 `childId` 和 `delivery: 'parent'` 启动可续聊子代理。启动失败会留下一条可见的 `failed` 记录，绝不会留下看不见的子代理。带 `replace` 时，同一次调用会退役前任，并让继任者从交接书启动（§4.4）。 |
 | `list_members` | 每条记录给出相态、代次、实时状态，驻留时还给出上下文压力。已退役成员仍以 `retired` 列出。 |
-| `retire_member` | 排空子代理、用 `ctx.workspaceRegistry.archiveSession` 归档其会话、给记录立碑。对“已结束的成员”和“正在跑的成员”两种情形都实测通过。 |
-| `restore_member` | 把回收站里的产物移回退役时记录的原始路径并清除墓碑；已有活成员占用该目标时拒绝。 |
+| `retire_member` | 排空子代理、给记录立碑（带上回收站路径与原始路径，以及是否改由工作区归档隐藏会话），再把持久化会话移入回收站目录。对已退役成员重复退役是无操作，返回 `retired: true, drained: false, reason: 'already-retired'`。对“已结束的成员”和“正在跑的成员”两种情形都实测通过。 |
+| `restore_member` | 把回收站里的产物移回退役时记录的原始路径并清除墓碑；已有活成员占用该目标时拒绝。没有墓碑可逆时是无操作成功，结果的 `reason` 会说明实际走了哪条分支。 |
 | `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`。运行中的成员在下一步收到；已卸载的成员从自己的会话冷恢复。实测：投递唤醒了卸载成员并得到回复。 |
 | `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`。只取消当前轮，保留激活、名额与收件箱。实测：成员正跑长命令时被中断，且没有留下收尾消息。 |
 
@@ -57,7 +57,7 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 记录存在一个以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。命名规则：代次 1 用裸名字；代次 2 起用 `<base>-g<N>`，因此继任者绝不会与已退役的名字相撞。退役后再用同一个基名创建，就是替换操作：`probe-a` 退役、`probe-a-g2` 启动，两条记录都在。
 
-在 P2-07 关闭官方工具行之前，两个花名册并存：`list_agents` 报官方那套，`list_members` 报自建这套，二者不是同一集合。
+在 P2-07 关闭官方工具行之前，两个花名册并存。`list_agents` 是官方工具，报官方花名册；`list_members` 报的是官方花名册的成员**加上**收养的全部后代与本插件启动的成员，因此它是 `list_agents` 的超集，而不是另一个不相交的集合。
 
 ### 2.4 宿主侧效果
 
@@ -72,10 +72,10 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 ### 2.5 退役会移走产物
 
-`retire_member` 先排空子代理，再把它的持久化会话移入
-`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，带着这个路径给记录立碑，并刷新上面两个效果。真正让成员从宿主的自有发现里消失的是**移动**——session-query 会摘掉已经不在的文件。没有删除：跨设备兜底是唯一会移除源的分支；产物移不动时退回工作区归档隐藏会话。
+`retire_member` 先排空子代理、写出墓碑（带上即将使用的回收站路径与 `trashState: 'pending'` 标记），再把持久化会话移入
+`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，最后把记录确认为 `trashState: 'done'`。顺序是刻意的：先让记录退役、再碰文件系统，因此两者之间崩溃留下的是“一条 `retired` 记录配一份要么还没移动、要么已经进回收站的产物”——两种情况都可恢复，因为 `pending` 表示“移动可能发生也可能没有”，而恢复会先去回收站找。反过来则会留下“已进回收站的会话 + `active` 记录”，之后任何一次读取都解释不通。真正让成员从宿主的自有发现里消失的是**移动**——session-query 会摘掉已经不在的文件。没有删除：跨设备兜底是唯一会移除源的分支；产物移不动时改由工作区归档隐藏会话（`archived: true`、`trashState: 'none'`，并丢弃计划中的回收站字段），记录与返回结果都会说明走的是哪一条。
 
-恢复是同样明确的逆操作：记录里保留了原始路径和产物类型，所以 `restore_member` 是**移动**而不是猜测。它绝不覆盖已存在的目标、拒绝活成员已占用的名字，移动失败时记录保持退役状态。
+恢复是同样明确的逆操作：记录里保留了原始路径和产物类型（`trashKind`——会话目录或单个产物文件），所以 `restore_member` 是**移动**而不是猜测，返回结果会说明实际走的是哪条分支——移回、工作区取消隐藏，还是记录本来就处于活动状态。它绝不覆盖已存在的目标、拒绝活成员已占用的名字，移动失败时记录保持退役状态。
 
 ## 3. 为什么不扩展官方花名册
 
@@ -101,47 +101,67 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 有两个 Harness 事实塑造了退役流程：
 
 - `drainChildren(parent, [childId])` 停掉单个子代理、释放名额与驻留，但子代理的会话与父会话里的 `subagent/catalog` 条目会保留。被排空的子代理会被官方 `list_agents` 永久列出，这正是我们要有自己的列表工具的原因。
-- `ctx.workspaceRegistry.archiveSession` 会把一个会话从所有工作区界面隐藏。它可逆、不删除任何东西，正好适合已退役的成员。
+- `ctx.workspaceRegistry.archiveSession` 会把一个会话从所有工作区界面隐藏。它可逆、不删除任何东西，因此适合作为“产物移不动”时的兜底。
 
 ### 4.2 花名册记录
 
-每个成员一条持久记录，存在插件自己的存储里，以 Lead 会话 id 为键（具体服务在 P2-01 选定，随后补 ADR）。
+每个 Lead 会话一条花名册记录，里面是该团队的成员记录；表以 Lead 会话 id 为键（ADR 0003）。
 
 ```
-memberId      稳定身份，由本插件生成
-name          模型侧名字，在 Lead 的花名册内唯一
+memberId      稳定身份：本插件启动的成员在此生成，收养的子代理用它的子会话 id
+name          模型侧名字，只在当前成员之间唯一
 generation    名字的第一位持有者是 1，继任者是 2，以此类推
-childId       子代理会话 id；provisioning 期间可能没有
-phase         provisioning | active | dormant | retired | failed
+childId       子代理会话 id，随预留一起写入
+phase         provisioning | active | retired | failed
 label         给模型看的职责描述
 assignment    成员正在做什么，由模型写入；最多 1000 个字符（§4.4）
 createdAt     ISO 时间戳
-retiredAt     仅在 phase = retired 时存在
-predecessor   被本成员替换掉的 memberId（如果它是继任者）
+predecessor   被本成员替换掉的 memberId，仅出现在带 `replace` 启动的继任者上
+adopted       该记录是从别的花名册收养而来（而不是本插件启动）时为 true
+note          启动错误，仅出现在启动失败的记录上
+retiredAt     ISO 时间戳，仅出现在墓碑上
+retireReason  模型给出的退役原因（如果给了）
+trashPath     会话产物被移入的回收站目录，在墓碑上
+originalPath  该产物原来的位置，使恢复是移动而不是猜测
+trashKind     移动的是什么：会话目录为 `directory`，单个产物文件为 `file`
+trashState    移动在途时为 `pending`，落地后为 `done`，压根没有可移动之物时为 `none`
+archived      产物移不动、改由工作区归档隐藏会话时为 true
 ```
 
-`assignment` 是继任者交接书所依据的持久陈述：用 `spawn_member.assignment` 写入，用
-`message_member.assignment` 替换，出现在每一行 `list_members` 上，退役后仍留在墓碑里。`briefPath`
-当初是为“成员自己写交接书”预留的；本版本不向成员索要交接书，因此该字段尚不存在（P4-02）。
+没有其他字段；特别地，没有 `dormant` 相态（§4.3），也没有 `briefPath`：交接书在替换时由
+`assignment` 合成，可复用的存储模板仍属 P4-02。
 
-`name` 只在**当前**成员之间唯一。继任者复用它并把 `generation` 加一——官方花名册做不到这一点，因为它把名字视为永久占用。记录存在一个 `storageDomain` 域里，而不是会话日志里（ADR 0003）：每个成员 id 一条记录，另有一条以 Lead 会话 id 为键的索引。
+`assignment` 是继任者交接书所依据的持久陈述：用 `spawn_member.assignment` 写入，用
+`message_member.assignment` 替换，出现在每一行 `list_members` 上，退役后仍留在墓碑里。
+
+`name` 只在**当前**成员之间唯一。继任者复用它并把 `generation` 加一——官方花名册做不到这一点，因为它把名字视为永久占用。每次改动都是花名册表上的一次原子 `update`，不是“先读再 put”；每个操作在决定之前都重读花名册，因此同一模型轮次里的两次工具调用看到的是彼此的写入，而不是互相覆盖（§4.3）。
 
 ### 4.3 状态矩阵
 
-实现转移之前，每个格子都要先被决定（AGENTS.md §4.8）。事件是插件操作与 Harness 通知；`—` 表示该事件被带类型地拒绝。
+实现转移之前，每个格子都要先被决定（AGENTS.md §4.8）。四个相态就是 `PHASE` 里的那四个。**拒绝**表示刻意不受理：调用会说明原因而不是执行，既不是崩溃，也不是遗漏。“同基名”指启动某个基名，而该基名的前一持有者正处于该相态。
 
-| 相态 \ 事件 | spawn | replace | 发消息 | 停止 | 退役 | 子代理完成 | 子代理失败 |
-|---|---|---|---|---|---|---|---|
-| provisioning | 拒绝 | 先启动继任者，再 `retired` 并排空 | 排队直到 active | 拒绝 | 标记 retired 并排空 | `active` | `failed` |
-| active | 拒绝 | 先启动继任者，再 `retired` 并排空 | 投递 | `active`（仅停止本轮） | `retired` 并排空 | `dormant` | `failed` |
-| dormant | 拒绝 | 先启动继任者，再 `retired` | 投递，转为 `active` | 无操作 | `retired` | 不适用 | 不适用 |
-| retired | 拒绝 | 用墓碑启动继任者；退役这一半是无操作 | 拒绝，带类型原因 | 无操作 | 无操作 | 忽略 | 忽略 |
-| failed | 拒绝 | 先启动继任者，再 `retired` | 拒绝，带类型原因 | 无操作 | `retired` | 忽略 | 忽略 |
+| 相态 \ 事件 | 收养 | spawn（同基名） | replace | 发消息 | 停止 | 压缩 | 退役 | 恢复 |
+|---|---|---|---|---|---|---|---|---|
+| `provisioning` | 收养不会产生该相态——被收养的记录从 `active` 或 `failed` 开始 | 预留下一代次；本行不受影响 | 先启动继任者，再排空并给这条预留立碑 | 通过 `sendMessage` 投递；尚未发布的子代理会被子代理服务拒绝，错误如实上报 | 子代理未驻留时无操作，已驻留则取消本轮 | 在它驻留且空闲之前拒绝 `not-resident` | 先排空，再立碑；此时产物通常还移不动，因此 `trashed: false`，由归档分支决定 | 无操作成功——没有墓碑可逆 |
+| `active` | 无操作——身份就是子会话 id，已认识的子代理不会被收养两次 | 预留下一代次；本行不受影响 | 继任者从交接书启动，随后本成员被排空并立碑 | 投递；运行中的子代理在下一步看到，已卸载的会冷恢复 | 取消当前轮；激活、收件箱与记录保留 | 驻留且空闲时原地压缩；运行中拒绝 `busy`，已卸载拒绝 `not-resident` | 排空、立碑（`pending`）、移动并确认、刷新宿主侧效果 | 无操作成功：`restored: true, reason: 'already-active'` |
+| `retired` | 无操作——墓碑持有子会话 id，这正是阻止重新收养的东西 | 允许：同基名的下一代次启动，不带替换关系（§2.3） | 继任者用墓碑里的交接书启动；退役这一半是无操作（`reason: 'already-retired'`） | 拒绝 `retired` | 拒绝 `retired` | 拒绝——只有 `provisioning` 与 `active` 可寻址 | 重复调用：无操作成功，`retired: true, drained: false, reason: 'already-retired'` | 把产物移回，或走工作区取消隐藏分支；`reason` 说明走的是哪条 |
+| `failed` | 无操作——已知子会话 id | 预留下一代次；本行不受影响 | 先启动继任者，再给这条记录立碑 | 拒绝 `failed`——子代理从未启动，没有东西能接收 | 拒绝 `failed` | 拒绝——只有 `provisioning` 与 `active` 可寻址 | 受理并立碑；通常既没有可排空的，也没有可移动的 | 无操作成功——不是墓碑，没有可逆内容 |
 
-`replace` 是一次模型调用，由 `spawn` 与 `retire` 合成（`spawn_member` 带 `replace`）。两半的顺序是刻意的：每个格子里都先启动继任者，因此启动失败时这一行原封不动，而退役失败会返回
-`predecessor_retired: false` 并说明原因。
+Harness 通知是任何插件操作都无法阻止的事件：
 
-`dormant` 推迟到 P4-01：当前实现把 `active` 作为生命周期相态，另外单独报告实时状态（`running`、`idle`、`unloaded`），因此被卸载的成员依然可见，不需要第二个持久相态。
+| 相态 \ 通知 | 子代理本轮结束 | 子代理本轮失败 | 宿主排空或卸载该子代理 | 持久化会话消失 |
+|---|---|---|---|---|
+| `provisioning` | 不适用——预留发生在任何轮次之前 | `failed`，启动错误写进 `note`；这是本插件唯一记录的失败 | 观察不到；预留一直保留到启动有结果 | 退役返回 `trashed: false` 并给出原因，随后归档分支隐藏该会话 |
+| `active` | 无持久变化——观察不到完成通知；相态保持 `active`，实时状态报 `unloaded` | 无持久变化——启动之后的失败在这里不可见，记录保持 `active` | 相态不变，实时状态 `unloaded`；仍可发消息（冷恢复），也可退役 | 退役返回 `trashed: false` 并退回归档；恢复返回原因，记录保持退役 |
+| `retired` | 忽略——没有活子代理 | 忽略 | 忽略 | 恢复拒绝，记录保持退役 |
+| `failed` | 忽略 | 忽略 | 忽略 | 忽略 |
+
+这些格子依赖的前提：
+
+- **没有 `dormant`。** 上面四个相态就是 `roster.js` 里 `PHASE` 的全部；实时状态（`running`、`idle`、`unloaded`）在调用时从 Harness 读取，从不存储。`dormant` 相态属于 P4-01，连同那个会设置它的完成钩子。
+- **`replace` 是一次模型调用，由 `spawn` 与 `retire` 合成。** 每个格子里都先启动继任者，因此启动失败时这一行原封不动，而退役失败会返回 `predecessor_retired: false` 并说明原因。
+- **同一模型轮次里的两个工具。** 每次调用都重读花名册，每次改动都是花名册表上的一次原子 `update`（§4.2），因此第二次调用是在第一次的结果上行动：同一轮里先 `message_member` 再 `retire_member` 会先投递再立碑，反过来则拒绝 `retired`，先 `retire_member` 再 `spawn_member` 会启动下一代次。并行的工具调用由存储表串行化，而不是由调用方。
+- **已退役或失败的成员仍是一条可控记录。** 它可以被列出、退役、替换：`retire_member` 与 `restore_member` 的查找覆盖任何相态。只有需要活子代理的 `message_member` 与 `stop_member` 是窄的，它们以带类型的原因 `retired`、`failed` 或 `missing` 拒绝。
 
 有两个格子代价最高，特意点名：
 
@@ -151,31 +171,37 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 
 ### 4.4 退役与替换
 
-退役是一套协议而不是删除，因为成员的会话是持久的、工作可能做了一半：
+退役是一套协议而不是删除，因为成员的会话是持久的、工作可能做了一半。`retire_member` 按代码里的顺序做这些事：
 
-1. **记录**——工作的持久陈述就是成员的 `assignment`：模型用 `spawn_member.assignment` 写入，用
-   `message_member.assignment` 保持最新；上限 1000 个字符，因此记录不会无限增长。本版本没有“成员自己写交接书”这一步：向成员索要交接书要花一次模型往返，而需要交接时它往往正好无响应或已失败。可复用的存储模板留给 P4-02。
-2. **对账**——Lead 在采信之前，用工作区和共享任务板核对这份职责；与仓库矛盾的交接书是发现，不是计划。
-3. **排空**——`retire_member` 通过 `ctx.subagents.drainChildren(lead, [childId])` 排空子代理，释放它的激活名额与驻留。
-4. **移动并立碑**——持久化会话移入插件的回收站目录，记录转为 `retired` 并带上该路径，同时保留 `assignment`。没有可移动的产物时，退回工作区归档作为隐藏手段。
+1. **记下原因**——模型给出的 `reason` 写进墓碑的 `retireReason`。
+2. **排空**——`ctx.subagents.drainChildren(lead, [childId])` 停掉子代理，释放它的激活名额与驻留。从未发布过的、或已经结束的子代理没有可排空的；两种情况都继续退役，因为生命周期事实由记录掌握。
+3. **立碑**——记录转为 `retired`，带上 `retiredAt`、`assignment`、原因，以及下一步准备使用的回收站路径，并标记 `trashState: 'pending'`（没有可移动之物时直接是 `'none'`）；这一步发生在碰文件系统**之前**（§2.5）。在这里崩溃留下的是“退役记录 + 要么没移动、要么已进回收站的产物”；`pending` 表示无从确定，恢复会先去回收站找，因此两种情况都能收尾。
+4. **移动产物并确认**——持久化会话移入插件的回收站目录，记录随后确认为 `trashState: 'done'`，并写上 `trashPath`、`originalPath` 与 `trashKind`。没有可移动的产物时，改由工作区归档隐藏会话，丢弃计划中的回收站字段，记录与返回结果都会说明这一点（`archived: true`、`trashState: 'none'`）。`archived` 与 `trashPath` 互斥：只有没发生移动时才会走归档分支。
 5. **隐藏**——宿主投影出口不再下发已退役 id，所有客户端因此丢掉该成员；花名册保留回收站路径以便手工恢复。
-6. **替换**——`spawn_member` 带 `replace: <target>` 会为继任者合成一份简短、自足的提示词：继任者的名字、前任的 target 与 label、记录在案的职责、前任已离场这一事实，以及按前任名字指向共享团队任务板的指针。任务板不复制、不重复。它还会对前任执行第 3–5 步。**同一次调用里先启动继任者、再退役前任**：启动失败则前任原封不动且仍然活着；退役失败则返回 `predecessor_retired: false` 与原因，再调一次 `retire_member` 即可收尾。目标已经退役时同样接受，由墓碑提供交接书。ADR 0009 记录了该顺序以及被否掉的替代方案。
+6. **报告**——返回结果带 `retired`、`drained`、`archived`、`trashed`，有回收站路径时再带 `trash_path`。重复调用是无操作，返回 `retired: true, drained: false, reason: 'already-retired'`。
+
+工作的持久陈述就是成员的 `assignment`：模型用 `spawn_member.assignment` 写入，用
+`message_member.assignment` 保持最新；上限 1000 个字符，因此记录不会无限增长。
+
+**替换。** `spawn_member` 带 `replace: <target>` 会为继任者合成一份简短、自足的提示词：继任者的名字、前任的 target 与 label、记录在案的职责、前任已离场这一事实，以及按前任名字指向共享团队任务板的指针。任务板不复制、不重复。之后它会对前任执行第 2–6 步。**同一次调用里先启动继任者、再退役前任**：启动失败则前任原封不动且仍然活着；退役失败则返回 `predecessor_retired: false` 与原因，再调一次 `retire_member` 即可收尾。目标已经退役时同样接受，由墓碑提供交接书。ADR 0009 记录了该顺序以及被否掉的替代方案。
 
 继任者拿到的是被继承的工作，而不是前任状态的副本：除非模型重新记录，继任者继承前任的
 `assignment`，因此反复替换不会让记录一代比一代更薄。
 
+**尚未实现、因此不作为行为描述（P4-02）。** 没有“成员自己写交接书”这回事，也没有交接书文件：向成员索要交接书要花一次模型往返，而需要交接时它往往正好无响应或已失败，所以交接书由记录合成。代码里也没有任何“用工作区和任务板核对职责”的步骤——那是 Lead 的判断，插件只是指向任务板。可复用的存储模板属于 P4-02。
+
 ### 4.5 模型侧接口
 
-本插件只有 Host 半区，因此它拥有的每个操作都是工具（ADR 0008）。全部为 Lead 专属，`list_members` 行的 `target` 就是其他工具接受的唯一选择器。行上的 `child_id` 是宿主自有列表展示的持久身份；它只被报告，不作为第二个选择器——否则七个工具都要同时支持它才一致，而 target 在可寻址成员中本来就唯一。
+本插件只有 Host 半区，因此它拥有的每个操作都是工具（ADR 0008）。全部为 Lead 专属，`list_members` 行的 `target` 就是其他工具接受的唯一选择器。行上的 `child_id` 是宿主自有列表展示的持久身份；它只被报告，不作为第二个选择器——否则七个工具都要同时支持它才一致，而 target 在可寻址成员中本来就唯一。Lead 判定刻意留有余地：没有父会话的活智能体就是根智能体，按 Lead 对待，因此一次失败的成员关系投影不会让所有工具失效。
 
 | 工具 | 行为 |
 |---|---|
 | `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `replace` 时，让继任者从交接书启动，并在同一次调用里退役前任（§4.4）。 |
 | `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment` 与实时状态，驻留时另带压力与 `compactable`。 |
-| `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。 |
-| `stop_member` | 只取消目标当前轮，保留激活与收件箱。 |
-| `retire_member` | 排空、把会话产物移入回收站、给记录立碑并刷新宿主侧效果。 |
-| `restore_member` | 把回收站里的产物移回，记录转回 active。 |
+| `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。 |
+| `stop_member` | 只取消目标当前轮，保留激活与收件箱；对已退役或已失败的目标按与 `message_member` 相同的带类型原因拒绝。 |
+| `retire_member` | 排空、立碑、把会话产物移入回收站并刷新宿主侧效果（§4.4）；重复调用是无操作，返回 `reason: 'already-retired'`。 |
+| `restore_member` | 把回收站里的产物移回，记录转回 `active`；结果会说明实际走了哪条分支，没有可逆内容时是无操作成功而不是报错。 |
 | `compact_member` | 对驻留且空闲的目标强制压缩一次。 |
 
 操作体在 `actions.js`；`index.js` 只保留参数校验、Lead 专属权限检查与工具结果 schema。替换刻意不新增工具：`spawn_member` 与 `message_member` 各多一个参数，而不是让模型为同一件事再学第三个名字（ADR 0009）。官方花名册工具保持启用：共享任务板归它们所有，而收养机制让它们创建的成员同样可退役。将来可由 P2-09 换掉任务板，再关闭官方工具行。
@@ -197,7 +223,7 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | 子代理生命周期 | `ctx.subagents.startActivation`、`sendMessage`、`interrupt`、`drainChildren` |
 | 列出全部子代理后代 | `ctx.subagents.listDescendants(rootSessionId, signal)`；行带 `id`、`mode`、`label?`、`parentId`、`depth` |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
-| 隐藏已退役的子代理 | `ctx.workspaceRegistry.archiveSession`（可逆，不删除） |
+| 隐藏产物移不动的会话 | `ctx.workspaceRegistry.archiveSession`／`unarchiveSession`（可逆，不删除；退役与恢复的兜底分支） |
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
 | 补偿官方花名册名额 | 补丁旧花名册的 `maxMembers` getter 与 `spawn`（ADR 0004） |
 | 把退役会话挪开 | `ctx.get('sessionPersistence').stat(id).location.path` + rename 进回收站 |

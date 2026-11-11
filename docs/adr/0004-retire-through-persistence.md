@@ -53,8 +53,8 @@ the feature instead of failing the plugin.
   A Harness upgrade degrades to "retirement works, the UI still lists the member", which is exactly the
   v0.2 behaviour.
 - Wrapping shared services is visible to other plugins. The wrappers are transparent (same arguments,
-  same return shape, mutated copy of the payload), restore on unload, and mark themselves so a reload
-  neither wraps twice nor compounds.
+  same return shape, the payload mutated in place so a caller's reference stays valid), restore on
+  unload, and mark themselves so a reload neither wraps twice nor compounds.
 - Retirement writes outside the Session log. The trash directory is recoverable by hand, and the record
   points at it; there is deliberately no `rm` outside the cross-device move fallback.
 - A retired member cannot be resumed: its artifact is gone from the live store. That is the intended

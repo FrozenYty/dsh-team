@@ -10,9 +10,11 @@ context tooling for long-running teammates.
 successor from a short brief and then retires the predecessor (ADR 0009). v0.4 is model-facing only —
 the Settings panel and its loopback HTTP bridge that shipped in v0.3 were removed, because the panel was
 never rendered in a real profile and its clicks did not work — and the same effort went into the
-model-facing surface, which now covers every subagent an agent spawns (ADR 0008). The lifecycle tools
-themselves are installed and verified in the author's profile. Recent changes are in
-[PROGRESS.md](PROGRESS.md).
+model-facing surface, which now covers every subagent an agent spawns (ADR 0008). The lifecycle tools are
+installed in the author's profile and were exercised live there at v0.5.0: retirement, restore, message,
+stop, and one replacement whose successor read the handoff brief and finished its predecessor's task
+(P2-08). The working tree has changed since that install, so the newest change is covered by the unit
+tests only; a fresh install is the owner's decision. Recent changes are in [PROGRESS.md](PROGRESS.md).
 
 **Repository**: [github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -41,8 +43,8 @@ This plugin supplies the missing half, without forking the shipped roster.
 | `list_members` | The roster: target, child session id, phase, generation, the assignment recorded for the member, live state, and — while resident — context pressure and `compactable`. Adopts members the shipped roster created **and** children spawned with the shipped `subagent` / `subagent_fork` tools, so every subagent the model controls is listed and retirable. |
 | `message_member` | Deliver one message to a live member, and optionally replace the assignment recorded for it; an unloaded member is cold-resumed from its own Session. |
 | `stop_member` | Cancel only the current turn; the activation and inbox are kept. |
-| `retire_member` | Drain, move the Session artifact to a recoverable trash directory, and tombstone the record. |
-| `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. |
+| `retire_member` | Drain, tombstone, move the Session artifact to a recoverable trash directory, and record whether the workspace archive hid it instead. Retiring an already-retired member is a no-op that says so. |
+| `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. The result says which branch ran, and a restore with nothing to invert is a no-op rather than an error. |
 | `compact_member` | Force one compaction on a resident, idle member. |
 
 Plus two host-side effects, applied for every retirement:
@@ -74,7 +76,7 @@ rather than repaired, and the effort moved into the model-facing surface above (
 |---|---|
 | Stop | The child is drained; its activation and capacity slot are released. |
 | Move | Its persisted session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`. Move, not delete: recovery is a directory move back. |
-| Tombstone | The roster record becomes `retired`, the name becomes available at the next generation, and the projections stop serving the member. |
+| Tombstone | The roster record becomes `retired`, the name becomes available at the next generation, and the projections stop serving the member. Retiring it again is a no-op that says so. |
 | Fallback | If the artifact cannot be moved, the workspace archive hides the Session instead, and the result says so. |
 | Restore | `restore_member` moves the artifact back to its recorded original path and clears the tombstone. It refuses when a live member already uses the target. |
 

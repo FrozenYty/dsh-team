@@ -57,8 +57,8 @@ path.
 |---|---|
 | `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. With `replace`, the same call retires the predecessor and starts its successor from a handoff brief (§4.4). |
 | `list_members` | Every record with phase, generation, live status and — while resident — context pressure. Retired members stay listed as `retired`. |
-| `retire_member` | Drains the child, moves its persisted Session into the trash directory, and tombstones the record with the trash and original paths. Verified against a finished member and a member mid-turn. |
-| `restore_member` | Moves the trashed artifact back to the path recorded at retirement and clears the tombstone; refuses when a live member already owns the target. |
+| `retire_member` | Drains the child, tombstones the record with the trash and original paths — and with whether the workspace archive hid the session instead — and moves the persisted Session into the trash directory. Retiring an already-retired member is a no-op that answers `retired: true, drained: false, reason: 'already-retired'`. Verified against a finished member and a member mid-turn. |
+| `restore_member` | Moves the trashed artifact back to the path recorded at retirement and clears the tombstone; refuses when a live member already owns the target. A restore with no tombstone to invert is a no-op success, and the result's `reason` names which branch ran. |
 | `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`. A running member receives it at its next step; an unloaded member is cold-resumed from its own Session. Verified live: a delivered message woke an unloaded member, which replied. |
 | `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`. Cancels the current turn only; the activation, slot and inbox are kept. Verified live: a member running a long command was interrupted and left no closing message. |
 
@@ -88,7 +88,9 @@ collides with a retired name. Spawning the same base name after a retirement is 
 `probe-a` retired, `probe-a-g2` started, both recorded.
 
 The shipped team roster and this roster coexist until P2-07 disables the shipped tool row. `list_agents`
-reports one; `list_members` reports the other. They are different sets.
+is the shipped tool and reports the shipped roster; `list_members` reports that roster's members **plus**
+every adopted descendant and every member this plugin spawned, so it is a superset of `list_agents`, not a
+disjoint set.
 
 ### 2.4 Host-side effects
 
@@ -107,16 +109,24 @@ copied so a caller's reference stays valid.
 
 ### 2.5 Retirement moves the artifact
 
-`retire_member` drains the child, moves its persisted Session into
-`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, tombstones the record with that path, and
-refreshes the two effects above. The move is what removes the member from the host's own discovery, since
-session-query drops an artifact that no longer exists. Nothing is deleted: the cross-device fallback is
-the only branch that removes the source, and the workspace archive hides the Session when no artifact can
-be moved.
+`retire_member` drains the child, writes the tombstone — carrying the trash path the move is about to
+use and a `trashState: 'pending'` marker — and then moves the persisted Session into
+`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, confirming the record with
+`trashState: 'done'`. The order is deliberate: the record is retired before anything touches the
+filesystem, so a crash between the two leaves a `retired` row beside an artifact that is either still in
+place or already in the trash — recoverable in both cases, because `pending` says the move may or may not
+have happened and restore looks in the trash first. The reverse order would leave a trashed session
+behind an `active` record, which no later read could explain. The move is what removes the member from the
+host's own discovery, since session-query drops an artifact that no longer exists. Nothing is deleted: the
+cross-device fallback is the only branch that removes the source, and when no artifact can be moved the
+workspace archive hides the Session (`archived: true`, `trashState: 'none'`, and the intended trash fields
+are dropped); the record and the result say which of the two happened.
 
-Restoration is the inverse and equally explicit: the record keeps the original path and the artifact kind,
-so `restore_member` is a move rather than a guess. It never overwrites an existing destination, refuses a
-target a live member already owns, and leaves the record retired when the move cannot be made.
+Restoration is the inverse and equally explicit: the record keeps the original path and the artifact
+kind (`trashKind` — the Session directory or a single artifact file), so `restore_member` is a move
+rather than a guess, and its result says which branch ran: the move back, the workspace unhide, or a
+record that was already active. It never overwrites an existing destination, refuses a target a live member already owns,
+and leaves the record retired when the move cannot be made.
 
 ## 3. Why the shipped roster is not extended
 
@@ -156,62 +166,94 @@ Two Harness facts shape retirement:
   Session and the parent's `subagent/catalog` entry survive. A drained child stays listed by the stock
   `list_agents` forever, which is why our own list tool exists.
 - `ctx.workspaceRegistry.archiveSession` hides a Session from every workspace surface. It is reversible
-  and deletes nothing, which makes it exactly right for a retired member.
+  and deletes nothing, which makes it the fallback for a retired member whose artifact could not be
+  moved.
 
 ### 4.2 Roster record
 
-One durable record per member, kept in a plugin-owned store keyed by the Lead Session id (the exact
-service is chosen in P2-01; ADR follows).
+One roster record per Lead Session holds that team's member records; the table is keyed by the Lead
+Session id (ADR 0003).
 
 ```
-memberId      stable identity, generated by this plugin
-name          model-facing name, unique within the Lead's roster
+memberId      stable identity: generated here for a member this plugin spawned, the child
+              Session id for an adopted child
+name          model-facing name, unique among current members
 generation    1 for the first holder of a name, 2 for its successor, ...
-childId       the subagent Session id, or absent while provisioning
-phase         provisioning | active | dormant | retired | failed
+childId       the subagent Session id, assigned with the reservation
+phase         provisioning | active | retired | failed
 label         the responsibility text shown to the model
 assignment    what the member is doing, set by the model; at most 1000 characters (§4.4)
 createdAt     ISO timestamp
-retiredAt     ISO timestamp, present only when phase = retired
-predecessor   memberId this member replaced, when it is a successor
+predecessor   memberId this member replaced, present only on a successor started with `replace`
+adopted       true when the record was adopted from another roster instead of spawned here
+note          the start error, present only on a record whose spawn failed
+retiredAt     ISO timestamp, present only on a tombstone
+retireReason  the reason the model gave for the retirement, when it gave one
+trashPath     the trash directory the Session artifact was moved to, on a tombstone
+originalPath  where that artifact came from, so restore is a move and not a guess
+trashKind     what was moved: `directory` for the Session directory, `file` for a single artifact
+trashState    `pending` while the move is in flight, `done` once it landed, `none` when there was none
+archived      true when no artifact could be moved and the workspace archive hid the Session instead
 ```
+
+There is no other field, and in particular no `dormant` phase (§4.3) and no `briefPath`: the brief is
+composed at replacement time from `assignment`, and a stored, reusable template is still P4-02.
 
 `assignment` is the durable statement a successor is briefed with. It is set with
 `spawn_member.assignment`, replaced with `message_member.assignment`, reported on every `list_members`
-row, and kept on the tombstone after retirement. `briefPath` was drafted for a brief the member writes
-itself; this version does not ask the member for one, so the field does not exist yet (P4-02).
+row, and kept on the tombstone after retirement.
 
 `name` is unique among **current** members. A successor reuses the name with `generation + 1`, which
-the shipped roster cannot do because it treats a name as permanently taken. Records live in one
-`storageDomain` domain, not in the Session log (ADR 0003): one record per member id, plus a
-per-Lead index keyed by the Lead Session id.
+the shipped roster cannot do because it treats a name as permanently taken. Every mutation is one atomic
+`update` on the roster table, not a read followed by a `put`, and every operation re-reads the roster
+before it decides: two tools called in the same model turn therefore see each other's write instead of
+overwriting it (§4.3).
 
 ### 4.3 State matrix
 
-Every cell is decided before implementation (AGENTS.md §4.8). Events are plugin operations and Harness
-notices; a dash means the event is rejected with a typed reason.
+Every cell is decided before implementation (AGENTS.md §4.8). The four phases are the ones `PHASE` holds.
+**refusal** marks a deliberate rejection: the call reports why instead of acting, and it is neither a crash
+nor an omission. "Same base" means spawning the name whose earlier holder is in that phase.
 
-| Phase \ Event | spawn | replace | message | stop | retire | child completes | child fails |
-|---|---|---|---|---|---|---|---|
-| provisioning | reject | start successor, then `retired` + drain | queue until active | reject | mark retired, drain | `active` | `failed` |
-| active | reject | start successor, then `retired` + drain | deliver | `active` (turn stopped) | `retired` + drain | `dormant` | `failed` |
-| dormant | reject | start successor, then `retired` | deliver, becomes `active` | no-op | `retired` | not applicable | not applicable |
-| retired | reject | start successor from the tombstone; the retire half is a no-op | reject, typed reason | no-op | no-op | ignore | ignore |
-| failed | reject | start successor, then `retired` | reject, typed reason | no-op | `retired` | ignore | ignore |
+| Phase \ Event | adopt | spawn (same base) | replace | message | stop | compact | retire | restore |
+|---|---|---|---|---|---|---|---|---|
+| `provisioning` | not produced by adoption — an adopted record starts `active` or `failed` | reserves the next generation; this row is untouched | successor starts, then this reservation is drained and tombstoned | delivered through `sendMessage`; a child that has not published yet is refused by the subagent service and the error is reported | no-op unless the child is already resident, then its turn is cancelled | refusal `not-resident` until it is resident and idle | drain, then tombstone; the artifact usually cannot be moved yet, so `trashed: false` and the archive branch decides | no-op success — there is no tombstone to invert |
+| `active` | no-op — identity is the child id, so a known child is never adopted twice | reserves the next generation; this row is untouched | successor starts from the brief, then this member is drained and tombstoned | delivered; a running child sees it at its next step, an unloaded one is cold-resumed | current turn cancelled; activation, inbox and record kept | compacts in place when resident and idle; refusal `busy` while running, `not-resident` when unloaded | drain, tombstone (`pending`), move and confirm, refresh the host effects | no-op success: `restored: true, reason: 'already-active'` |
+| `retired` | no-op — the tombstone holds the child id, which is what stops re-adoption | allowed: a new generation of the base starts with no replacement link (§2.3) | successor starts from the tombstone's brief; the retire half is a no-op (`reason: 'already-retired'`) | refusal `retired` | refusal `retired` | refusal — only `provisioning` and `active` are addressable | repeat: no-op success, `retired: true, drained: false, reason: 'already-retired'` | moves the artifact back, or runs the workspace unhide branch; `reason` names which one ran |
+| `failed` | no-op — known child id | reserves the next generation; this row is untouched | successor starts, then this record is tombstoned | refusal `failed` — the child never started, so there is nothing to receive it | refusal `failed` | refusal — only `provisioning` and `active` are addressable | accepted and tombstoned; there is usually nothing to drain or move | no-op success — there is nothing to invert, because the record is not a tombstone |
 
-`replace` is one model call composed of `spawn` and `retire` (`spawn_member` with `replace`). The two
-halves are ordered deliberately: the successor starts first in every cell, so a start that fails leaves
-the row exactly as it was, and the retire half reports `predecessor_retired: false` when it fails.
+Harness notices are the events no plugin operation can prevent:
 
-`dormant` is deferred to P4-01: the shipped implementation keeps `active` as the lifecycle phase and
-reports live state (`running`, `idle`, `unloaded`) separately, so an unloaded member is visible without a
-second durable phase.
+| Phase \ Notice | the child finishes its turn | the child's turn fails | the host drains or unloads the child | the persisted Session disappears |
+|---|---|---|---|---|
+| `provisioning` | not applicable — the reservation precedes any turn | `failed`, with the start error in `note`; this is the only failure the plugin records | nothing observed; the reservation stands until the start resolves | retirement reports `trashed: false` with the reason, then the archive branch hides the Session |
+| `active` | no durable change — no completion notice is observed; the phase stays `active` and live state reports `unloaded` | no durable change — a failure after the start is invisible here, so the record stays `active` | phase unchanged, live state `unloaded`; still messageable (cold-resumed) and retirable | retirement reports `trashed: false` and falls back to the archive; restore reports the reason and leaves the record retired |
+| `retired` | ignored — there is no live child | ignored | ignored | restore refuses and the record stays retired |
+| `failed` | ignored | ignored | ignored | ignored |
+
+What the cells depend on:
+
+- **`dormant` does not exist.** The four phases above are exactly `PHASE` in `roster.js`; live state
+  (`running`, `idle`, `unloaded`) is read from the Harness at call time and never stored. A `dormant`
+  phase is P4-01 work, together with the completion hook that would ever set it.
+- **`replace` is one model call composed of `spawn` and `retire`.** The successor starts first in every
+  cell, so a start that fails leaves the row exactly as it was, and the retire half reports
+  `predecessor_retired: false` when it fails.
+- **Two tools in one model turn.** Every call re-reads the roster and every mutation is one atomic
+  `update` (§4.2), so the second call acts on the first one's result: `message_member` then
+  `retire_member` in one turn delivers and then tombstones, the reverse order refuses with `retired`,
+  and `retire_member` then `spawn_member` starts the next generation. Parallel tool calls are serialized
+  by the storage table, not by the caller.
+- **A retired or failed member is still a controllable record.** It is listed, retirable and
+  replaceable: `retire_member` and `restore_member` look a target up in any phase. Only the operations
+  that need a live child — `message_member` and `stop_member` — are narrow, and they refuse a retired or
+  failed target with the typed reason `retired`, `failed` or `missing`.
 
 Two cells are the expensive ones and are called out deliberately:
 
-- **retire while provisioning** — the record becomes `retired` and the in-flight child is drained when
-  it publishes. A member must never come back to life after retirement. `replace` on a provisioning
-  member does the same to the predecessor, after the successor has started.
+- **retire while provisioning** — the record becomes `retired` immediately, and the in-flight child is
+  drained when it publishes. A member must never come back to life after retirement. `replace` on a
+  provisioning member does the same to the predecessor, after the successor has started.
 - **retire while active** — retirement wins over in-flight work. The record's `assignment` is the brief
   (§4.4); if the model never recorded one, the successor's prompt says so and sends it to the shared
   task board instead of inventing a summary.
@@ -219,35 +261,51 @@ Two cells are the expensive ones and are called out deliberately:
 ### 4.4 Retire and replace
 
 Retirement is a protocol, not a deletion, because a member's Session is durable and its work may be
-half-finished:
+half-finished. What `retire_member` does, in the order the code does it:
 
-1. **Record.** The durable statement of the work is the member's `assignment`, set by the model with
-   `spawn_member.assignment` and kept current with `message_member.assignment`; it is capped at 1000
-   characters, so a record cannot grow without limit. This version has no member-written brief: asking a
-   member for one costs a model round-trip exactly when the member may be unresponsive or already
-   failed. A stored, reusable template stays P4-02.
-2. **Reconcile.** The Lead checks the assignment against the working tree and the shared task board
-   before trusting it; a brief that contradicts the repository is a finding, not a plan.
-3. **Drain.** `retire_member` drains the child through `ctx.subagents.drainChildren(lead, [childId])`,
-   releasing its activation slot and residency.
-4. **Move and tombstone.** The persisted Session moves into the plugin's trash directory, and the record
-   moves to `retired` carrying that path and keeping its `assignment`. The workspace archive is the
-   fallback when no artifact can be moved.
+1. **Record the reason.** A model-supplied `reason` is kept on the tombstone as `retireReason`.
+2. **Drain.** `ctx.subagents.drainChildren(lead, [childId])` stops the child and releases its activation
+   slot and residency. A child that never published, or one that already settled, has nothing to drain;
+   retirement proceeds either way, because the record is the lifecycle authority.
+3. **Tombstone.** The record moves to `retired` carrying `retiredAt`, its `assignment`, any reason, and
+   the trash path the next step intends to use, marked `trashState: 'pending'` (or `'none'` at once when
+   there is nothing to move) — *before* the filesystem is touched (§2.5). A crash here leaves a retired
+   record and an artifact that is either unmoved or already trashed; `pending` says which is unknown and
+   restore looks in the trash first, so both cases are recoverable.
+4. **Move the artifact, then confirm.** The persisted Session moves into the plugin's trash directory and
+   the record is confirmed with `trashState: 'done'`, its `trashPath`, `originalPath` and `trashKind`.
+   When no artifact can be moved, the workspace archive hides the Session instead, the intended trash
+   fields are dropped, and the record and the result say that this is what happened (`archived: true`,
+   `trashState: 'none'`). `archived` and `trashPath` are mutually exclusive: the archive branch runs only
+   when no move happened.
 5. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
    member, while the roster keeps the trash path for manual recovery.
-6. **Replace.** `spawn_member` with `replace: <target>` composes a short, self-contained prompt for the
-   successor: the successor's name, the predecessor's target and label, the recorded assignment, the
-   fact that the predecessor is gone, and a pointer to the shared team task board under the
-   predecessor's name. The board is not copied and not duplicated. It also runs steps 3–5 on the
-   predecessor. **The successor starts first and the predecessor is retired second, in the same call**:
-   a failed start leaves the predecessor untouched and live, and a failed retirement returns
-   `predecessor_retired: false` with the reason, so one more `retire_member` call recovers it. A target
-   already retired is accepted, and its tombstone supplies the brief. ADR 0009 records the ordering and
-   why the alternatives were rejected.
+6. **Report.** The result carries `retired`, `drained`, `archived`, `trashed` and — when there is one —
+   `trash_path`. A repeated call is a no-op that answers
+   `retired: true, drained: false, reason: 'already-retired'`.
+
+The durable statement of the work is the member's `assignment`, set by the model with
+`spawn_member.assignment` and kept current with `message_member.assignment`; it is capped at 1000
+characters, so a record cannot grow without limit.
+
+**Replace.** `spawn_member` with `replace: <target>` composes a short, self-contained prompt for the
+successor: the successor's name, the predecessor's target and label, the recorded assignment, the fact
+that the predecessor is gone, and a pointer to the shared team task board under the predecessor's name.
+The board is not copied and not duplicated. It then runs steps 2–6 on the predecessor. **The successor
+starts first and the predecessor is retired second, in the same call**: a failed start leaves the
+predecessor untouched and live, and a failed retirement returns `predecessor_retired: false` with the
+reason, so one more `retire_member` call recovers it. A target already retired is accepted, and its
+tombstone supplies the brief. ADR 0009 records the ordering and why the alternatives were rejected.
 
 The successor's brief is inherited work, not a copy of the predecessor's state: the successor inherits
 the predecessor's `assignment` unless the model records a different one, so repeated replacement does not
 thin the record out one generation at a time.
+
+**Not built, and therefore not described as behaviour (P4-02).** There is no member-written brief and no
+brief file: asking a member for one costs a model round-trip exactly when the member may be unresponsive
+or already failed, so the brief is composed from the record instead. Nothing in the code reconciles an
+assignment against the working tree or the task board — that check is the Lead's judgment, and the plugin
+only points at the board. A stored, reusable brief template is P4-02.
 
 ### 4.5 Model-facing surface
 
@@ -255,16 +313,18 @@ The plugin is Host-only, so every operation it owns is a tool (ADR 0008). All of
 and the `target` of a `list_members` row is the selector every other tool takes. `child_id` on the row
 is the durable identity the host's own listings show; it is reported, not used as a second selector,
 because a second addressing mode would have to be honoured by seven tools to stay consistent while the
-target is already unique among addressable members.
+target is already unique among addressable members. The Lead check is deliberately forgiving about the
+membership projection: a live agent with no parent Session is the root agent and is treated as the Lead,
+so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
 | `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). |
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member and live state, plus pressure and `compactable` while resident. |
-| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. |
-| `stop_member` | Cancel one target's current turn, keeping its activation and inbox. |
-| `retire_member` | Drain, move the session artifact to the trash, tombstone the record and refresh the host effects. |
-| `restore_member` | Move a trashed artifact back and return the record to active. |
+| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`. |
+| `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`. |
+| `retire_member` | Drain, tombstone, move the session artifact to the trash and refresh the host effects (§4.4); a repeat is a no-op that answers `reason: 'already-retired'`. |
+| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, and a restore with nothing to invert is a no-op success rather than an error. |
 | `compact_member` | Force one context compaction on a resident, idle target. |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
@@ -301,7 +361,7 @@ and still retirable.
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
 | list every subagent descendant | `ctx.subagents.listDescendants(rootSessionId, signal)`; rows carry `id`, `mode`, `label?`, `parentId` and `depth` |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
-| hide a retired child | `ctx.workspaceRegistry.archiveSession` (reversible, deletes nothing) |
+| hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
 | move a retired session aside | `ctx.get('sessionPersistence').stat(id).location.path` + a rename into the trash |
