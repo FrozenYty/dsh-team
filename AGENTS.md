@@ -90,8 +90,9 @@ node --test --test-isolation=none tests/*.test.mjs   # unit tests, one process o
 ```
 
 `--test-isolation=none` is required here: the default runner spawns one process per file and this
-machine's sandbox refuses that spawn. Do not "simplify" it away in CI either — both sides run the same
-command so a local pass means the same thing as a green run.
+machine's sandbox refuses that spawn. It also requires Node 24 — the flag does not exist in Node 22, which
+is why CI pins Node 24. Do not "simplify" the flag away in CI either: both sides run the same command so
+a local pass means the same thing as a green run.
 
 `scripts/check.mjs` cannot prove the plugin works: it never loads the Harness. Installing the bundle
 into a profile and calling the tools is the only real check, and it is the user's call each time.

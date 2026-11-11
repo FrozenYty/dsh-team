@@ -91,7 +91,9 @@ node scripts/check.mjs
 ```
 
 `--test-isolation=none` matters on Windows: the default runner spawns one process per file, and this
-machine's sandbox refuses that spawn. CI uses the same invocation so the two agree.
+machine's sandbox refuses that spawn. The flag also fixes the Node major: it does not exist in Node 22,
+so CI pins Node 24 and the local runner is the same major. Both sides run the same command, so a local
+pass means what a green run means.
 
 ## Repository layout
 
