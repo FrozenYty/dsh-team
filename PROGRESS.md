@@ -364,3 +364,56 @@
   cap) because the record is a single document rewritten in full on every mutation. Load-time validation
   deliberately does not enforce it: refusing to load a roster over a display field would brick the plugin.
   Unit-tested; not exercised by a live tool call, because the cap only fires above 200 characters.
+
+## 2026-11-11 — the trash is capped, and a pruned member says so (v0.7.0)
+
+- **P4-03 is delivered as a fixed per-Lead cap, not a setting.** `TRASH_LIMIT = 20` in `trash.js` is a
+  constant with the reason written beside it: the shipped Agent Teams roster bounds its members with the
+  `maxMembers` constant rather than a config key, so this safety cap mirrors that and changing it means
+  editing one line. There is deliberately no `DSH_TEAM_ROSTER_TRASH_LIMIT` and no `0 = unlimited`
+  sentinel: the owner asked for a cap, not a knob. The unit is one Lead's trash directory, which is both
+  the thing an operator reasons about and the only directory the code can enumerate without crossing a
+  boundary.
+- **The platform will not delete these bytes for us, and that is the decision the design answers.**
+  Read from the installed Harness rather than assumed: `dsh-session-persistence` names only `create`,
+  `open`, `flush`, `stat` and `list`, its JSONL backend implements exactly those
+  (`lib/index.js`), and its README states *"Nothing deletes session files — logs accumulate under `root`
+  until removed externally; the seam has no deletion API."* `sessionController` has no delete either,
+  and the only official "take it out of the way" mechanism is the reversible
+  `workspaceRegistry.archiveSession`. A cap that does not delete its own trash copies would therefore
+  bound nothing — which is why ADR 0011 records "delete nothing, mirror the official archive" as a
+  rejected alternative rather than the design.
+- **Enforcement is one place, and only when the trash actually grew.** A retirement that moved an
+  artifact in prunes in the same call, after the confirming write; a retirement that moved nothing prunes
+  nothing, and there is no timer and no read-time sweep. Oldest first, by the millisecond stamp in the
+  `<memberId>-<ms>` directory name. A candidate must be a direct child of that one Lead's trash directory,
+  carry a plausible member id and a numeric stamp, and be named by a roster record's `trashPath`; a
+  foreign name, a plain file, an entry with no tombstone and a `pending` move are all left alone — the
+  pending entry still counts against the cap so the total stays bounded, but its bytes are never touched
+  because `pending` means the move may or may not have landed.
+- **The tombstone stays truthful instead of being deleted with the artifact.** ADR 0011's rejected
+  alternative is the interesting one: dropping the tombstone would re-adopt the member as a live ghost,
+  because draining a child does not remove its row from the parent's durable `subagentCatalog`. So a
+  pruned tombstone keeps `trashPath`, `trashKind` and `originalPath` and its `trashState` becomes
+  `pruned`; `TRASH_STATE` now enumerates `pending | done | none | pruned` and the record validator refuses
+  an unknown value on load. `restore_member` checks `pruned` before the trash-path branch and answers
+  `restored: false, reason: 'pruned'` without ever calling `workspace.unarchiveSession` — the false
+  success this operation has already been repaired for twice. The retirement result carries `pruned` (0
+  when nothing was removed) and, above 0, a message naming the count and the cap.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` is 75 tests, 75 passing — the 66 that
+  existed plus nine in `tests/retention.test.mjs` covering the name parser, the fixed cap leaving a
+  smaller trash alone, oldest-first removal down to the cap, a `pending` entry surviving as the oldest
+  entry, foreign names and unaccounted entries surviving, idempotence, a real retirement pruning the
+  oldest tombstone while keeping its path, the `pruned` restore refusal with the workspace call counted
+  at zero, and the new enum being accepted while an unknown value is refused. `node scripts/check.mjs`
+  passes.
+- **What stays unverified.** The bundle was not installed, so the cap has not fired against real Session
+  artifacts: the suite builds its trash entries by hand, and the live check — point an install at a low
+  cap and retire past it — remains the owner's decision. Also unverified live: the `pruned` tool-result
+  field reaching a model, since the unit tests call `actions.js` directly and the registry's schema
+  validation only runs on a real call.
+- **A pre-existing duplicate task ID, reported rather than renamed.** `PLAN.md` carries two `P4-03`
+  entries: the retention task this change ticked (in the P2 section) and "File the missing lifecycle
+  upstream with the evidence gathered here" (in P4). The retention task is the one the brief named, and
+  renumbering the other is a plan edit nobody asked for, so it is left as it is.

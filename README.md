@@ -13,8 +13,9 @@ never rendered in a real profile and its clicks did not work — and the same ef
 model-facing surface, which now covers every subagent an agent spawns (ADR 0008). The lifecycle tools are
 installed in the author's profile and were exercised live there at v0.5.0: retirement, restore, message,
 stop, and one replacement whose successor read the handoff brief and finished its predecessor's task
-(P2-08). The working tree has changed since that install, so the newest change is covered by the unit
-tests only; a fresh install is the owner's decision. Recent changes are in [PROGRESS.md](PROGRESS.md).
+(P2-08). v0.7.0 caps the session trash per Lead, so it no longer grows without bound (ADR 0011). The
+working tree has changed since that install, so the newest change is covered by the unit tests only; a
+fresh install is the owner's decision. Recent changes are in [PROGRESS.md](PROGRESS.md).
 
 **Repository**: [github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -43,8 +44,8 @@ This plugin supplies the missing half, without forking the shipped roster.
 | `list_members` | The roster: target, child session id, phase, generation, the assignment recorded for the member, live state, and — while resident — context pressure and `compactable`. Adopts members the shipped roster created **and** children spawned with the shipped `subagent` / `subagent_fork` tools, so every subagent the model controls is listed and retirable. |
 | `message_member` | Deliver one message to a live member, and optionally replace the assignment recorded for it; an unloaded member is cold-resumed from its own Session. |
 | `stop_member` | Cancel only the current turn; the activation and inbox are kept. |
-| `retire_member` | Drain, tombstone, move the Session artifact to a recoverable trash directory, and record whether the workspace archive hid it instead. Retiring an already-retired member is a no-op that says so. |
-| `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. The result says which branch ran, and a restore with nothing to invert is a no-op rather than an error. |
+| `retire_member` | Drain, tombstone, move the Session artifact to a recoverable trash directory, and record whether the workspace archive hid it instead. The trash keeps at most 20 artifacts per Lead, so a retirement that moves one in removes the oldest past the cap and reports `pruned`. Retiring an already-retired member is a no-op that says so. |
+| `restore_member` | Bring a retired member back: move its trashed Session to the recorded original path and return the record to active. The result says which branch ran, and a restore with nothing to invert is a no-op rather than an error. A member whose artifact the retention cap already removed answers `reason: "pruned"` and stays retired. |
 | `compact_member` | Force one compaction on a resident, idle member. |
 
 Plus two host-side effects, applied for every retirement:
@@ -70,7 +71,7 @@ The Settings panel was a real browser half and shipped in v0.3, but it was never
 profile and the owner reported that its clicks did not work. In v0.4 it and its bridge were removed
 rather than repaired, and the effort moved into the model-facing surface above (ADR 0008).
 
-## Retirement is not deletion
+## Retirement is a move, not a deletion — and the trash is capped
 
 | Step | Behaviour |
 |---|---|
@@ -78,7 +79,14 @@ rather than repaired, and the effort moved into the model-facing surface above (
 | Move | Its persisted session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`. Move, not delete: recovery is a directory move back. |
 | Tombstone | The roster record becomes `retired`, the name becomes available at the next generation, and the projections stop serving the member. Retiring it again is a no-op that says so. |
 | Fallback | If the artifact cannot be moved, the workspace archive hides the Session instead, and the result says so. |
+| Retention | One Lead's trash keeps at most **20** artifacts. A retirement that moves one in removes the oldest entries past the cap in the same call and reports the count in `pruned`; nothing is swept on a timer or on a read. |
+| Pruned | A pruned tombstone keeps its `trashPath` (it still says where the artifact went) and its `trashState` becomes `pruned`. Its bytes are gone, so `restore_member` refuses with `reason: 'pruned'`. |
 | Restore | `restore_member` moves the artifact back to its recorded original path and clears the tombstone. It refuses when a live member already uses the target. |
+
+The cap exists because the platform has no Session-deletion API: `sessionPersistence` is append-only
+(`create`, `open`, `flush`, `stat`, `list`) and the only official "hide it" mechanism is the reversible
+`workspaceRegistry` archive. So the plugin deletes only the copies it moved into its own trash, and it
+says so in the result (ADR 0011).
 
 ## Replacing a member hands over its work
 
@@ -119,7 +127,9 @@ Verification after install:
 |---|---|---|
 | `DSH_TEAM_ROSTER_DATA_DIR` | `~/.dsh/team-roster` | Trash root and roster data directory. |
 
-The roster itself lives in a `storageDomain` domain (ADR 0003), not in a Session log.
+The roster itself lives in a `storageDomain` domain (ADR 0003), not in a Session log. The trash cap is
+**not** configurable: it is the fixed `TRASH_LIMIT` constant (20) in `trash.js`, mirroring the shipped
+team roster, which bounds its members with a fixed `maxMembers` rather than a setting.
 
 ## Development
 
@@ -141,7 +151,7 @@ pass means what a green run means.
 | `index.js` | Host plugin entry, tool definitions, Lead-only authority check |
 | `actions.js` | The roster operations behind the model-facing tools |
 | `roster.js` | Durable roster, name generations, adoption, legacy-domain migration |
-| `trash.js` | Session-artifact recovery directory |
+| `trash.js` | Session-artifact recovery directory and the per-Lead retention cap |
 | `host-hooks.js` | Projection filter and roster slot credit |
 | `tests/` | `node:test` unit tests |
 | `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg` | the bundle |

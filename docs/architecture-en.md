@@ -117,10 +117,19 @@ filesystem, so a crash between the two leaves a `retired` row beside an artifact
 place or already in the trash — recoverable in both cases, because `pending` says the move may or may not
 have happened and restore looks in the trash first. The reverse order would leave a trashed session
 behind an `active` record, which no later read could explain. The move is what removes the member from the
-host's own discovery, since session-query drops an artifact that no longer exists. Nothing is deleted: the
-cross-device fallback is the only branch that removes the source, and when no artifact can be moved the
-workspace archive hides the Session (`archived: true`, `trashState: 'none'`, and the intended trash fields
-are dropped); the record and the result say which of the two happened.
+host's own discovery, since session-query drops an artifact that no longer exists. The move itself deletes
+nothing: the cross-device fallback is the only branch there that removes the source, and when no artifact
+can be moved the workspace archive hides the Session (`archived: true`, `trashState: 'none'`, and the
+intended trash fields are dropped); the record and the result say which of the two happened.
+
+A retirement that actually moved an artifact in then enforces the per-Lead retention cap (ADR 0011) in the
+same call, because that move is the one moment the trash grew: the oldest entries past `TRASH_LIMIT` (20)
+are removed, each removed tombstone keeps its `trashPath` and becomes `trashState: 'pruned'`, and the
+result reports how many went in `pruned`. Nothing is swept on a timer or on a read; a `pending` move is
+counted but never pruned; and only direct children of that one Lead's trash directory whose name and
+tombstone both parse are candidates. The cap is a fixed constant, not a setting, and it deletes only the
+plugin's own trash copies — the platform has no Session-deletion API, and its only "hide it" mechanism is
+the reversible workspace archive, which cannot bound bytes.
 
 Restoration is the inverse and equally explicit: the record keeps the original path and the artifact
 kind (`trashKind` — the Session directory or a single artifact file), so `restore_member` is a move
@@ -192,9 +201,14 @@ retireReason  the reason the model gave for the retirement, when it gave one
 trashPath     the trash directory the Session artifact was moved to, on a tombstone
 originalPath  where that artifact came from, so restore is a move and not a guess
 trashKind     what was moved: `directory` for the Session directory, `file` for a single artifact
-trashState    `pending` while the move is in flight, `done` once it landed, `none` when there was none
+trashState    `pending` while the move is in flight, `done` once it landed, `none` when there was none,
+              `pruned` when the move landed and the retention cap later removed the artifact (§2.5)
 archived      true when no artifact could be moved and the workspace archive hid the Session instead
 ```
+
+`trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
+`pruned` keeps `trashPath`, `trashKind` and `originalPath` — the tombstone still says where
+the artifact went — and is the only value that makes `restore_member` a typed refusal without a move.
 
 There is no other field, and in particular no `dormant` phase (§4.3) and no `briefPath`: the brief is
 composed at replacement time from `assignment`, and a stored, reusable template is still P4-02.
@@ -219,7 +233,7 @@ nor an omission. "Same base" means spawning the name whose earlier holder is in 
 |---|---|---|---|---|---|---|---|---|
 | `provisioning` | not produced by adoption — an adopted record starts `active` or `failed` | reserves the next generation; this row is untouched | successor starts, then this reservation is drained and tombstoned | delivered through `sendMessage`; a child that has not published yet is refused by the subagent service and the error is reported | no-op unless the child is already resident, then its turn is cancelled | refusal `not-resident` until it is resident and idle | drain, then tombstone; the artifact usually cannot be moved yet, so `trashed: false` and the archive branch decides | no-op success — there is no tombstone to invert |
 | `active` | no-op — identity is the child id, so a known child is never adopted twice | reserves the next generation; this row is untouched | successor starts from the brief, then this member is drained and tombstoned | delivered; a running child sees it at its next step, an unloaded one is cold-resumed | current turn cancelled; activation, inbox and record kept | compacts in place when resident and idle; refusal `busy` while running, `not-resident` when unloaded | drain, tombstone (`pending`), move and confirm, refresh the host effects | no-op success: `restored: true, reason: 'already-active'` |
-| `retired` | no-op — the tombstone holds the child id, which is what stops re-adoption | allowed: a new generation of the base starts with no replacement link (§2.3) | successor starts from the tombstone's brief; the retire half is a no-op (`reason: 'already-retired'`) | refusal `retired` | refusal `retired` | refusal — only `provisioning` and `active` are addressable | repeat: no-op success, `retired: true, drained: false, reason: 'already-retired'` | moves the artifact back, or runs the workspace unhide branch; `reason` names which one ran |
+| `retired` | no-op — the tombstone holds the child id, which is what stops re-adoption | allowed: a new generation of the base starts with no replacement link (§2.3) | successor starts from the tombstone's brief; the retire half is a no-op (`reason: 'already-retired'`) | refusal `retired` | refusal `retired` | refusal — only `provisioning` and `active` are addressable | repeat: no-op success, `retired: true, drained: false, reason: 'already-retired'` | moves the artifact back, or runs the workspace unhide branch; `reason` names which one ran. A `trashState: 'pruned'` tombstone instead refuses with `restored: false, reason: 'pruned'` and never calls the workspace |
 | `failed` | no-op — known child id | reserves the next generation; this row is untouched | successor starts, then this record is tombstoned | refusal `failed` — the child never started, so there is nothing to receive it | refusal `failed` | refusal — only `provisioning` and `active` are addressable | accepted and tombstoned; there is usually nothing to drain or move | no-op success — there is nothing to invert, because the record is not a tombstone |
 
 Harness notices are the events no plugin operation can prevent:
@@ -248,6 +262,10 @@ What the cells depend on:
   replaceable: `retire_member` and `restore_member` look a target up in any phase. Only the operations
   that need a live child — `message_member` and `stop_member` — are narrow, and they refuse a retired or
   failed target with the typed reason `retired`, `failed` or `missing`.
+- **A pruned tombstone is retired, not gone.** The retention cap (§2.5) removes the artifact, not the
+  member's identity: the record stays listed and keeps its assignment and path, so `restore_member` can
+  answer `pruned` from the record instead of failing on a missing directory. That cell is a refusal, and
+  it leaves the phase `retired`.
 
 Two cells are the expensive ones and are called out deliberately:
 
@@ -278,11 +296,16 @@ half-finished. What `retire_member` does, in the order the code does it:
    fields are dropped, and the record and the result say that this is what happened (`archived: true`,
    `trashState: 'none'`). `archived` and `trashPath` are mutually exclusive: the archive branch runs only
    when no move happened.
-5. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
+5. **Bound the trash, only here.** A retirement that moved an artifact in removes the entries past
+   `TRASH_LIMIT` (20) from this Lead's trash directory, oldest first; each removed tombstone keeps its
+   `trashPath` and becomes `trashState: 'pruned'` (ADR 0011). A retirement that moved nothing prunes
+   nothing. No timer and no read-time sweep exists.
+6. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
    member, while the roster keeps the trash path for manual recovery.
-6. **Report.** The result carries `retired`, `drained`, `archived`, `trashed` and — when there is one —
-   `trash_path`. A repeated call is a no-op that answers
-   `retired: true, drained: false, reason: 'already-retired'`.
+7. **Report.** The result carries `retired`, `drained`, `archived`, `trashed`, `pruned` (0 when nothing
+   was removed) and — when there is one — `trash_path`; when `pruned` is above 0 the message says how
+   many artifacts were removed and why. A repeated call is a no-op that answers
+   `retired: true, drained: false, pruned: 0, reason: 'already-retired'`.
 
 The durable statement of the work is the member's `assignment`, set by the model with
 `spawn_member.assignment` and kept current with `message_member.assignment`; it is capped at 1000
@@ -323,8 +346,8 @@ so a failed projection cannot disable every tool.
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member and live state, plus pressure and `compactable` while resident. |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`. |
-| `retire_member` | Drain, tombstone, move the session artifact to the trash and refresh the host effects (§4.4); a repeat is a no-op that answers `reason: 'already-retired'`. |
-| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, and a restore with nothing to invert is a no-op success rather than an error. |
+| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, and a repeat is a no-op that answers `reason: 'already-retired'`. |
+| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, a restore with nothing to invert is a no-op success rather than an error, and a pruned tombstone answers `reason: 'pruned'` without touching the workspace. |
 | `compact_member` | Force one context compaction on a resident, idle target. |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
@@ -373,8 +396,11 @@ and still retirable.
   (ADR 0008).
 - **Two rosters during migration.** Until P2-07 lands, the shipped roster and ours can both be visible
   to the model. The patch step is part of the phase gate, not an afterthought.
-- **No true erasure.** A retired member's Session stays on disk and the shipped catalog still knows it
-  existed. Retirement is a lifecycle fact in our roster, not a filesystem deletion.
+- **Bounded recovery, and no true erasure of the platform's record.** A retired member's Session is
+  recoverable until this Lead's trash passes its cap; a pruned artifact's bytes are gone for good, and
+  the record says `pruned` instead of pretending otherwise. The shipped catalog still knows the member
+  existed, because the platform never deletes what it owns (ADR 0011). Retirement is a lifecycle fact in
+  our roster, not a platform deletion.
 - **Harness API drift.** Every Service named here is read from an installed asar whose version moves;
   a Harness upgrade can invalidate this document without any change in this repository. The installed
   subagent seam is a different generation from the public source tree: the public tree has member names

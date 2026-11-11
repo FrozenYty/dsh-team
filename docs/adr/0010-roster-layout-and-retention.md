@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** [0003](0003-roster-storage.md) — the record layout only; the choice of `storageDomain`, the hand-written spec and the single-file warning all still stand.
+- **Superseded by [0011](0011-trash-retention.md) for point 3 only** — the trash is now capped per Lead. The layout, the single-file domain and the label cap below all still stand.
 
 ## Context
 
@@ -28,6 +29,10 @@ A retirement keeps its tombstone forever and leaves the moved Session artifact i
    later `restore_member` can find it. The only removal is an emptied per-Lead trash directory, which
    `restore_member` drops once its last artifact has moved back. Retention is a deliberate deferral with
    an owner (P4-03), not an oversight.
+
+   > **Superseded for this point by [ADR 0011](0011-trash-retention.md).** A retirement that moves an
+   > artifact in now enforces a fixed per-Lead cap (`TRASH_LIMIT`, 20), removing the oldest artifacts and
+   > marking their tombstones `trashState: 'pruned'`. Points 1, 2 and 4 of this decision stand unchanged.
 4. The label is capped at write time (`LABEL_MAX`), because the record is a single JSON document that is
    rewritten in full on every mutation.
 

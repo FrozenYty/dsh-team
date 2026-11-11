@@ -104,12 +104,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   `ctx.subagents.listDescendants`, `memberRow` adds `child_id`, the Settings panel and its bridge are
   deleted in the same change (ADR 0008), and the suite covers adoption with fakes. A live install is
   the owner's decision.
-- [ ] **P4-03** Retention: bound the session trash and the tombstone list.
+- [x] **P4-03** Retention: bound the session trash and the tombstone list.
   Done when a documented policy exists for `$DSH_HOME/team-roster/trash` and for tombstones whose Lead
-  Session no longer exists, and running it twice leaves the same state. Deferred deliberately (ADR 0010):
-  the trash holds real Session bytes, so a policy that deletes them is the owner's decision, and a
-  tombstone cannot be dropped while the drained row still sits in the parent's catalog — otherwise the
-  member is re-adopted as a live ghost.
+  Session no longer exists, and running it twice leaves the same state.
+  Delivered (v0.7.0, ADR 0011): the trash is bounded by a fixed per-Lead cap (`TRASH_LIMIT`, 20),
+  enforced only inside a retirement that actually moved an artifact in — oldest first by the
+  `<memberId>-<ms>` stamp, skipping a `pending` move, touching only direct children whose name and
+  tombstone both parse. A pruned tombstone keeps `trashPath` and records `trashState: 'pruned'`,
+  `restore_member` refuses with `reason: 'pruned'` and never calls the workspace, and the retirement
+  reports `pruned`. Pruning twice leaves the same state. The tombstone half is a decision rather than a
+  deletion: a tombstone is never dropped, because the drained row still sits in the parent's catalog and
+  removing the tombstone re-adopts the member as a live ghost — ADR 0011 records why that alternative was
+  rejected.
 
 ### P3 — Settings panel (cancelled in v0.4)
 
