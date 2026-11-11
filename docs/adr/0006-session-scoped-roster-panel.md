@@ -1,5 +1,7 @@
 # 0006 — Scope the roster panel to one Lead Session per view
 
+> **Superseded by [0008](0008-model-only-surface.md).** The Settings panel was removed; the per-Lead-session *roster* storage model this decision relied on survives.
+
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** —

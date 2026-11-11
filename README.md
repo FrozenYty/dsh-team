@@ -6,9 +6,11 @@ A DeepSeek Harness plugin that gives an agent team the lifecycle the shipped one
 retire, remove and replace — with a recoverable session trash, a roster that survives the removal, and
 context tooling for long-running teammates.
 
-**Status**: the v0.3 tools are installed and verified in the author's profile. The Settings panel is
-written and unit-tested, but has not been installed or rendered yet — P3-04 in [PLAN.md](PLAN.md).
-Recent changes are in [PROGRESS.md](PROGRESS.md).
+**Status**: v0.4 is model-facing only. The Settings panel and its loopback HTTP bridge that shipped in
+v0.3 were removed — the panel was never rendered in a real profile, and its clicks did not work — and
+the same effort went into the model-facing surface, which now covers every subagent an agent spawns
+(ADR 0008). The lifecycle tools themselves are installed and verified in the author's profile. Recent
+changes are in [PROGRESS.md](PROGRESS.md).
 
 **Repository**: [github.com/FrozenYty/dsh-team-roster](https://github.com/FrozenYty/dsh-team-roster)
 
@@ -34,7 +36,7 @@ This plugin supplies the missing half, without forking the shipped roster.
 | Tool | Behaviour |
 |---|---|
 | `spawn_member` | Start a named member; a successor reuses the base name at the next generation (`reviewer` → `reviewer-g2`). |
-| `list_members` | The roster: phase, generation, live state, and — while resident — context pressure and `compactable`. Members the shipped roster created are **adopted** on first read, so they become retirable too. |
+| `list_members` | The roster: target, child session id, phase, generation, live state, and — while resident — context pressure and `compactable`. Adopts members the shipped roster created **and** children spawned with the shipped `subagent` / `subagent_fork` tools, so every subagent the model controls is listed and retirable. |
 | `message_member` | Deliver one message to a live member; an unloaded member is cold-resumed from its own Session. |
 | `stop_member` | Cancel only the current turn; the activation and inbox are kept. |
 | `retire_member` | Drain, move the Session artifact to a recoverable trash directory, and tombstone the record. |
@@ -51,39 +53,18 @@ Plus two host-side effects, applied for every retirement:
 
 The bundle also enables the shipped `compaction-basic` row, which this profile ships disabled.
 
-## Settings panel
+## Model-facing only
 
-The bundle ships a Settings page (Settings → **Team roster**) as its browser half (`client.js`,
-registered into the `settings.section` slot) over a loopback-only JSON bridge on the Host web server
-(`routes.js`).
+The plugin has no browser half: no Settings page, no HTTP route, no client bundle. Everything it offers
+is a tool the model calls, and `list_members` is the control surface — it reports members this plugin
+spawned, members the shipped team roster created, and every child spawned with the shipped `subagent`
+or `subagent_fork` tool, each with its child session id. `message_member`, `stop_member` and
+`retire_member` address any row it returns. A one-shot `subagent` child cannot be cold-resumed, so
+message it while it is resident; it can always be stopped or retired.
 
-**The panel is per session.** The durable store already keys one roster per Lead Session, so the page shows
-exactly one of them:
-
-- It opens on the session you are in. That session is resolved in the browser from the shell's own session
-  catalog (`useSessions`), whose rows carry `retainedBy.mainView` — the shell's own "this session is open"
-  count — and `displayTitle`. The page shows the title when there is one and the short id otherwise. No
-  session data travels over the bridge.
-- A **picker** lists the sessions that have a roster, with member counts and whether their Lead is live, so
-  you can switch to another one. The session you are in stays an option even when it has no roster yet,
-  labelled `no roster yet`.
-- A session without a roster says so — *No team roster for this session yet.* — instead of rendering an
-  empty page. When the browser has no current-session signal at all, the Host's documented order picks the
-  opening session: live Leads first, then the most recently written roster.
-- **Refresh**, plus a three-second poll while the page is open, so a change made through a tool reaches
-  the panel without a page reload.
-- **Retire** behind an inline confirmation, and **Restore** for a retired member. Both call the same
-  functions the model tools call (`actions.js`), so parameter meaning, result fields and failure reasons
-  cannot drift between the two callers.
-
-The bridge is two reads and two writes: `GET /api/team-roster/sessions` (the counts-only picker index),
-`GET /api/team-roster/state?leadSessionId=…` (one roster with its member rows), `POST /api/team-roster/retire`
-and `POST /api/team-roster/restore`. It refuses non-loopback callers and cross-origin `Origin` headers,
-caps request bodies at 64 KiB, and answers a JSON error with a status. Retiring a member whose Lead Session
-is not live is reported as a readable failure, not a stack trace.
-
-Installing the updated bundle is the last step, and it has not been done: activation and the rendered
-panel are unverified (PLAN.md P3-04).
+The Settings panel was a real browser half and shipped in v0.3, but it was never rendered in a real
+profile and the owner reported that its clicks did not work. In v0.4 it and its bridge were removed
+rather than repaired, and the effort moved into the model-facing surface above (ADR 0008).
 
 ## Retirement is not deletion
 
@@ -122,7 +103,7 @@ The roster itself lives in a `storageDomain` domain (ADR 0003), not in a Session
 ## Development
 
 ```sh
-node --check index.js actions.js routes.js client.js roster.js trash.js host-hooks.js
+node --check index.js actions.js roster.js trash.js host-hooks.js
 node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
@@ -137,9 +118,7 @@ pass means what a green run means.
 | Path | What |
 |---|---|
 | `index.js` | Host plugin entry, tool definitions, Lead-only authority check |
-| `actions.js` | The roster operations, shared by the tools and the Settings bridge |
-| `routes.js` | `/api/team-roster` bridge: per-session state, the picker index, retire, restore, and the loopback/origin fence |
-| `client.js` | Settings panel (browser half) |
+| `actions.js` | The roster operations behind the model-facing tools |
 | `roster.js` | Durable roster, name generations, adoption, legacy-domain migration |
 | `trash.js` | Session-artifact recovery directory |
 | `host-hooks.js` | Projection filter and roster slot credit |

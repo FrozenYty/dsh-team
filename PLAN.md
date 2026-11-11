@@ -21,7 +21,7 @@ Phase status lives here. Why it moved lives in `PROGRESS.md`.
 |---|---|
 | A — runtime | bundle patch, Host plugin, roster service, Harness integration |
 | B — documents | README pair, `docs/`, ADRs, this file, `PROGRESS.md` |
-| C — UI | Settings panel, Host-to-Client bridge |
+| C — UI | retired with the Settings panel in v0.4 (ADR 0008); no UI work remains |
 
 One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repository.
 
@@ -91,36 +91,50 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [x] **P2-13** `restore_member`: move a trashed session back and return the record to `active`.
   Done when a retired member with a `trashPath` can be restored and appears in `list_members` again.
 - [x] **Gate P2** — removal and replacement work in a live session.
+- [x] **P2-14** Model control of every subagent, not only the shipped roster's members (v0.4).
+  Done when `list_members` reports children spawned with the shipped `subagent` / `subagent_fork` tools,
+  every row carries the child Session id, adoption of an unknown descendant is idempotent, and removing
+  the UI leaves the tools unchanged. Delivered: `ensureAdopted` also reads
+  `ctx.subagents.listDescendants`, `memberRow` adds `child_id`, the Settings panel and its bridge are
+  deleted in the same change (ADR 0008), and the suite covers adoption with fakes. A live install is
+  the owner's decision.
 
-### P3 — Settings panel
+### P3 — Settings panel (cancelled in v0.4)
 
-- [x] **P3-01** Choose the Host-to-Client data bridge.
+> **Cancelled by [ADR 0008](docs/adr/0008-model-only-surface.md).** The panel and its HTTP bridge were
+> removed: the panel was never rendered in a real profile and the owner reported its clicks did not
+> work. The tasks below were delivered in code — P3-04 never was — and the surface they served is gone.
+> The replacement is the model-facing work in P2-14, not a repair of P3.
+
+- [ ] **P3-01** Choose the Host-to-Client data bridge. **Cancelled (v0.4):** the bridge was deleted with the panel.
   Done when an ADR names the mechanism and why the alternative was rejected. Delivered by ADR 0005: one
-  loopback-only prefix route on `ctx.webServer` plus a `settings.section` client bundle; the RPC registry,
-  a duplicated operation body, a `resource` route and a push stream were the rejected alternatives.
-- [x] **P3-02** Read-only roster panel: name, generation, phase, live status, context pressure.
+  loopback-only prefix route on the Host web server plus a client bundle registered into the settings
+  section; the RPC registry, a duplicated operation body, a `resource` route and a push stream were the
+  rejected alternatives.
+- [ ] **P3-02** Read-only roster panel: name, generation, phase, live status, context pressure. **Cancelled (v0.4):** the browser half was deleted.
   Done when the panel renders the live roster and a change in the Host reaches the panel without a page
-  reload. Delivered in code (`client.js` + `GET /api/team-roster/state`, polled while open); the live
-  render is part of P3-04 because the bundle has not been reinstalled.
-- [x] **P3-03** Retire and replace actions with confirmation.
+  reload. Delivered in code (a browser half plus `GET /api/team-roster/state`, polled while open); the
+  live render is part of P3-04 because the bundle has not been reinstalled.
+- [ ] **P3-03** Retire and replace actions with confirmation. **Cancelled (v0.4):** the panel was the second caller; `actions.js` stays.
   Done when the panel triggers the same operations as the model tools and reports their result. Delivered:
   the tool bodies moved to `actions.js`, and both `POST /retire` and `POST /restore` call those functions.
-- [ ] **P3-04** Live verification of the Settings panel.
+- [ ] **P3-04** Live verification of the Settings panel. **Cancelled (v0.4):** there is no panel left to verify.
   Done when a reinstalled bundle serves the client half, Settings → Team roster renders the live roster, the
   panel opens on the session the user is in and switches through the picker (with the "no roster" sentence
   for a session that has none), a change made through a tool appears within one poll, and a retire plus a
   restore from the panel return the same result objects the tools return. Not done: installing the bundle is
-  the user's decision.
-- [x] **P3-05** Scope the panel to one Lead Session.
+  the user's decision. This is the task that recorded the risk the owner then hit in real use.
+- [ ] **P3-05** Scope the panel to one Lead Session. **Cancelled (v0.4):** the per-Lead-session roster model it relied on survives.
   Done when `GET /state` answers exactly one roster, `GET /sessions` answers a counts-only index, the panel
   opens on the session the user is in, offers a picker over the sessions that have a roster, and says so
   plainly when the current session has none. Delivered in code: `buildSessionState` and
-  `buildSessionsIndex` in `routes.js` (the index owns the default-selection rule), `client.js` resolves the
-  current session from the root-scoped `useSessions` hook and joins titles there (ADR 0006), and six tests
-  pin both read shapes, the missing/unknown id answers and the rule. The live render stays with P3-04.
-- [ ] **Gate P3** — the roster is manageable without typing a tool call.
+  `buildSessionsIndex` in the deleted route module (the index owns the default-selection rule), the
+  deleted panel resolved the current session from the shell's own session catalog and joined titles
+  there (ADR 0006), and six tests pin both read shapes, the missing/unknown id answers and the rule. The
+  live render stays with P3-04.
+- [ ] **Gate P3** — the roster is manageable without typing a tool call. **Cancelled (v0.4):** the gate asked for a UI the owner no longer wants; the roster is managed by the model through `list_members`.
 
-### P4 — Optional, only after the gate above
+### P4 — Optional, only after the Gate P2 above
 
 - [ ] **P4-01** Ephemeral members: auto-retire on completion.
 - [ ] **P4-02** A stored, reusable handoff-brief template.

@@ -13,7 +13,8 @@ A DeepSeek Harness **profile bundle**. Installing it does two things:
 2. inserts one Host plugin of our own (`dsh-team-roster`).
 
 There is no build step and no runtime dependency: the installed Harness resolves the shipped row from
-its own installation, and our entry imports nothing (ADR 0002).
+its own installation, and our entry imports nothing (ADR 0002). The bundle is Host-only: it has no
+browser half (ADR 0008).
 
 ## 2. v0.1, shipped
 
@@ -61,10 +62,25 @@ path.
 | `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`. A running member receives it at its next step; an unloaded member is cold-resumed from its own Session. Verified live: a delivered message woke an unloaded member, which replied. |
 | `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`. Cancels the current turn only; the activation, slot and inbox are kept. Verified live: a member running a long command was interrupted and left no closing message. |
 
-**Adoption.** Members the shipped roster created are adopted into this roster the first time it is read:
-the record reuses the child Session id as its identity, keeps the shipped name, and starts `active`. So
-`retire_member`, `message_member` and `stop_member` apply to members this plugin never spawned — which is
-exactly the population that could not be removed before. Adoption is idempotent, matched by child id.
+**Adoption.** The roster picks up every member and subagent a Lead controls that it does not already
+know, the first time it is read.
+
+- Members the shipped team roster created: the record reuses the child Session id as its identity, keeps
+  the shipped name, and starts `active`.
+- Every descendant the subagent registry reports, including children spawned with the shipped `subagent`
+  and `subagent_fork` tools. The read is `ctx.subagents.listDescendants(rootSessionId, signal)` on the
+  installed seam (`dsh-subagent` `0.2.2-rc.1`, `lib/index.js`: the service method at lines 3181–3183,
+  the traversal at lines 2380–2446). Each child row is
+  `{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`; `kind: 'diagnostic'`
+  rows for a branch that could not be read are skipped. A child with a label is named from it through the
+  same normalization a shipped name goes through; an unlabeled child is named `subagent-<id>`.
+
+So `retire_member`, `message_member` and `stop_member` apply to children this plugin never spawned —
+exactly the population that was invisible before. Adoption is idempotent and matched by child id, and the
+tombstone is what keeps it that way: draining a child does not remove its row from the parent's durable
+`subagentCatalog`, so a retired record must stay in the roster or the next read would adopt the member
+back. A one-shot child is adopted like any other and can be stopped or retired; it cannot be
+cold-resumed, so `message_member` reaches it only while it is resident.
 
 Records live in one `storageDomain` domain keyed by the Lead Session id (ADR 0003). Naming rule:
 generation 1 is the bare base name; generation 2 and later is `<base>-g<N>`, so a replacement never
@@ -212,95 +228,42 @@ half-finished:
 
 ### 4.5 Model-facing surface
 
-Shipped: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member` (P2-03, P2-04,
-P2-06), beside `compact_member` and the shipped task-board tools. The shipped roster tools stay enabled:
-they own the shared task board, and adoption makes the members they create retirable. A future task
-(P2-09) can replace the task board and then disable the shipped tool row.
+The plugin is Host-only, so every operation it owns is a tool (ADR 0008). All of them are Lead-scoped,
+and the `target` of a `list_members` row is the selector every other tool takes. `child_id` on the row
+is the durable identity the host's own listings show; it is reported, not used as a second selector,
+because a second addressing mode would have to be honoured by seven tools to stay consistent while the
+target is already unique among addressable members.
 
-## 5. Settings panel: one operation, two callers
+| Tool | Behaviour |
+|---|---|
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child. |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label and live state, plus pressure and `compactable` while resident. |
+| `message_member` | Deliver one message to a live target; a running child sees it at its next step, an unloaded continuable child is cold-resumed. |
+| `stop_member` | Cancel one target's current turn, keeping its activation and inbox. |
+| `retire_member` | Drain, move the session artifact to the trash, tombstone the record and refresh the host effects. |
+| `restore_member` | Move a trashed artifact back and return the record to active. |
+| `compact_member` | Force one context compaction on a resident, idle target. |
 
-### 5.1 Shared operations
+The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
+check and the tool result schemas. The shipped roster tools stay enabled: they own the shared task
+board, and adoption makes the members they create retirable. A future task (P2-09) can replace the task
+board and then disable the shipped tool row.
 
-The operation bodies used to live inside `install()`, reachable only from tools. They now live in
-`actions.js` as functions that take their dependencies explicitly: `ctx`, the roster `table`, the Lead
-Session id, and the live Lead `Agent` when one exists. `index.js` keeps argument validation, the Lead-only
-authority check and the tool result schemas; the tools and the bridge call the same functions, so a
-failure reason written for the model cannot diverge from what the panel shows. ADR 0005 records the
-decision.
+#### 4.5.1 Adoption is the control surface
 
-A route has no model caller, so `leadAgent` is passed in rather than read from `exec.agent`. Retire,
-message and stop need a live Lead for `drainChildren` / `interrupt` / `startActivation`; when that Session
-is not live, retire returns `{ retired: false, message }` and the tool-only operations throw a sentence
-naming the condition — never a `TypeError` from a missing `session` field. Restore needs no live Lead: it
-is a filesystem move plus a record write, so the panel can recover an old team.
+`ensureAdopted` (`actions.js`) is what makes the surface complete: it reads the shipped team roster and
+the subagent registry, and records every unknown child as a member. The registry read is
+`ctx.subagents.listDescendants(rootSessionId, signal)` (installed seam `dsh-subagent` `0.2.2-rc.1`,
+`lib/index.js` lines 3181–3183 delegating to 2380–2446); child rows are
+`{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`, and
+`kind: 'diagnostic'` rows are skipped. Adoption is idempotent by child id, and the retired record is the
+tombstone that keeps it that way, because draining a child does not remove its row from the parent's
+durable catalog. Message delivery is addressed through the Lead's direct-child authority, while a
+retirement proceeds even when the drain refuses. The shipped depth limit is 1, so every descendant is a
+direct child; a deeper tree — possible only when that limit is raised — is refused by message delivery
+and still retirable.
 
-### 5.2 Host bridge
-
-Registered in `apply()` as `{ kind: 'prefix', path: '/api/team-roster', handler }` through
-`ctx.webServer.register`. Verified in the installed Harness — the shipped `client-connection` plugin
-registers its `/api` and `/connect` routes the same way: a `handler` receives the raw node request and
-response and owns the response to completion, while a `resource` answers only GET/HEAD. The plugin waits
-for `webServer` with `ctx.inject(['webServer'], ...)`, so a profile without a web server keeps the tools
-and loses only the panel.
-
-| Endpoint | Method | Behaviour |
-|---|---|---|
-| `/api/team-roster/sessions` | GET | `{ sessions: [{ leadSessionId, memberCount, liveCount, updatedAt, leadLive }], selectedLeadSessionId? }` — the picker's index: counts only, no member rows, no Session reads |
-| `/api/team-roster/state` | GET | `?leadSessionId=` → `{ leadSessionId, leadLive, exists, members, updatedAt? }` for exactly one roster. A missing id is 400; an unknown one is a normal answer with `exists: false` |
-| `/api/team-roster/retire` | POST | `{ leadSessionId, target, reason? }` → the `retire_member` result |
-| `/api/team-roster/restore` | POST | `{ leadSessionId, target }` → the `restore_member` result |
-
-A route is outside the Connection fence, so the bridge is its own fence: loopback `remoteAddress` only,
-same-authority `Origin` / `Sec-Fetch-Site` when a browser attaches them, and a 64 KiB cap on a buffered
-JSON body. Failures are JSON with a status: 400 malformed, 403 fence, 404 unknown path, 405 wrong method,
-413 too large, 409 operation failure, 500 unavailable store.
-
-**The unit of the bridge is one Lead Session, not the whole store.** The durable record is already keyed
-per Lead Session (§4.2), so flattening every roster into one page was a presentation defect rather than a
-data one: with a dozen sessions the page becomes a list to search instead of a roster to manage. Only the
-per-session payload carries member rows — the per-session payload is the small one, and `/sessions` exists
-so the picker can be filled without reading any roster's members.
-
-**Selection has one owner per fact.** The Host decides which *stored* session opens and never lists
-Sessions; the browser decides which session the user is *in*. `selectedLeadSessionId` is the documented
-fallback, ordered live Leads first, then the newest write, then the id, and it is used only when the
-browser sends no `currentSessionId`. A named `currentSessionId` always wins, even when that session has no
-roster, because the panel must be able to say so instead of silently showing another team.
-
-**Titles are joined in the browser, and that mechanism is verified, not assumed.** The root-scoped
-`settings.section` slot receives the shell's standard hooks, `useSessions` among them: the root session
-catalog is provided by `@deepseek-ai/dsh-client-ui-session/lib/client.js` lines 1120–1123
-(`ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list }, ... })`). The catalog rows carry
-`displayTitle`/`title` and `retainedBy` (`@deepseek-ai/dsh-api-session-controller/lib/client.js` lines
-4162–4182, `projectList`), and "the session the user is in" is the row whose `retainedBy.mainView > 0` —
-the same test the shipped root-scoped session browser uses (`@deepseek-ai/dsh-client-ui-workspace/lib/client.js`
-line 3697, reading `useSessions((state) => state)` on line 3669). A Host-side session listing to resolve
-titles was rejected: it needs a service this panel should not depend on, it cannot answer for a closed Lead
-Session, and it duplicates a catalog the page already subscribes to (ADR 0006).
-
-### 5.3 Browser half
-
-`client.js` is plain browser JavaScript loaded through the module table; `exports["./client"]` and the
-package's `dsh.client` block (`platform: web`, `immediately: true`, package injection edges) are what make
-the host compose and serve it. It registers one `settings.section` page (`id: 'team-roster'`, order 25) with
-a locale namespace, so the settings shell owns navigation and the panel owns only its content.
-
-The page shows exactly one roster: the session the user is in, or the one chosen in the picker. The header
-names that session with its catalog title and short id, and the picker lists every session that has a
-roster with its counts and whether its Lead is live. A session without a roster states that plainly — *No
-team roster for this session yet.* — instead of rendering an empty page. The panel polls both reads every
-three seconds while open and re-reads immediately after a pick and after each action; retire keeps its
-inline confirmation because it destroys the member's live session.
-
-There is no build step, so the panel uses React from the module table and inline theme tokens
-(`--dsw-alias-*`) for colours. Unverified: the bundle has not been reinstalled, so activation, served
-bundle composition and the rendered page are untested. One runtime fact is specifically unverified — whether
-`retainedBy.mainView` is still non-zero while the Settings panel is open; the shipped browser suppresses its
-own "current" highlight when a sidebar panel is active (`dsh-client-ui-workspace/lib/client.js` line 3615),
-and the panel falls back to the Host's order if the retain is dropped. The unit tests cover the fence, the
-two read builders, the selection rule and the route/operation wiring without an HTTP socket.
-
-## 6. Harness extension points used
+## 5. Harness extension points used
 
 | Need | Mechanism |
 |---|---|
@@ -311,18 +274,18 @@ two read builders, the selection rule and the route/operation wiring without an 
 | compaction | `ctx.get('compaction').compactNow(agent, signal)` |
 | membership test | `ctx.agentTeams.tryMembership(agent)` (v0.1 only) |
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
+| list every subagent descendant | `ctx.subagents.listDescendants(rootSessionId, signal)`; rows carry `id`, `mode`, `label?`, `parentId` and `depth` |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
 | hide a retired child | `ctx.workspaceRegistry.archiveSession` (reversible, deletes nothing) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
 | move a retired session aside | `ctx.get('sessionPersistence').stat(id).location.path` + a rename into the trash |
-| serve a mutating HTTP endpoint | `ctx.webServer.register({ kind: 'prefix', path, handler })` from a `ctx.inject(['webServer'], ...)` scope |
-| render a Settings page | Client half declared by `dsh.client`; `ctx.slots.register({ name: 'settings.section', id, order, label, locale }, Component)` |
-| localize the panel | `ctx.locale.register(ns, { en, zh })` in the client half, then the `locale: ns` slot option injects `t` |
-| read the session catalog from a root-scoped slot | the `useSessions` standard hook — the root hook `@deepseek-ai/dsh-client-ui-session` provides over `ctx.sessions.list`; rows carry `displayTitle` and `retainedBy.mainView` |
 
-## 7. Risks and limits
+## 6. Risks and limits
 
+- **No in-app view.** The roster is visible to the model through `list_members` only; there is no
+  Settings page. The host's own subagent pickers still render what they always did, minus retired ids
+  (ADR 0008).
 - **Two rosters during migration.** Until P2-07 lands, the shipped roster and ours can both be visible
   to the model. The patch step is part of the phase gate, not an afterthought.
 - **No true erasure.** A retired member's Session stays on disk and the shipped catalog still knows it

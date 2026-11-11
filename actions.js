@@ -1,13 +1,12 @@
 /**
- * The roster operations, shared by the model-facing tools and the Settings panel's HTTP bridge.
+ * The roster operations, called by the model-facing tools in `index.js`.
  *
- * One operation, two callers: `index.js` validates arguments, checks that the model caller is a Team
- * Lead, and returns the result unchanged; `routes.js` resolves the Lead Session from the request and
- * calls the same function. A second copy of a retire or restore flow would drift from the tool the
- * model uses, which is exactly what P3-03 is meant to prevent.
+ * `index.js` validates arguments, checks that the model caller is a Team Lead, and returns the result
+ * unchanged. The bodies live here so the six lifecycle operations read as one file rather than as tool
+ * closures; the plugin has no second, browser-facing caller (ADR 0008).
  *
- * A route has no model caller, so `leadAgent` is explicit and may be undefined. Only a live Lead yields
- * `ctx.agents.get(leadSessionId)`; `drainChildren`, `interrupt` and `startActivation` all need that
+ * `leadAgent` is explicit rather than read from the caller: only a live Lead yields
+ * `ctx.agents.get(leadSessionId)`, and `drainChildren`, `interrupt` and `startActivation` all need that
  * Agent. When it is absent the operation says so instead of throwing a `TypeError` from a missing
  * `session` field.
  *
@@ -55,12 +54,15 @@ export function pressureOf(ctx, agent) {
   return { pressureTokens, contextWindow, ratio }
 }
 
-/** Project one stored member into the row the model and the panel both render. */
+/** Project one stored member into the row the model renders. */
 export function memberRow(ctx, member) {
   const live = liveStateOf(ctx, member)
   const compactor = ctx.get('compaction') !== undefined
   const row = {
     target: targetOf(member),
+    // The child Session id is the member's durable identity and what the host's own listings show.
+    // Every record this plugin writes carries one, so the model can name the exact child.
+    child_id: member.childId,
     phase: member.phase,
     generation: member.generation,
     label: member.label,
@@ -87,19 +89,54 @@ export function memberRow(ctx, member) {
 }
 
 /**
- * Adopt members the shipped roster created before this plugin owned the roster, so retirement and
- * messaging apply to them too. Idempotent: a member is adopted at most once, matched by child Session id.
+ * Every subagent descendant of one agent, read from the installed subagent registry.
+ *
+ * The seam's `listDescendants(rootSessionId, signal)` walks the parent-owned catalogs and answers one
+ * row per reachable child (`{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`)
+ * plus `kind: 'diagnostic'` rows for branches it could not read. Discovery is best-effort: a profile
+ * without the session-query or session service still lists the members the shipped roster reports.
+ *
+ * @param ctx - plugin context, with `subagents` injected.
+ * @param rootSessionId - the calling agent's Session, whose catalogs start the traversal.
+ * @returns child rows, or an empty list when the registry cannot answer.
+ */
+async function descendantsOf(ctx, rootSessionId) {
+  try {
+    return await ctx.subagents.listDescendants(rootSessionId)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Adopt every member this agent controls but the roster does not know yet: what the shipped team roster
+ * created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. Idempotent: a
+ * child is adopted at most once, matched by its child Session id, and a retired record keeps its
+ * tombstone so the surviving catalog entry cannot bring the member back.
+ *
  * @returns the roster, including any newly adopted members.
  */
 export async function ensureAdopted(ctx, caller, table, leadSessionId) {
   const roster = readRoster(table, leadSessionId)
-  const known = new Set(roster.members.map((member) => member.childId))
-  const shipped = ctx.agentTeams.listMembers(caller).filter(
-    (member) => member.role === 'teammate' && !known.has(member.id),
-  )
-  if (shipped.length === 0) return roster
+  const seen = new Set(roster.members.map((member) => member.childId))
+  const candidates = []
+  const add = (row) => {
+    if (typeof row.id !== 'string' || row.id.length === 0 || seen.has(row.id)) return
+    seen.add(row.id)
+    candidates.push(row)
+  }
+  for (const member of ctx.agentTeams.listMembers(caller)) {
+    if (member.role !== 'teammate') continue
+    add({ id: member.id, name: member.name, description: member.description, status: member.status })
+  }
+  for (const row of await descendantsOf(ctx, caller.session.id)) {
+    if (row.kind !== 'child') continue
+    const label = typeof row.label === 'string' && row.label.length > 0 ? row.label : `Subagent ${row.id}`
+    add({ id: row.id, name: label, description: label, status: 'active' })
+  }
+  if (candidates.length === 0) return roster
   let next = roster
-  for (const row of shipped) {
+  for (const row of candidates) {
     const adopted = adoptMember(next, row)
     if (adopted !== undefined) next = withMember(next, adopted)
   }
@@ -158,8 +195,8 @@ export async function spawnMember({ ctx, table, leadSessionId, leadAgent, name, 
  * Retire one member: drain, move its persisted Session aside, tombstone the record, refresh host effects.
  *
  * Without a live Lead Agent there is nothing to drain through, so the operation refuses with a reason
- * instead of throwing. A route reaches this branch; a tool call never does, because the tool runs in the
- * Lead's own Agent context.
+ * instead of throwing. The tool path always runs in the Lead's own Agent context; the guard exists so a
+ * caller that does not hold the Agent gets a sentence rather than a `TypeError`.
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
@@ -171,7 +208,7 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
     return {
       target,
       retired: false,
-      message: `The Lead Session ${leadSessionId} is not live in this Harness process, so its member cannot be drained. Open that Session in the Web UI and retry.`,
+      message: `The Lead Session ${leadSessionId} is not live in this Harness process, so its member cannot be drained. Open that Session again and retry.`,
     }
   }
   const roster = await ensureAdopted(ctx, leadAgent, table, leadSessionId)
@@ -240,7 +277,7 @@ export async function retireMember({ ctx, table, leadSessionId, leadAgent, dataD
 
 /**
  * Move a retired member's Session back and return the record to active. This one needs no live Lead:
- * it is a filesystem move plus a record write, which is why the panel can restore an old team.
+ * it is a filesystem move plus a record write, so it can recover a team whose Lead Session is closed.
  * @param {{ctx: object, table: object, leadSessionId: string, target: string,
  *   hooks: {filter: {invalidate: Function}, slots: {refresh: Function}}}} request
  * @returns {Promise<object>} the tool's result object, unchanged.

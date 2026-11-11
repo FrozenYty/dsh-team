@@ -11,7 +11,7 @@
 1. 选中一条 profile 默认关闭的官方插件行（`compaction-basic`）；
 2. 插入一个我们自己写的 Host 插件（`dsh-team-roster`）。
 
-没有构建步骤，也没有运行时依赖：官方行由已安装的 Harness 自己解析，我们的入口不导入任何东西（ADR 0002）。
+没有构建步骤，也没有运行时依赖：官方行由已安装的 Harness 自己解析，我们的入口不导入任何东西（ADR 0002）。bundle 只有 Host 半区：没有浏览器半区（ADR 0008）。
 
 ## 2. v0.1，已交付
 
@@ -48,7 +48,12 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 | `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`。运行中的成员在下一步收到；已卸载的成员从自己的会话冷恢复。实测：投递唤醒了卸载成员并得到回复。 |
 | `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`。只取消当前轮，保留激活、名额与收件箱。实测：成员正跑长命令时被中断，且没有留下收尾消息。 |
 
-**收养。** 官方花名册创建的成员，会在本花名册第一次被读取时被收养：记录以子代理会话 id 作为身份、沿用官方名字、相态为 `active`。因此 `retire_member`、`message_member`、`stop_member` 对本插件从未创建过的成员同样有效——而这正是以前完全无法移除的那批成员。收养是幂等的，按子代理 id 匹配。
+**收养。** 花名册在第一次被读取时，会收录 Lead 控制、但花名册尚不认识的每个成员与子代理：
+
+- 官方团队花名册创建的成员：记录以子会话 id 为身份、沿用官方名字、相态为 `active`。
+- 子代理注册表报告的每个后代，包括官方 `subagent` 与 `subagent_fork` 工具启动的子代理。读取调用是 `ctx.subagents.listDescendants(rootSessionId, signal)`（安装版 seam `dsh-subagent` `0.2.2-rc.1`，`lib/index.js` 第 3181–3183 行的服务方法，遍历在第 2380–2446 行）。子行形状为 `{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`；读不到的分支返回 `kind: 'diagnostic'` 行，收养时跳过。有 label 的子代理按与官方名字相同的规范化规则命名；没有 label 的命名为 `subagent-<id>`。
+
+因此 `retire_member`、`message_member`、`stop_member` 对本插件从未创建过的子代理同样有效——正是以前完全不可见的那批。收养按子会话 id 幂等，而让幂等真正成立的是墓碑：排空子代理不会删掉父代持久 catalog 里的那一行，所以退役记录必须留在花名册里，否则下一次读取会把成员收养回来。一次性（one-shot）子代理同样会被收养，可停止、可退役；它不能冷恢复，所以 `message_member` 只在它驻留时可送达。
 
 记录存在一个以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。命名规则：代次 1 用裸名字；代次 2 起用 `<base>-g<N>`，因此继任者绝不会与已退役的名字相撞。退役后再用同一个基名创建，就是替换操作：`probe-a` 退役、`probe-a-g2` 启动，两条记录都在。
 
@@ -149,44 +154,25 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 
 ### 4.5 模型侧接口
 
-已交付：`spawn_member`、`list_members`、`message_member`、`stop_member`、`retire_member`（P2-03、P2-04、P2-06），与 `compact_member` 及官方任务板工具并列。官方花名册工具保持启用：共享任务板归它们所有，而收养机制让它们创建的成员同样可退役。将来可由 P2-09 换掉任务板，再关闭官方工具行。
+本插件只有 Host 半区，因此它拥有的每个操作都是工具（ADR 0008）。全部为 Lead 专属，`list_members` 行的 `target` 就是其他工具接受的唯一选择器。行上的 `child_id` 是宿主自有列表展示的持久身份；它只被报告，不作为第二个选择器——否则七个工具都要同时支持它才一致，而 target 在可寻址成员中本来就唯一。
 
-## 5. 设置页面板：一份操作，两个调用方
+| 工具 | 行为 |
+|---|---|
+| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动。 |
+| `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签与实时状态，驻留时另带压力与 `compactable`。 |
+| `message_member` | 给活着的目标投递一条消息；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。 |
+| `stop_member` | 只取消目标当前轮，保留激活与收件箱。 |
+| `retire_member` | 排空、把会话产物移入回收站、给记录立碑并刷新宿主侧效果。 |
+| `restore_member` | 把回收站里的产物移回，记录转回 active。 |
+| `compact_member` | 对驻留且空闲的目标强制压缩一次。 |
 
-### 5.1 共用操作
+操作体在 `actions.js`；`index.js` 只保留参数校验、Lead 专属权限检查与工具结果 schema。官方花名册工具保持启用：共享任务板归它们所有，而收养机制让它们创建的成员同样可退役。将来可由 P2-09 换掉任务板，再关闭官方工具行。
 
-操作体原先写在 `install()` 的闭包里，只有工具能调用。现在它们位于 `actions.js`，以显式依赖为参数：`ctx`、花名册 `table`、Lead 会话 id，以及存在时的活 Lead `Agent`。`index.js` 只保留参数校验、Lead 专属权限检查和工具结果 schema；工具与桥调用同一批函数，因此写给模型的失败原因不可能与面板显示的内容走样。决策记录在 ADR 0005。
+#### 4.5.1 收养就是控制面
 
-路由没有模型调用方，所以 `leadAgent` 是**传入**的，而不是从 `exec.agent` 读取。退役、发消息、停止需要活 Lead 才能调用 `drainChildren`／`interrupt`／`startActivation`；该会话不在线时，退役返回 `{ retired: false, message }`，仅工具可用的操作抛出点明条件的句子——绝不是缺 `session` 字段的 `TypeError`。恢复不需要活 Lead：它只是一次文件移动加一次记录写入，所以面板能找回旧团队的成员。
+`ensureAdopted`（`actions.js`）是这套接口完整可用的原因：它读取官方团队花名册与子代理注册表，把每个不认识的子代理记成成员。注册表读取是 `ctx.subagents.listDescendants(rootSessionId, signal)`（安装版 seam `dsh-subagent` `0.2.2-rc.1`，`lib/index.js` 第 3181–3183 行委托到第 2380–2446 行）；子行是 `{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`，`kind: 'diagnostic'` 行跳过。收养按子会话 id 幂等，而让幂等成立的正是退役记录这块墓碑——排空子代理不会删掉父代持久 catalog 里的那一行。消息投递通过 Lead 的直接子代权限寻址，而退役即使排空被拒绝也会立碑。出厂深度上限是 1，所以每个后代都是直接子代；更深的树（只有调高深度上限才可能出现）会被消息投递拒绝，但仍可退役。
 
-### 5.2 Host 桥
-
-在 `apply()` 里通过 `ctx.webServer.register` 注册为 `{ kind: 'prefix', path: '/api/team-roster', handler }`。已在安装版 Harness 中核实——官方 `client-connection` 插件用它注册 `/api` 与 `/connect`：`handler` 收到原始 node 请求与响应并负责把响应写完，而 `resource` 只响应 GET/HEAD。插件通过 `ctx.inject(['webServer'], ...)` 等待 `webServer`，因此没有 Web 服务器的 profile 仍保留工具，只失去面板。
-
-| 端点 | 方法 | 行为 |
-|---|---|---|
-| `/api/team-roster/sessions` | GET | `{ sessions: [{ leadSessionId, memberCount, liveCount, updatedAt, leadLive }], selectedLeadSessionId? }`——选择器索引：只有计数，没有成员行，也不读会话 |
-| `/api/team-roster/state` | GET | `?leadSessionId=` → 恰好一个花名册的 `{ leadSessionId, leadLive, exists, members, updatedAt? }`。缺参数是 400；未知会话是正常答案，`exists: false` |
-| `/api/team-roster/retire` | POST | `{ leadSessionId, target, reason? }` → `retire_member` 的结果 |
-| `/api/team-roster/restore` | POST | `{ leadSessionId, target }` → `restore_member` 的结果 |
-
-路由位于 Connection 防护之外，所以桥自带防护：只接受回环 `remoteAddress`，浏览器带上时校验同源 `Origin`／`Sec-Fetch-Site`，缓冲 JSON 请求体上限 64 KiB。失败一律是带状态码的 JSON：400 格式错误、403 防护拒绝、404 路径不存在、405 方法不允许、413 过大、409 操作失败、500 存储不可用。
-
-**桥的单位是一个 Lead 会话，不是整个存储。** 持久记录本来就是按 Lead 会话分键的（§4.2），所以把全部花名册摊在一页上是呈现层的缺陷，不是数据层的问题：十几个会话之后，那一页变成“需要搜索的列表”，而不是“可管理的花名册”。只有按会话的响应携带成员行——按会话的载荷才是小的那一个；`/sessions` 的存在就是为了在不读任何成员的情况下填出选择器。
-
-**每个事实只有一个归属方。** 打开哪一个**已存**会话由 Host 决定，Host 从不列会话；用户**正在**哪个会话，由浏览器决定。`selectedLeadSessionId` 是写明的兜底顺序：Lead 在线优先，其次最近写入，再次按 id；只有当浏览器没有传 `currentSessionId` 时才使用。具名的 `currentSessionId` 永远优先，即使该会话没有花名册——面板必须能说出来，而不是悄悄展示另一支队。
-
-**标题在浏览器侧拼接，这条机制是核实过的，不是猜的。** 根作用域的 `settings.section` 槽会拿到 shell 的标准 hook，其中包含 `useSessions`：根会话目录由 `@deepseek-ai/dsh-client-ui-session/lib/client.js` 第 1120–1123 行提供（`ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list }, ... })`）。目录行带有 `displayTitle`／`title` 与 `retainedBy`（`@deepseek-ai/dsh-api-session-controller/lib/client.js` 第 4162–4182 行的 `projectList`），而“用户当前所在的会话”就是 `retainedBy.mainView > 0` 的那一行——与官方根作用域会话浏览器用的是同一个判据（`@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 第 3697 行，第 3669 行读的是 `useSessions((state) => state)`）。被否决的方案是让 Host 侧列会话以取标题：那会引入本面板不该依赖的服务，对未打开的 Lead 会话答不出来，而且与页面已经订阅的目录重复（ADR 0006）。
-
-### 5.3 浏览器半区
-
-`client.js` 是普通浏览器 JavaScript，经模块表加载；`exports["./client"]` 与 package 的 `dsh.client` 块（`platform: web`、`immediately: true`、注入边）让宿主组合并提供它。它注册一个 `settings.section` 页面（`id: 'team-roster'`，order 25）并带一个 locale 命名空间，因此设置外壳拥有导航，面板只拥有自己的内容。
-
-页面一次只显示一份花名册：你当前所在的会话，或选择器里选中的那个。页头用目录里的标题加短 id 标明当前展示的会话；选择器列出所有拥有花名册的会话，附计数与 Lead 是否在线。会话没有花名册时直接说明——*这个会话还没有团队花名册。*——而不是渲染空页。面板打开期间每三秒轮询这两个读接口，选择之后与每次操作之后立即重读；退役保留行内确认，因为它会销毁成员的活会话。
-
-没有构建步骤，所以面板用模块表里的 React，颜色只用主题令牌（`--dsw-alias-*`）。未验证：bundle 尚未重新安装，因此插件激活、bundle 组合与页面渲染都未测试。其中有一条运行时事实专门未验证——设置面板打开时 `retainedBy.mainView` 是否仍非零；官方浏览器在侧栏面板激活时会抑制自己的“当前”高亮（`dsh-client-ui-workspace/lib/client.js` 第 3615 行），若该 retain 被释放，面板会退回 Host 的兜底顺序。单元测试覆盖防护、两个读构建器、选择规则以及路由与操作的接线，不涉及 HTTP socket。
-
-## 6. 使用的 Harness 扩展点
+## 5. 使用的 Harness 扩展点
 
 | 需求 | 机制 |
 |---|---|
@@ -197,18 +183,16 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | 压缩 | `ctx.get('compaction').compactNow(agent, signal)` |
 | 成员判定 | `ctx.agentTeams.tryMembership(agent)`（仅 v0.1） |
 | 子代理生命周期 | `ctx.subagents.startActivation`、`sendMessage`、`interrupt`、`drainChildren` |
+| 列出全部子代理后代 | `ctx.subagents.listDescendants(rootSessionId, signal)`；行带 `id`、`mode`、`label?`、`parentId`、`depth` |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
 | 隐藏已退役的子代理 | `ctx.workspaceRegistry.archiveSession`（可逆，不删除） |
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
 | 补偿官方花名册名额 | 补丁旧花名册的 `maxMembers` getter 与 `spawn`（ADR 0004） |
 | 把退役会话挪开 | `ctx.get('sessionPersistence').stat(id).location.path` + rename 进回收站 |
-| 提供可变更的 HTTP 端点 | 在 `ctx.inject(['webServer'], ...)` 作用域里 `ctx.webServer.register({ kind: 'prefix', path, handler })` |
-| 渲染设置页 | 由 `dsh.client` 声明的浏览器半区；`ctx.slots.register({ name: 'settings.section', id, order, label, locale }, Component)` |
-| 面板本地化 | 浏览器半区 `ctx.locale.register(ns, { en, zh })`，再用 `locale: ns` 槽选项注入 `t` |
-| 在根作用域槽里读会话目录 | `useSessions` 标准 hook——由 `@deepseek-ai/dsh-client-ui-session` 在根作用域对 `ctx.sessions.list` 提供；行带有 `displayTitle` 与 `retainedBy.mainView` |
 
-## 7. 风险与边界
+## 6. 风险与边界
 
+- **没有应用内视图。** 花名册只通过 `list_members` 对模型可见，没有设置页。宿主自有的子代理选择器仍照旧渲染，只是少了已退役 id（ADR 0008）。
 - **迁移期两个花名册并存**——在 P2-07 落地前，官方花名册和我们自己的都可能对模型可见。补丁步骤是阶段门禁的一部分，不是事后补丁。
 - **没有真正的抹除**——退役成员的会话仍在磁盘上，官方 catalog 也仍知道它存在过。退役是我们花名册里的生命周期事实，不是文件系统删除。
 - **Harness API 漂移**——本文点到的每个 Service 都来自已安装的 asar，版本会变；一次 Harness 升级就能让本文作废，而本仓库什么都没改。安装版的子代理 seam 与公开源码树不是同一代：公开树有成员 `name` 和 `resolveName`，安装版没有。采信任何公开示例之前，先读安装版的 `lib/index.js`。

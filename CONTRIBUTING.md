@@ -47,7 +47,7 @@ that trailer as another contributor.
 | Job | Command | Fix |
 |---|---|---|
 | Bundle checks | `node scripts/check.mjs` | read the reported file and key |
-| Entry syntax | `node --check index.js` (also `actions.js`, `routes.js`, `client.js`, `roster.js`, `trash.js`, `host-hooks.js`) | repair the syntax error |
+| Entry syntax | `node --check index.js` (also `actions.js`, `roster.js`, `trash.js`, `host-hooks.js`) | repair the syntax error |
 | Unit tests | `node --test --test-isolation=none tests/*.test.mjs` | fix the failing behaviour, not the assertion |
 
 `scripts/check.mjs` verifies, without loading the Harness:

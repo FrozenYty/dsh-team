@@ -26,8 +26,9 @@ replaced, instead of one that only grows.
 
 Two layers, and they must not be confused:
 
-- **The bundle** (`package.json`, `cordis.patch.yml`, `index.js`, `client.js`, `locale/`, `icon.svg`) is
+- **The bundle** (`package.json`, `cordis.patch.yml`, `index.js`, `locale/`, `icon.svg`) is
   what gets installed into a profile. It is linked from this repository, so no build step exists.
+  It has no browser half: every surface is a model-facing tool (ADR 0008).
 - **The Harness** is the host. Its APIs are read from the installed asar, never from this repository.
 
 `PLAN.md` owns task state; `PROGRESS.md` owns the record of what changed. Do not restate either here.
@@ -38,7 +39,7 @@ Two layers, and they must not be confused:
 |---|---|---|
 | Yao Tianyu (@FrozenYty) | A — runtime, roster lifecycle, Harness integration | B, C |
 | — | B — documents, ADRs, plans | A, C |
-| — | C — Settings UI panel | A, B |
+| — | C — UI | retired with the Settings panel (ADR 0008); default: read-only |
 
 One person owns the repository; lanes describe *where an agent may write*, not separate owners.
 Everything outside your assigned lane is read-only unless the user says otherwise.
