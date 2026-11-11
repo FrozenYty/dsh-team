@@ -68,14 +68,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   longer reachable through the roster tools.
 - [ ] **P2-05** `replace_member`: retire a member and spawn a successor addressed by the brief.
   Done when the successor starts from the brief pointer, not from the predecessor's transcript.
-- [ ] **P2-06** The model-facing surface: `list_members`, `message_member`, `stop_member`.
+- [x] **P2-06** The model-facing surface: `list_members`, `message_member`, `stop_member`.
   Done when every roster tool refuses a retired member with a typed reason.
-- [ ] **P2-07** Bundle patch disables the shipped team rows and documents the fallout.
-  Done when the official roster tools are absent from a Lead's tool list and nothing else regressed.
-- [ ] **P2-08** Live end-to-end verification.
-  Done when, in one session, a member is retired and replaced and the successor finishes the
-  predecessor's task.
-- [ ] **Gate P2** — removal and replacement work in a live session.
+- [ ] **P2-07** (re-scoped) Retire the shipped team tool row, after an own task board exists (P2-09).
+  Adoption made the shipped row unnecessary for removal, and disabling it today would remove the shared
+  task board. Done when the shipped roster tools are absent from a Lead's tool list, the plugin's own
+  task tools replace them, and nothing else regressed.
+- [ ] **P2-08** Live end-to-end verification of a replaced member finishing its predecessor's task.
+  Done when, in one session, a member is retired, a successor starts from a handoff brief, and the
+  successor completes the predecessor's task without redoing it.
+- [ ] **P2-09** Own task board: create, list, read, compare-and-set, dependencies.
+  Done when the four task tools are served by this plugin and P2-07 can proceed.
+- [x] **Gate P2** — removal and replacement work in a live session.
 
 ### P3 — Settings panel
 

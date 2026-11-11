@@ -38,15 +38,19 @@ v0.1 fixes that and adds the two inspection tools below. v0.2 replaces the roste
 | Piece | Status |
 |---|---|
 | Enables the shipped `compaction-basic` backend (profile-wide) | Shipped in v0.1 |
-| `member_context` — per-member context pressure, resident/idle state | Shipped in v0.1 |
-| `compact_member` — compact one in-place member | Shipped in v0.1 |
-| `spawn_member` / `list_members` / `retire_member` — own durable roster with generation-suffixed names | Shipped in v0.2, verified live |
+| `list_members` — roster with lifecycle phase, live state and context pressure | v0.2 |
+| `compact_member` — compact one resident, idle member in place | v0.1, now roster-based |
+| `spawn_member` / `retire_member` — generation-suffixed names; retire for good | v0.2 |
+| `message_member` / `stop_member` — deliver a message; cancel one turn without retiring | v0.2 |
+| Adopts members the shipped roster created, so they become retirable too | v0.2 |
 | Team panel in Settings | Planned |
 
-**Two rosters during the migration.** `list_agents` still reports the shipped team roster; `list_members`
-reports the roster this plugin owns. They are different sets, because the shipped roster cannot remove a
-member. Until P2-07 disables the shipped roster tools, use `list_members` for anything created with
-`spawn_member` and do not mix the two.
+**One roster, two writers.** The shipped team tools stay mounted because they own the shared task
+board, and any member they create is adopted into this plugin's roster the next time it is read. So
+`retire_member` applies to members this plugin did not create — which is the point: before v0.2 nothing
+could remove them at all. Retirement is this plugin's durable fact: it drains the child, archives its
+Session, and tombstones the record. Nothing is deleted, and the shipped roster still lists what it
+created.
 
 The v0.1 surface is documented in [docs/architecture-en.md](docs/architecture-en.md);
 the durable-roster design is [docs/adr/0001](docs/adr/0001-own-roster-on-subagents.md).

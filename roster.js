@@ -145,6 +145,45 @@ export function withMember(roster, member) {
   return { ...roster, members }
 }
 
+/**
+ * Adopt one member that the shipped team roster created, so the removal this plugin provides applies
+ * to it too. The member keeps its Session id as its identity; only the lifecycle bookkeeping is ours.
+ * @param roster - the Lead's current roster.
+ * @param shipped - one shipped roster row: child Session id, name, description and status.
+ * @returns the provisional member record, or undefined when the child has no usable identity.
+ */
+export function adoptMember(roster, shipped) {
+  if (typeof shipped?.id !== 'string' || shipped.id.length === 0) return undefined
+  // The shipped roster allows names this registry would reject; fall back to a normalized form and
+  // keep the Session id as the durable identity either way.
+  let name = typeof shipped.name === 'string' ? shipped.name.toLowerCase() : ''
+  if (!NAME_PATTERN.test(name)) {
+    name = name.replace(/[^a-z0-9-]/g, '-').replace(/^-+/, '').replace(/-+$/, '').slice(0, 32)
+  }
+  if (!NAME_PATTERN.test(name)) name = 'member'
+  const label = typeof shipped.description === 'string' && shipped.description.length > 0
+    ? shipped.description
+    : 'Adopted shipped-team member'
+  const used = roster.members.filter((member) => member.name === name)
+  let generation = used.reduce((highest, member) => Math.max(highest, member.generation), 0) + 1
+  let planned = {
+    memberId: shipped.id,
+    name,
+    generation,
+    childId: shipped.id,
+    phase: shipped.status === 'failed' ? PHASE.failed : PHASE.active,
+    label,
+    createdAt: new Date().toISOString(),
+    adopted: true,
+  }
+  // Never collide with a live target; a shipped name may already have been adopted before.
+  while (roster.members.some((member) => targetOf(member) === targetOf(planned) && ADDRESSABLE.has(member.phase))) {
+    generation += 1
+    planned = { ...planned, generation }
+  }
+  return planned
+}
+
 /** Resolve one member's live state without activating it. */
 export function liveStateOf(ctx, member) {
   const agent = ctx.agents.get(member.childId)
