@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Repository checks for dsh-team-roster.
+ * Repository checks for dsh-team-relay.
  *
  * Dependency-free on purpose: the bundle itself must import nothing, and CI should not need an
  * install step to check it. What this proves:

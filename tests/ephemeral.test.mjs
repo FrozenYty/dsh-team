@@ -56,7 +56,7 @@ const call = (ctx, table, extra = {}) => ({
   table,
   leadSessionId: 'lead-1',
   leadAgent: lead,
-  dataDir: '/tmp/team-roster-test',
+  dataDir: '/tmp/team-relay-test',
   hooks: hooks(),
   ...extra,
 })

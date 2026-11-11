@@ -10,7 +10,7 @@ import { PHASE, ROSTER_SPEC, TRASH_STATE, planMember, readRoster, updateRoster }
 import { DEFAULT_TRASH_LIMIT, TRASH_LIMIT_MINIMUM, parseTrashDirName, pruneLeadTrash, resolveTrashLimit } from '../trash.js'
 import { memoryTable } from './memory-table.mjs'
 
-const scratch = () => mkdtemp(join(tmpdir(), 'team-roster-retention-'))
+const scratch = () => mkdtemp(join(tmpdir(), 'team-relay-retention-'))
 const trashRootOf = (root) => join(root, 'trash', 'lead-1')
 
 /**
@@ -327,9 +327,9 @@ test('a pruned tombstone refuses restore and the workspace is never called', asy
       retiredAt: new Date(0).toISOString(),
       archived: false,
       trashState: TRASH_STATE.pruned,
-      trashPath: join(tmpdir(), 'team-roster-gone', 'member-1-1'),
+      trashPath: join(tmpdir(), 'team-relay-gone', 'member-1-1'),
       trashKind: 'directory',
-      originalPath: join(tmpdir(), 'team-roster-sessions', 'member-1'),
+      originalPath: join(tmpdir(), 'team-relay-sessions', 'member-1'),
     }],
   }))
 

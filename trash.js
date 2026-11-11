@@ -17,8 +17,20 @@ import { cp, lstat, mkdir, readdir, rename, rm, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 
-/** Environment override for the plugin data directory; tests use it too. */
-const DATA_DIR_ENV = 'DSH_TEAM_ROSTER_DATA_DIR'
+/**
+ * Environment override for the plugin data directory; tests use it too.
+ *
+ * The variable and the directory it guards keep the pre-rename `TEAM_ROSTER` spelling on purpose
+ * (ADR 0014). Every tombstone already on disk records an absolute `trashPath` under
+ * `~/.dsh/team-roster`, and `pruneLeadTrash` lists that same root: renaming either the default
+ * directory or the variable would leave every recorded path outside the root the plugin scans, so the
+ * trash would look empty, the retention cap would stop seeing those artifacts, and `restore_member`
+ * would move a file back from a directory nothing writes to any more. The package name changed; the
+ * place durable bytes already live did not.
+ */
+const DATA_DIR_ENV = 'DSH_TEAM_RELAY_DATA_DIR'
+/** The pre-rename name of the same variable; still honoured so an existing profile keeps working. */
+const LEGACY_DATA_DIR_ENV = 'DSH_TEAM_ROSTER_DATA_DIR'
 
 /**
  * How many retired sessions one Lead's trash keeps when the plugin config sets no cap.
@@ -44,8 +56,10 @@ export const TRASH_LIMIT_MINIMUM = 1
  * @returns {string} absolute data directory.
  */
 export function resolveDataDir(env = process.env, home = homedir()) {
-  const override = env[DATA_DIR_ENV]
-  if (typeof override === 'string' && override.trim() !== '') return override.trim()
+  for (const variable of [DATA_DIR_ENV, LEGACY_DATA_DIR_ENV]) {
+    const override = env[variable]
+    if (typeof override === 'string' && override.trim() !== '') return override.trim()
+  }
   return join(home, '.dsh', 'team-roster')
 }
 
@@ -76,7 +90,7 @@ export function resolveTrashLimit(config) {
   if (config === undefined || config === null) return DEFAULT_TRASH_LIMIT
   const field = TRASH_LIMIT_FIELD
   const reject = (value) => new TypeError(
-    `dsh-team-roster: config field "${field}" must be an integer >= ${TRASH_LIMIT_MINIMUM} `
+    `dsh-team-relay: config field "${field}" must be an integer >= ${TRASH_LIMIT_MINIMUM} `
     + `(minimum ${TRASH_LIMIT_MINIMUM}); received ${value}`,
   )
   if (typeof config !== 'object') throw reject(describeValue(config))
