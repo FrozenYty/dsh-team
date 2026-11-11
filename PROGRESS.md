@@ -96,3 +96,18 @@
   spawns a process per file and this machine's sandbox refuses that spawn with `EPERM`. Every place that
   runs the tests uses `--test-isolation=none`, locally and in CI, so a local pass means what a green run
   means.
+- **Retirement now has an inverse, and it is a move rather than a guess.** The tombstone records the
+  artifact kind and the path it came from, so `restore_member` puts the session back exactly where the
+  host expects it. It refuses to overwrite an existing destination, refuses a target a live member already
+  owns, and leaves the record retired when the move fails — recovery is never allowed to half-succeed.
+  The shipped roster tools stay enabled: they own the shared task board, and adoption already makes their
+  members retirable, so nothing had to be torn down to get here.
+- **The first restore attempt reported success without moving anything, and the tombstone was the reason.**
+  That member had been retired by the pre-restore code, so its record carried a `trashPath` but no
+  `originalPath`; `restore_member` fell through to the workspace-unhide branch and returned `restored: true`
+  while the session was still in the trash. Two fixes: a record with a `trashPath` never takes the unhide
+  branch, and a missing `originalPath` is derived from a sibling Session still on disk
+  (`sessionRootFromSibling`) instead of guessed. The one record already damaged by the bug was repaired by
+  moving its directory back by hand. The round trip was then re-tested on a fresh member: retire →
+  `trashed: true, trash_path` → restore → `restored: true, path ~/.dsh/sessions/<key>/<member>`, with the
+  trash directory emptied and removed.

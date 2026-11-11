@@ -44,6 +44,7 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 | `spawn_member` | 先占用一个带代次的名字并**持久化这条预留**，再通过 `ctx.subagents.startActivation` 以生成的 `childId` 和 `delivery: 'parent'` 启动可续聊子代理。启动失败会留下一条可见的 `failed` 记录，绝不会留下看不见的子代理。 |
 | `list_members` | 每条记录给出相态、代次、实时状态，驻留时还给出上下文压力。已退役成员仍以 `retired` 列出。 |
 | `retire_member` | 排空子代理、用 `ctx.workspaceRegistry.archiveSession` 归档其会话、给记录立碑。对“已结束的成员”和“正在跑的成员”两种情形都实测通过。 |
+| `restore_member` | 把回收站里的产物移回退役时记录的原始路径并清除墓碑；已有活成员占用该目标时拒绝。 |
 | `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`。运行中的成员在下一步收到；已卸载的成员从自己的会话冷恢复。实测：投递唤醒了卸载成员并得到回复。 |
 | `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`。只取消当前轮，保留激活、名额与收件箱。实测：成员正跑长命令时被中断，且没有留下收尾消息。 |
 
@@ -68,6 +69,8 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 `retire_member` 先排空子代理，再把它的持久化会话移入
 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，带着这个路径给记录立碑，并刷新上面两个效果。真正让成员从宿主的自有发现里消失的是**移动**——session-query 会摘掉已经不在的文件。没有删除：跨设备兜底是唯一会移除源的分支；产物移不动时退回工作区归档隐藏会话。
+
+恢复是同样明确的逆操作：记录里保留了原始路径和产物类型，所以 `restore_member` 是**移动**而不是猜测。它绝不覆盖已存在的目标、拒绝活成员已占用的名字，移动失败时记录保持退役状态。
 
 ## 3. 为什么不扩展官方花名册
 

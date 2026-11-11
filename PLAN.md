@@ -88,7 +88,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [x] **P2-12** Roster slot credit: one retirement buys back one shipped budget slot for its own Lead.
   Done when the effective `maxMembers` is raised only while that Lead spawns, and the patch is skipped
   when the roster has no such shape.
-- [ ] **P2-13** `restore_member`: move a trashed session back and return the record to `active`.
+- [x] **P2-13** `restore_member`: move a trashed session back and return the record to `active`.
   Done when a retired member with a `trashPath` can be restored and appears in `list_members` again.
 - [x] **Gate P2** — removal and replacement work in a live session.
 

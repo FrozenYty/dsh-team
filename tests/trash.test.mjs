@@ -10,6 +10,8 @@ import {
   moveSessionArtifact,
   resolveDataDir,
   resolveSource,
+  restoreSessionArtifact,
+  sessionRootFromSibling,
   trashMemberSession,
 } from '../trash.js'
 
@@ -84,7 +86,78 @@ test('trashMemberSession moves the reported artifact and reports where it went',
   })
   assert.equal(result.moved, true)
   assert.equal(result.trashPath, join(root, 'data', 'trash', 'lead-1', 'member-4-1700000000000'))
+  assert.equal(result.kind, 'directory')
+  assert.equal(result.originalPath, member)
   assert.equal(existsSync(member), false)
+})
+
+test('a trashed directory moves back to the path it came from', async () => {
+  const root = await scratch()
+  const member = join(root, 'sessions', 'member-5')
+  await mkdir(member, { recursive: true })
+  await writeFile(join(member, 'session.jsonl'), 'log')
+  const ctx = {
+    get: () => ({ stat: async () => ({ location: { path: member } }) }),
+  }
+  const trashed = await trashMemberSession(ctx, { leadSessionId: 'lead-1', memberId: 'member-5', dataDir: join(root, 'data') })
+  assert.equal(trashed.moved, true)
+
+  const restored = await restoreSessionArtifact({
+    trashPath: trashed.trashPath,
+    originalPath: trashed.originalPath,
+    kind: trashed.kind,
+  })
+  assert.deepEqual(restored, { restored: true, path: member })
+  assert.equal(await readFile(join(member, 'session.jsonl'), 'utf8'), 'log')
+  assert.equal(existsSync(trashed.trashPath), false)
+  assert.equal(existsSync(join(root, 'data', 'trash', 'lead-1')), false, 'an emptied lead trash directory is dropped')
+})
+
+test('restoring never overwrites an existing destination', async () => {
+  const root = await scratch()
+  const member = join(root, 'sessions', 'member-6')
+  await mkdir(member, { recursive: true })
+  await writeFile(join(member, 'session.jsonl'), 'log')
+  const ctx = { get: () => ({ stat: async () => ({ location: { path: member } }) }) }
+  const trashed = await trashMemberSession(ctx, { leadSessionId: 'lead-1', memberId: 'member-6', dataDir: join(root, 'data') })
+  await mkdir(member, { recursive: true })
+  await writeFile(join(member, 'other.jsonl'), 'newer')
+
+  const restored = await restoreSessionArtifact({
+    trashPath: trashed.trashPath,
+    originalPath: trashed.originalPath,
+    kind: trashed.kind,
+  })
+  assert.deepEqual(restored, { restored: false, reason: 'destination-exists' })
+  assert.equal(await readFile(join(member, 'other.jsonl'), 'utf8'), 'newer')
+})
+
+test('a missing trash entry or unspecified path is reported', async () => {
+  const root = await scratch()
+  assert.deepEqual(await restoreSessionArtifact({ trashPath: join(root, 'nope'), originalPath: join(root, 'x') }), {
+    restored: false,
+    reason: 'trash-missing',
+  })
+  assert.deepEqual(await restoreSessionArtifact({ trashPath: undefined, originalPath: join(root, 'x') }), {
+    restored: false,
+    reason: 'no-recorded-path',
+  })
+})
+
+test('the sessions root is derived from a sibling still on disk', async () => {
+  const persistence = {
+    stat: async (id) => {
+      if (id === 'member-a') return { location: { path: '/root/key/member-a/session.jsonl' } }
+      throw new Error('missing')
+    },
+  }
+  assert.equal(
+    await sessionRootFromSibling(persistence, ['member-a', 'member-b'], 'member-b'),
+    '/root/key',
+  )
+  // The member being restored is never used as its own template.
+  assert.equal(await sessionRootFromSibling(persistence, ['member-b'], 'member-b'), undefined)
+  assert.equal(await sessionRootFromSibling(undefined, ['member-a'], 'member-b'), undefined)
 })
 
 test('a missing persistence service or artifact is reported, never thrown', async () => {

@@ -56,7 +56,8 @@ path.
 |---|---|
 | `spawn_member` | Reserves a generation-suffixed name, persists the reservation, then starts a continuable child through `ctx.subagents.startActivation` with a generated `childId` and `delivery: 'parent'`. A failed start leaves a visible `failed` record, never an invisible child. |
 | `list_members` | Every record with phase, generation, live status and — while resident — context pressure. Retired members stay listed as `retired`. |
-| `retire_member` | Drains the child, archives its Session through `ctx.workspaceRegistry.archiveSession`, and tombstones the record. Verified against both a finished member and a member mid-turn. |
+| `retire_member` | Drains the child, moves its persisted Session into the trash directory, and tombstones the record with the trash and original paths. Verified against a finished member and a member mid-turn. |
+| `restore_member` | Moves the trashed artifact back to the path recorded at retirement and clears the tombstone; refuses when a live member already owns the target. |
 | `message_member` | `ctx.subagents.sendMessage(caller, childId, [text], { signal })`. A running member receives it at its next step; an unloaded member is cold-resumed from its own Session. Verified live: a delivered message woke an unloaded member, which replied. |
 | `stop_member` | `ctx.subagents.interrupt(childId, { kind: 'ancestor', agent: caller })`. Cancels the current turn only; the activation, slot and inbox are kept. Verified live: a member running a long command was interrupted and left no closing message. |
 
@@ -96,6 +97,10 @@ refreshes the two effects above. The move is what removes the member from the ho
 session-query drops an artifact that no longer exists. Nothing is deleted: the cross-device fallback is
 the only branch that removes the source, and the workspace archive hides the Session when no artifact can
 be moved.
+
+Restoration is the inverse and equally explicit: the record keeps the original path and the artifact kind,
+so `restore_member` is a move rather than a guess. It never overwrites an existing destination, refuses a
+target a live member already owns, and leaves the record retired when the move cannot be made.
 
 ## 3. Why the shipped roster is not extended
 

@@ -142,6 +142,23 @@ export function findByTarget(roster, target) {
 }
 
 /**
+ * Find one retired member by its model-facing target.
+ * Retired records stay in the roster so a tombstone keeps its identity, its generation and, when a
+ * session artifact was moved, the path needed to restore it.
+ * @param roster - one Lead's roster.
+ * @param target - model-facing target.
+ * @returns the retired member, or undefined.
+ */
+export function findRetired(roster, target) {
+  return roster.members.find((member) => targetOf(member) === target && member.phase === PHASE.retired)
+}
+
+/** Whether a target is already used by a live member. */
+export function hasLiveTarget(roster, target) {
+  return roster.members.some((member) => targetOf(member) === target && ADDRESSABLE.has(member.phase))
+}
+
+/**
  * Reserve the next generation of a base name and return the provisioning record.
  * The caller persists this record before starting the child, so a crash leaves a visible reservation
  * rather than an invisible child.

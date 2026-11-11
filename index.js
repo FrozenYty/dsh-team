@@ -23,10 +23,14 @@
  * The plugin writes no session events. Its durable state lives in one storage domain (ADR 0003).
  */
 
+import { dirname, join } from 'node:path'
+
 import {
   PHASE,
   adoptMember,
   findByTarget,
+  findRetired,
+  hasLiveTarget,
   liveStateOf,
   openRosterStore,
   planMember,
@@ -37,7 +41,7 @@ import {
   writeRoster,
 } from './roster.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
-import { resolveDataDir, trashMemberSession } from './trash.js'
+import { resolveDataDir, restoreSessionArtifact, sessionRootFromSibling, trashMemberSession } from './trash.js'
 
 export const name = 'team-roster'
 
@@ -142,6 +146,18 @@ const MESSAGE_VALUE = {
     target: { type: 'string' },
     sent: { type: 'boolean' },
     message_id: { type: 'string' },
+    message: { type: 'string' },
+  },
+}
+
+const RESTORE_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['target', 'restored'],
+  properties: {
+    target: { type: 'string' },
+    restored: { type: 'boolean' },
+    path: { type: 'string' },
     message: { type: 'string' },
   },
 }
@@ -451,7 +467,11 @@ function install(agent, ctx, store, hooks) {
 
         const retired = { ...member, phase: PHASE.retired, retiredAt: new Date().toISOString() }
         if (typeof args.reason === 'string' && args.reason.length > 0) retired.retireReason = args.reason
-        if (trash.moved && typeof trash.trashPath === 'string') retired.trashPath = trash.trashPath
+        if (trash.moved && typeof trash.trashPath === 'string') {
+          retired.trashPath = trash.trashPath
+          retired.trashKind = trash.kind === 'file' ? 'file' : 'directory'
+          if (typeof trash.originalPath === 'string') retired.originalPath = trash.originalPath
+        }
         await updateRoster(table, leadSessionId, (roster) => withMember(roster, retired))
 
         // Both host effects read tombstones through short caches; refresh now so the member leaves the
@@ -470,6 +490,107 @@ function install(agent, ctx, store, hooks) {
             : `Member retired and tombstoned; the session artifact was not moved (${trash.reason ?? 'unknown'}).`,
         }
         if (trash.moved && typeof trash.trashPath === 'string') value.trash_path = trash.trashPath
+        return value
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'restore_member',
+      description: 'Bring a retired member back: move its trashed session to the path it came from and return the record to active. It refuses when a live member already uses the target, and reports why when no artifact was recorded. A restored session may take one client refresh to reappear.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['target'],
+        properties: {
+          target: { type: 'string', description: 'Retired member target from list_members.' },
+        },
+      },
+      output: { schema: RESTORE_VALUE },
+      async execute(args, exec) {
+        const caller = callingAgent(exec.agent, 'restore_member')
+        requireLead(ctx, caller, 'restore_member')
+        if (typeof args.target !== 'string' || args.target.length === 0) {
+          throw new Error('restore_member: target must be a non-empty string')
+        }
+        const table = await store
+        const leadSessionId = leadSessionIdOf(caller)
+        const roster = readRoster(table, leadSessionId)
+        const member = findRetired(roster, args.target)
+        if (member === undefined) throw new Error(`restore_member: no retired member named "${args.target}"`)
+        if (hasLiveTarget(roster, args.target)) {
+          throw new Error(`restore_member: a live member already uses "${args.target}"; retire it first`)
+        }
+
+        let restoredPath
+        if (typeof member.trashPath === 'string') {
+          let originalPath = typeof member.originalPath === 'string' ? member.originalPath : undefined
+          if (originalPath === undefined) {
+            // A tombstone written before the original path was recorded. Derive the sessions root from a
+            // sibling still on disk rather than guessing; say so plainly when there is none.
+            const sessionsRoot = await sessionRootFromSibling(
+              ctx.get('sessionPersistence'),
+              roster.members.map((candidate) => candidate.childId),
+              member.childId,
+            )
+            if (sessionsRoot === undefined) {
+              return {
+                target: targetOf(member),
+                restored: false,
+                message: 'The tombstone has a trash path but no recorded original path, and no sibling session is on disk to derive the sessions root from. Move the artifact back by hand and re-add the member.',
+              }
+            }
+            originalPath = join(sessionsRoot, member.childId)
+          }
+          const outcome = await restoreSessionArtifact({
+            trashPath: member.trashPath,
+            originalPath,
+            kind: member.trashKind === 'file' ? 'file' : 'directory',
+          })
+          if (!outcome.restored) {
+            return {
+              target: targetOf(member),
+              restored: false,
+              message: `Nothing was moved back: ${outcome.reason}. The record stays retired.`,
+            }
+          }
+          restoredPath = outcome.path
+        } else {
+          // Retired through the workspace-archive fallback, so unhide instead of moving files.
+          const workspace = ctx.get('workspaceRegistry')
+          if (workspace === undefined) {
+            return {
+              target: targetOf(member),
+              restored: false,
+              message: 'No session artifact was recorded for this member, and no workspace service is available to unhide it. The record stays retired.',
+            }
+          }
+          try {
+            await workspace.unarchiveSession(member.childId)
+          } catch (error) {
+            return {
+              target: targetOf(member),
+              restored: false,
+              message: `The workspace refused to unhide the session (${error instanceof Error ? error.message : String(error)}). The record stays retired.`,
+            }
+          }
+        }
+
+        const revived = { ...member, phase: PHASE.active }
+        delete revived.retiredAt
+        delete revived.retireReason
+        delete revived.trashPath
+        delete revived.trashKind
+        delete revived.originalPath
+        await updateRoster(table, leadSessionId, (current) => withMember(current, revived))
+        hooks.filter.invalidate()
+        void hooks.slots.refresh()
+
+        const value = {
+          target: targetOf(member),
+          restored: true,
+          message: 'Member restored and active again. A restored session may take one client refresh to reappear.',
+        }
+        if (typeof restoredPath === 'string') value.path = restoredPath
         return value
       },
     })))

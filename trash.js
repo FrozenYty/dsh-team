@@ -9,7 +9,7 @@
  * No `@deepseek-ai/*` import: a profile-linked bundle cannot resolve those packages (ADR 0002).
  */
 
-import { cp, lstat, mkdir, rename, rm } from 'node:fs/promises'
+import { cp, lstat, mkdir, rename, rm, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -105,7 +105,7 @@ export async function moveSessionArtifact({
  * not leave the roster claiming a member is still live.
  * @param {object} ctx - host plugin context.
  * @param {{leadSessionId: string, memberId: string, dataDir: string, now?: number, renameFn?: typeof rename}} request
- * @returns {Promise<{moved: boolean, trashPath?: string, reason?: string}>}
+ * @returns {Promise<{moved: boolean, trashPath?: string, originalPath?: string, kind?: 'directory'|'file', reason?: string}>}
  */
 export async function trashMemberSession(ctx, request) {
   const { leadSessionId, memberId, dataDir } = request
@@ -134,8 +134,85 @@ export async function trashMemberSession(ctx, request) {
       dirName: `${memberId}-${stamp}`,
       ...request.renameFn === undefined ? {} : { renameFn: request.renameFn },
     })
-    return { moved: true, trashPath }
+    return {
+      moved: true,
+      trashPath,
+      originalPath: source.path,
+      kind: source.isDirectory ? 'directory' : 'file',
+    }
   } catch (error) {
     return { moved: false, reason: `move-failed: ${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+/**
+ * Derive the directory that holds child Session directories, using any sibling still on disk.
+ * A reported location looks like `.../<workspace-key>/<childId>/<artifact>`, so two `dirname` calls reach
+ * the directory whose children are member directories.
+ * @param {{stat?: (id: string) => Promise<unknown>}|undefined} persistence - session persistence service.
+ * @param {string[]} childIds - candidate sibling Session ids.
+ * @param {string} exceptId - the member being restored; never used as its own template.
+ * @returns {Promise<string|undefined>} the sessions root, or undefined when no sibling is readable.
+ */
+export async function sessionRootFromSibling(persistence, childIds, exceptId) {
+  if (persistence === undefined || typeof persistence.stat !== 'function') return undefined
+  for (const childId of childIds) {
+    if (childId === exceptId) continue
+    let snapshot
+    try {
+      snapshot = await persistence.stat(childId)
+    } catch (error) {
+      continue
+    }
+    const reported = snapshot?.location?.path
+    if (typeof reported !== 'string' || reported === '') continue
+    return dirname(dirname(reported))
+  }
+  return undefined
+}
+
+/**
+ * Move a trashed artifact back where it came from. This is the other half of retirement: the record keeps
+ * the trash path and the original path, so recovery is a move, not a guess. Idempotent and
+ * non-destructive — an existing destination is never overwritten.
+ * @param {{trashPath: string, originalPath: string, kind?: 'directory'|'file', renameFn?: typeof rename}} request
+ * @returns {Promise<{restored: boolean, path?: string, reason?: string}>}
+ */
+export async function restoreSessionArtifact(request) {
+  const { trashPath, originalPath, kind = 'directory' } = request
+  if (typeof trashPath !== 'string' || typeof originalPath !== 'string') {
+    return { restored: false, reason: 'no-recorded-path' }
+  }
+  const trashInfo = await lstat(trashPath).catch(() => undefined)
+  if (trashInfo === undefined) return { restored: false, reason: 'trash-missing' }
+  const artifactPath = kind === 'file' ? join(trashPath, basename(originalPath)) : trashPath
+  const artifactInfo = await lstat(artifactPath).catch(() => undefined)
+  if (artifactInfo === undefined) return { restored: false, reason: 'artifact-missing' }
+  const destinationInfo = await lstat(originalPath).catch(() => undefined)
+  if (destinationInfo !== undefined) return { restored: false, reason: 'destination-exists' }
+
+  await mkdir(dirname(originalPath), { recursive: true })
+  const renameFn = request.renameFn ?? rename
+  try {
+    await renameFn(artifactPath, originalPath)
+  } catch (error) {
+    if (error?.code !== 'EXDEV') {
+      return { restored: false, reason: `restore-failed: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    if (kind === 'file') {
+      await cp(artifactPath, originalPath, { force: false, errorOnExist: false })
+      await rm(artifactPath, { force: true })
+    } else {
+      await cp(artifactPath, originalPath, { recursive: true, force: false, errorOnExist: false })
+      await rm(artifactPath, { recursive: true, force: true })
+    }
+  }
+  if (kind === 'file') {
+    // The trash entry for a moved file is a wrapper directory that is empty now. `rmdir` fails rather
+    // than acting recursively, so it cannot touch data if the directory is not empty.
+    await rmdir(trashPath).catch(() => undefined)
+  }
+  // Drop the per-Lead trash directory once it has no entries left; `rmdir` refuses a non-empty one.
+  await rmdir(dirname(trashPath)).catch(() => undefined)
+  return { restored: true, path: originalPath }
 }
