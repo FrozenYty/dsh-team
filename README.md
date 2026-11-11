@@ -1,4 +1,4 @@
-# dsh-team-roster
+# dsh-team
 
 [中文](README-zh.md)
 
@@ -6,15 +6,18 @@ A DeepSeek Harness profile bundle that gives an agent team the lifecycle the shi
 can retire a member, restore it from a recoverable session trash, and replace it with a successor that
 starts from a handoff brief. It owns the roster and has no browser half.
 
+[github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
+
 ## What it is
 
-One Host plugin plus one bundle patch: the patch inserts `dsh-team-roster` and enables the shipped
+One Host plugin plus one bundle patch: the patch inserts `dsh-team` and enables the shipped
 `compaction-basic` row, and the plugin imports no Harness package, writes no session events, and keeps its
-state in a `storageDomain` domain keyed by Lead Session id (ADR 0003).
+state in a `storageDomain` domain keyed by Lead Session id (ADR 0003). The name changed in v0.10.0; the
+storage domain, the patch row id and the trash directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.9.0.
+- Current version: v0.10.0.
 - Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
   refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
@@ -89,7 +92,7 @@ The walkthrough is abridged from an acceptance run recorded in [PROGRESS.md](PRO
 | Step | Behaviour |
 |---|---|
 | Stop | `retire_member` drains the child: its turn ends, and its activation and capacity slot are released. |
-| Move | Its persisted Session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, with the original path and artifact kind recorded. Recovery is a directory move back. |
+| Move | Its persisted Session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, with the original path and artifact kind recorded. Recovery is a directory move back. That directory keeps its pre-rename name, because every recorded `trashPath` lives under it (ADR 0014). |
 | Tombstone | The record becomes `retired` and keeps the assignment and the paths; the next generation of the name can then be spawned. The projections stop serving the member, and a repeated retirement is a no-op that says so. |
 | Archive fallback | When no artifact can be moved, the workspace archive hides the Session instead, and the record and the result say so (`archived: true`). |
 | Retention | A retirement that moved an artifact in removes the oldest entries past the effective per-Lead cap in the same call and reports the count in `pruned`; the cap is enforced only there — no timer and no read-time sweep for it. The platform has no Session-deletion API, which is why the plugin deletes only its own trash copies (ADR 0011); the cap and its refusal are in Configuration below. |
@@ -142,7 +145,8 @@ tree — there is no build step. Verification after installing is live calls, no
 
 ## Configuration
 
-The plugin's data directory is `~/.dsh/team-roster`, overridable with `DSH_TEAM_ROSTER_DATA_DIR`; its
+The plugin's data directory is `~/.dsh/team-roster`, overridable with `DSH_TEAM_DATA_DIR` (the
+pre-rename `DSH_TEAM_ROSTER_DATA_DIR` still works; ADR 0014); its
 `trash/` holds retired sessions, while the roster lives in a `storageDomain` domain (ADR 0003).
 
 One Lead's trash keeps at most **20** retired sessions. The cap is the `trashLimit` field of the bundle's
@@ -154,12 +158,15 @@ patch row, so a profile changes it in its own `cordis.patch.yml` by id:
     trashLimit: 7
 ```
 
+That `id` is frozen at `team-roster` while the package is `dsh-team`: it is the key a profile uses
+to address this row, so renaming it would silently stop the override from matching (ADR 0014).
+
 The field must be an integer of at least 1; `0`, negatives, fractions, numeric strings, `NaN` and an
 explicit `null` are refused, not clamped, at load, before any tool is registered. The refusal reads
-`dsh-team-roster: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`, and a
+`dsh-team: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`, and a
 retirement that moved an artifact in enforces the resolved cap; omitting the field keeps the default of 20.
 
-The entry declares no `Config` **schema**, so the provider reports `include:team-roster` as `absent`: the
+The entry declares no `Config` **schema**, so the provider reports `include:dsh-team` as `absent`: the
 schema projection, not configurability — the field is validated in `apply`. Only a native Schemastery schema
 projects, and a zero-import bundle (ADR 0002) cannot import one (ADR 0012).
 

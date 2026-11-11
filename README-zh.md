@@ -1,16 +1,18 @@
-# dsh-team-roster
+# dsh-team
 
 [English](README.md)
 
 一个 DeepSeek Harness 的 profile bundle，给智能体团队补上官方花名册缺少的生命周期：Lead 可以退役成员、从可恢复的会话回收站恢复成员，也可以用一位带着交接书启动的继任者替换成员。花名册归本插件所有，没有浏览器半区。
 
+[github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
+
 ## 插件是什么
 
-一个 Host 插件加一条 bundle 补丁：补丁插入 `dsh-team-roster`，并启用官方默认关闭的 `compaction-basic` 行；插件不导入任何 Harness 包、不写会话事件，状态存放在以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。
+一个 Host 插件加一条 bundle 补丁：补丁插入 `dsh-team`，并启用官方默认关闭的 `compaction-basic` 行；插件不导入任何 Harness 包、不写会话事件，状态存放在以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。名称在 v0.10.0 改过；存储域、补丁行 id 与回收站目录刻意没有跟着改（ADR 0014）。
 
 ## 状态
 
-- 当前版本：v0.9.0。
+- 当前版本：v0.10.0。
 - 在作者本机 profile 上实测：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0，v0.6.0 复测）；回收站上限（v0.7.0）；可配置上限（v0.8.0），配置值生效，越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`。
 - 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护，以及“仍在运行的成员永不被清扫”这一条。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
@@ -64,7 +66,7 @@ handoff-probe-g2（从未见过前任）回复：42
 | 步骤 | 行为 |
 |---|---|
 | 停止 | `retire_member` 排空子代理：它的这一轮结束，激活与容量名额随之释放。 |
-| 移动 | 持久化会话被移到 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，原始路径与产物类型记在记录上。恢复就是把目录移回去。 |
+| 移动 | 持久化会话被移到 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，原始路径与产物类型记在记录上。恢复就是把目录移回去。该目录沿用改名前的位置，因为记录在案的每个 `trashPath` 都在它下面（ADR 0014）。 |
 | 立碑 | 记录转为 `retired`，保留 assignment 与各条路径；之后可以启动该名字的下一代。投影不再下发该成员，再次退役是无操作，并会说明这一点。 |
 | 归档兜底 | 产物移不动时，改由工作区归档隐藏该会话，记录与返回结果都会说明（`archived: true`）。 |
 | 保留上限 | 成功移入产物的那次退役，会在同一次调用里删掉超出该 Lead 生效上限的最旧条目，并在 `pruned` 里报告数量；上限只在那里执行——没有定时器，读取时也不为它清理。平台没有会话删除 API，所以插件只删自己回收站里的副本（ADR 0011）；上限本身与越界拒绝见下面的配置一节。 |
@@ -100,7 +102,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 
 ## 配置
 
-插件的数据目录是 `~/.dsh/team-roster`，可用 `DSH_TEAM_ROSTER_DATA_DIR` 覆盖；其 `trash/` 存退役会话，花名册本身则放在 `storageDomain` 域里（ADR 0003）。
+插件的数据目录是 `~/.dsh/team-roster`，可用 `DSH_TEAM_DATA_DIR` 覆盖（改名前的 `DSH_TEAM_ROSTER_DATA_DIR` 仍然可用，ADR 0014）；其 `trash/` 存退役会话，花名册本身则放在 `storageDomain` 域里（ADR 0003）。
 
 每个 Lead 的回收站最多保留 **20** 份退役会话。这个上限是 bundle 补丁行上的 `trashLimit` 字段，所以改它是改 profile 自己的 `cordis.patch.yml`，按 id 匹配：
 
@@ -110,9 +112,11 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
     trashLimit: 7
 ```
 
-该字段必须是不小于 1 的整数；`0`、负数、小数、数字字符串、`NaN` 以及显式写的 `null` 都会被拒绝，而不是被截断取整，拒绝发生在加载时、任何工具注册之前。报错原文是 `dsh-team-roster: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`。成功移入产物的那次退役按解析出的生效上限执行；省略该字段就保持默认值 20。
+这个 `id` 冻结为 `team-roster`，而包名是 `dsh-team`：profile 正是按它定位这一行，改名会让覆盖静默失配（ADR 0014）。
 
-入口仍然不声明 `Config` **schema**，所以提供方把 `include:team-roster` 报为 `absent`：这是 schema 投影层面的说法，不代表不可配置——字段在 `apply` 里被校验。只有原生 Schemastery schema 才会被投影，而零导入的 bundle（ADR 0002）无法导入它（ADR 0012）。
+该字段必须是不小于 1 的整数；`0`、负数、小数、数字字符串、`NaN` 以及显式写的 `null` 都会被拒绝，而不是被截断取整，拒绝发生在加载时、任何工具注册之前。报错原文是 `dsh-team: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`。成功移入产物的那次退役按解析出的生效上限执行；省略该字段就保持默认值 20。
+
+入口仍然不声明 `Config` **schema**，所以提供方把 `include:dsh-team` 报为 `absent`：这是 schema 投影层面的说法，不代表不可配置——字段在 `apply` 里被校验。只有原生 Schemastery schema 才会被投影，而零导入的 bundle（ADR 0002）无法导入它（ADR 0012）。
 
 ## 只面向模型
 

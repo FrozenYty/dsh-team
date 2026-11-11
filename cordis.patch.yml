@@ -1,4 +1,4 @@
-# dsh-team-roster bundle patch.
+# dsh-team bundle patch.
 #
 # 1. Enable the shipped compaction backend. The row is present in the composed profile but inactive, so
 #    nothing condenses: an agent grows unchecked toward the window. A shipped package, so this bundle
@@ -10,13 +10,16 @@
 # 2. Insert this bundle's own Host plugin. It owns the roster, the host-side projection filter and the
 #    roster slot credit; the shipped team tool row stays enabled because it owns the shared task board.
 #
-#    The row id is also the override target: a profile's own cordis.patch.yml can replace this `config`
-#    wholesale with `- id: team-roster` + `config: { trashLimit: <integer> }` to change the per-Lead
-#    session-trash cap (ADR 0012). An out-of-range value is refused when the profile loads.
+#    The row id is FROZEN at `team-roster` and must never be renamed with the package. It is the override
+#    target a profile writes: that profile's own cordis.patch.yml replaces this `config` wholesale with
+#    `- id: team-roster` + `config: { trashLimit: <integer> }` to change the per-Lead session-trash cap
+#    (ADR 0012). An out-of-range value is refused when the profile loads. Renaming the id would silently
+#    stop every existing profile's override from matching, so the cap would revert to the default with no
+#    error; the package was renamed to `dsh-team` and the id deliberately stayed (ADR 0014).
 - id: compaction-basic
   disabled: false
 
 - insert:
     - id: team-roster
-      name: 'dsh-team-roster'
+      name: 'dsh-team'
       config: {}

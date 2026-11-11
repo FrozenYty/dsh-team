@@ -39,6 +39,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the trash capped, and what happens to a pruned member? | `docs/adr/0011-trash-retention.md` — point 1 superseded by 0012 | English |
 | Why is the trash cap a config field, and why does the entry declare no Config schema? | `docs/adr/0012-configurable-retention.md` | English |
 | Why do one-shot members leave on their own, and why does the sweep need evidence? | `docs/adr/0013-ephemeral-members.md` | English |
+| Why is the plugin called `dsh-team`, and which identifiers did not change? | `docs/adr/0014-plugin-name.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 
@@ -66,6 +67,7 @@ Harness disagree, the repository is wrong.
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
 | a document added, renamed or removed | this file and `INDEX-zh.md` |
+| the plugin's name or display title, or a patch row's `name` | `package.json`, `cordis.patch.yml`, `AGENTS.md`, `README.md` + `README-zh.md`, `docs/architecture-en.md` + `docs/architecture-zh.md`, a new ADR |
 | anything that alters the install procedure | `README.md` + `README-zh.md` |
 
 ## 5. Not in this repository

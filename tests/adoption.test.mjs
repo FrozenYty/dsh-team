@@ -184,7 +184,7 @@ test('a mutation suspended across the discovery await cannot resurrect a tombsto
     table,
     leadSessionId: 'lead-1',
     leadAgent: caller,
-    dataDir: '/tmp/team-roster-test',
+    dataDir: '/tmp/dsh-team-test',
     hooks: hooks(),
     target: 'reviewer',
   })

@@ -1,5 +1,5 @@
 /**
- * Durable roster storage and lifecycle helpers for dsh-team-roster.
+ * Durable roster storage and lifecycle helpers for dsh-team.
  *
  * No imports beyond `node:crypto`: a profile-linked bundle cannot resolve `@deepseek-ai/*` or `zod`
  * (ADR 0002). The domain spec below is therefore hand-built. That is safe because the storage facility
@@ -13,7 +13,15 @@
 
 import { randomUUID } from 'node:crypto'
 
-/** Domain name: /^[a-z][a-z0-9_]*$/ per the storage facility. */
+/**
+ * Domain name: /^[a-z][a-z0-9_]*$/ per the storage facility.
+ *
+ * FROZEN at `team_roster` (ADR 0014). Do not rename it with the package: this string names where every
+ * roster record and every tombstone already lives, and `restore_member` depends on tombstones. A new
+ * domain name would be an empty domain, so a running profile would see no members and every retired
+ * member would lose the tombstone that makes `restore_member` possible. Moving it needs a migration that
+ * copies the old domain first, exactly as `LEGACY_DOMAIN_NAME` below did once; it is not a rename.
+ */
 const DOMAIN_NAME = 'team_roster'
 /** The domain this plugin used before it was renamed; read once so an existing roster is not orphaned. */
 const LEGACY_DOMAIN_NAME = 'team_control'
@@ -151,7 +159,7 @@ function parseRoster(value) {
   return value
 }
 
-/** The hand-built domain specification. */
+/** The hand-built domain specification. `ROSTER_SPEC.name` is the frozen `team_roster` domain (ADR 0014). */
 export const ROSTER_SPEC = domainSpec(DOMAIN_NAME)
 
 /** Build the domain spec for one domain name; the shape is identical for the legacy domain. */

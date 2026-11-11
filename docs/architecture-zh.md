@@ -9,9 +9,11 @@
 一个 DeepSeek Harness **profile bundle**。安装它会做两件事：
 
 1. 选中一条 profile 默认关闭的官方插件行（`compaction-basic`）；
-2. 插入一个我们自己写的 Host 插件（`dsh-team-roster`）。
+2. 插入一个我们自己写的 Host 插件（`dsh-team`）。
 
 没有构建步骤，也没有运行时依赖：官方行由已安装的 Harness 自己解析，我们的入口不导入任何东西（ADR 0002）。bundle 只有 Host 半区：没有浏览器半区（ADR 0008）。
+
+插件在 v0.10.0 由 `dsh-team-roster` 改名而来，而它的存储域（`team_roster`）、补丁行 id（`team-roster`）与回收站目录（`~/.dsh/team-roster`）刻意保留了旧拼写（ADR 0014）。
 
 它唯一的可调项是每个 Lead 的会话回收站上限，由 bundle 自己补丁行上的 `trashLimit` 字段承载（`- id: team-roster`，`config: { trashLimit: <整数> }`）。`apply(ctx, config)` 在注册任何东西之前先解析它：字段缺失取 `DEFAULT_TRASH_LIMIT`（20），至少为 1 的整数原样采用，其他值则让加载失败，报错信息里点名字段、看到的值与最小值（ADR 0012）。本入口刻意不声明 `Config` schema，因此 Host 的 Config 提供方仍报 `absent`：该投影只接受原生 Schemastery 图，而零导入的 bundle 无法提供，字段改由 `apply` 校验。
 
@@ -24,6 +26,7 @@
 - **v0.4**——只面向模型的接口（ADR 0008）：设置面板与其 HTTP 桥被删除，收养范围扩大到 Lead 控制的每个后代（§4.5.1）。
 - **v0.7–v0.8**——每个 Lead 的回收站有上限，上限是 bundle 的 `trashLimit` 配置字段（§2.5、ADR 0011、ADR 0012）。
 - **v0.9**——临时成员：创建时可标记为一次性，模型本来就会调用的那些花名册操作会在它运行过并停止后，用惰性清扫把它退役（§4.3.1、ADR 0013）。
+- **v0.10**——改名：包名、补丁行的 `name` 与显示标题变为 `dsh-team` /「团队」，而存储域、补丁行 id 与回收站目录保留改名前的名字（§1、ADR 0014）。
 
 ### 2.1 启用压缩
 
