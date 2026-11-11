@@ -1,6 +1,13 @@
 /**
- * The Settings panel's HTTP bridge: a read endpoint and the two mutating operations, over the Host web
- * server.
+ * The Settings panel's HTTP bridge: a per-session read, the picker's index, and the two mutating
+ * operations, over the Host web server.
+ *
+ * The panel is per-session — one roster at a time — so the per-session payload is the only one that
+ * carries member rows. `GET /state?leadSessionId=` answers exactly one roster, and `GET /sessions`
+ * answers a counts-only index for the picker. Neither lists Sessions: the roster already knows its Lead
+ * Session ids, and the browser joins the index against the session catalog it already subscribes to
+ * (`useSessions`), so titles never travel over this bridge and a roster whose Lead Session is closed
+ * still reads.
  *
  * `ctx.webServer.register` takes a named route whose `handler` owns the raw node request and response —
  * that is the only shape that can answer a POST, because a `resource` is answered only for GET/HEAD and
@@ -23,9 +30,10 @@ export const API_PREFIX = '/api/team-roster'
 /** Cap on a request body; both mutations carry a few hundred bytes at most. */
 export const BODY_LIMIT_BYTES = 64 * 1024
 
-/** The three endpoints, in one table so path and method stay together. */
+/** The four endpoints, in one table so path and method stay together. */
 const ROUTES = [
   { path: `${API_PREFIX}/state`, method: 'GET', name: 'state' },
+  { path: `${API_PREFIX}/sessions`, method: 'GET', name: 'sessions' },
   { path: `${API_PREFIX}/retire`, method: 'POST', name: 'retire' },
   { path: `${API_PREFIX}/restore`, method: 'POST', name: 'restore' },
 ]
@@ -111,25 +119,74 @@ export function resolveRoute(method, pathname) {
 }
 
 /**
- * Build the `GET .../state` body from the durable store, without listing or probing Sessions.
- * The roster already knows its Lead Session ids, which is why the panel needs no session picker.
- * @param {{ctx: object, table: {entries: () => Iterable<[string, object]>}}} request
- * @returns {{rosters: object[], version: number}} rosters grouped by Lead, newest write time in ms.
+ * Build the `GET .../state` body for exactly one Lead Session, without listing or probing Sessions.
+ * @param {{ctx: object, table: {get: (key: string) => object|undefined}, leadSessionId: string}} request
+ * @returns {{leadSessionId: string, leadLive: boolean, exists: boolean, members: object[], updatedAt?: string}}
+ *   one roster. `exists: false` is a normal answer, not an error: the panel states plainly that this
+ *   session has no roster yet instead of rendering an empty page.
  */
-export function buildState({ ctx, table }) {
-  const rosters = []
-  let version = 0
+export function buildSessionState({ ctx, table, leadSessionId }) {
+  const roster = table.get(leadSessionId)
+  const value = {
+    leadSessionId,
+    leadLive: ctx.agents.get(leadSessionId) !== undefined,
+    exists: roster !== undefined,
+    members: roster === undefined ? [] : (roster.members ?? []).map((member) => memberRow(ctx, member)),
+  }
+  if (typeof roster?.updatedAt === 'string') value.updatedAt = roster.updatedAt
+  return value
+}
+
+/**
+ * Build the picker's index: one counts-only row per Lead Session that has a roster, plus the session the
+ * panel should open. No member rows and no Session reads — the index stays cheap enough to poll while a
+ * roster's Lead Session is closed.
+ *
+ * Ordering is the documented default rule: live Leads first, then the most recently written roster, then
+ * the id ascending. So when the browser has no current-session signal at all, `selectedLeadSessionId`
+ * lands on a roster whose Lead is live whenever one exists, and the picker is the way to any other.
+ *
+ * A named `currentSessionId` always wins, even when it has no roster: that is the session the user is in,
+ * and the panel must be able to say so rather than silently showing somebody else's team.
+ *
+ * @param {{ctx: object, table: {entries: () => Iterable<[string, object]>}, currentSessionId?: string}} request
+ * @returns {{sessions: object[], selectedLeadSessionId?: string}} the index and the opening selection.
+ */
+export function buildSessionsIndex({ ctx, table, currentSessionId }) {
+  const entries = []
   for (const [leadSessionId, roster] of table.entries()) {
+    const id = String(leadSessionId)
+    const members = roster?.members ?? []
     const written = Date.parse(roster?.updatedAt ?? '')
-    if (Number.isFinite(written) && written > version) version = written
-    rosters.push({
-      leadSessionId: String(leadSessionId),
-      leadLive: ctx.agents.get(String(leadSessionId)) !== undefined,
-      members: (roster?.members ?? []).map((member) => memberRow(ctx, member)),
+    entries.push({
+      leadSessionId: id,
+      memberCount: members.length,
+      liveCount: members.filter((member) => member?.phase !== 'retired').length,
+      leadLive: ctx.agents.get(id) !== undefined,
+      written: Number.isFinite(written) ? written : 0,
+      updatedAt: typeof roster?.updatedAt === 'string' ? roster.updatedAt : undefined,
     })
   }
-  rosters.sort((a, b) => Number(b.leadLive) - Number(a.leadLive) || a.leadSessionId.localeCompare(b.leadSessionId))
-  return { rosters, version }
+  entries.sort((left, right) => Number(right.leadLive) - Number(left.leadLive)
+    || right.written - left.written
+    || left.leadSessionId.localeCompare(right.leadSessionId))
+
+  const sessions = entries.map((entry) => {
+    const row = {
+      leadSessionId: entry.leadSessionId,
+      memberCount: entry.memberCount,
+      liveCount: entry.liveCount,
+      leadLive: entry.leadLive,
+    }
+    if (entry.updatedAt !== undefined) row.updatedAt = entry.updatedAt
+    return row
+  })
+
+  const named = typeof currentSessionId === 'string' ? currentSessionId.trim() : ''
+  const selected = named !== '' ? named : sessions[0]?.leadSessionId
+  const value = { sessions }
+  if (selected !== undefined) value.selectedLeadSessionId = selected
+  return value
 }
 
 /** Write one JSON response. `no-store` because every read reflects live state. */
@@ -205,8 +262,16 @@ export function createApiHandler({ ctx, store, dataDir, hooks, log = () => {} })
     }
 
     try {
+      if (route.name === 'sessions') {
+        const currentSessionId = (url.searchParams.get('currentSessionId') ?? '').trim()
+        return sendJson(response, 200, buildSessionsIndex({ ctx, table, currentSessionId }))
+      }
       if (route.name === 'state') {
-        return sendJson(response, 200, buildState({ ctx, table }))
+        const leadSessionId = (url.searchParams.get('leadSessionId') ?? '').trim()
+        if (leadSessionId === '') {
+          return sendJson(response, 400, { error: 'leadSessionId is required.' })
+        }
+        return sendJson(response, 200, buildSessionState({ ctx, table, leadSessionId }))
       }
 
       const body = await readJsonBody(request)

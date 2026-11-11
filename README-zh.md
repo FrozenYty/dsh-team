@@ -43,11 +43,15 @@ bundle 同时启用了出厂默认关闭的 `compaction-basic`。
 
 bundle 还带一个设置页（设置 → **团队花名册**），由浏览器半区（`client.js`，注册进 `settings.section` 槽）通过宿主编织的仅回环 JSON 桥（`routes.js`）渲染。
 
-- 列出存储里的全部花名册，按 Lead 会话分组；每行给出成员 target、相态、代次、实时状态与上下文压力。面板不需要会话选择器：存储本身就知道有哪些 Lead。
+**面板是按会话的。** 持久存储本身就按 Lead 会话各存一份花名册，所以本页一次只显示其中一份：
+
+- 打开时定位到你当前所在的会话。该会话在浏览器侧从 shell 自己的会话目录（`useSessions`）解析，其行带有 `retainedBy.mainView`（shell 自己的“当前打开”计数）和 `displayTitle`。有标题就显示标题，没有就显示短 id；会话数据不经过这座桥。
+- **选择器**列出拥有花名册的会话，附成员数与 Lead 是否在线，便于切到另一份。你当前所在的会话即使还没有花名册也保留为选项，标注“尚无花名册”。
+- 会话没有花名册时直接说明——*这个会话还没有团队花名册。*——而不是渲染一个空页。当浏览器完全拿不到当前会话信号时，按宿主写定的顺序选取打开项：Lead 在线的排前，其次最近写入的花名册。
 - **刷新**按钮，加上面板打开期间每三秒一次的轮询，因此用工具做出的改动能到达面板，无需刷新页面。
 - **退役**带行内确认，已退役成员显示**恢复**。两者调用的是模型工具所用的同一批函数（`actions.js`），因此参数含义、结果字段与失败原因不会在两处走样。
 
-该桥只接受本机回环请求、拒绝跨源 `Origin` 头、请求体上限 64 KiB，错误一律以带状态码的 JSON 返回。Lead 会话未在线时退役成员，会得到可读的失败说明，而不是堆栈。
+该桥是两个读、两个写：`GET /api/team-roster/sessions`（只有计数的选择器索引）、`GET /api/team-roster/state?leadSessionId=…`（单个花名册及其成员行）、`POST /api/team-roster/retire` 与 `POST /api/team-roster/restore`。它只接受本机回环请求、拒绝跨源 `Origin` 头、请求体上限 64 KiB，错误一律以带状态码的 JSON 返回。Lead 会话未在线时退役成员，会得到可读的失败说明，而不是堆栈。
 
 最后一步是重新安装更新后的 bundle，目前尚未执行：插件激活与面板实际渲染都未验证（PLAN.md P3-04）。
 
@@ -100,7 +104,7 @@ node scripts/check.mjs
 |---|---|
 | `index.js` | Host 插件入口、工具定义、Lead 专属权限检查 |
 | `actions.js` | 花名册操作，工具与设置桥共用 |
-| `routes.js` | `/api/team-roster` 桥：state、retire、restore，以及回环/来源防护 |
+| `routes.js` | `/api/team-roster` 桥：按会话的 state、选择器索引、retire、restore，以及回环/来源防护 |
 | `client.js` | 设置页面板（浏览器半区） |
 | `roster.js` | 持久花名册、代次命名、收养、旧域迁移 |
 | `trash.js` | 会话产物回收站 |

@@ -5,9 +5,22 @@
  * `/plugins`; the registration id must equal the package name. `settings.section` is a list slot owned by
  * the settings shell, so this panel is one page beside General, Models and Plugins.
  *
- * The panel renders the durable roster the Host owns and calls the same operations the model tools call,
- * through the HTTP bridge in `routes.js`. It polls that bridge while open, so a change made by a tool or
- * another tab appears here without a page reload.
+ * The panel is **per session**: it shows one Lead Session's roster, defaults to the session the user is
+ * in, and offers a picker for the other sessions that have one. The Host serves one roster
+ * (`GET /api/team-roster/state?leadSessionId=`) plus a counts-only index (`GET /api/team-roster/sessions`);
+ * it never lists Sessions, and the join against session titles happens here.
+ *
+ * HOW THE CURRENT SESSION IS RESOLVED (verified against the installed Harness, not assumed)
+ * `settings.section` is root-scoped, and the root scope provides the shell's standard hooks — the session
+ * catalog among them: `@deepseek-ai/dsh-client-ui-session/lib/client.js` lines 1120-1123 call
+ * `ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list }, ... })`, which is the `useSessions`
+ * seat. The row shape comes from `@deepseek-ai/dsh-api-session-controller/lib/client.js` lines 4162-4182
+ * (`projectList`): `{ id, displayTitle, title?, running, retainedBy, blank, updatedAt, ... }`. The
+ * shell's own "currently open session" test is `(row.retainedBy.mainView ?? 0) > 0` — copied from
+ * `@deepseek-ai/dsh-client-ui-workspace/lib/client.js` line 3697 (the root-scoped `sidebar.workspaces`
+ * browser, which reads `useSessions((state) => state)` on line 3669). If that seat is absent, the panel
+ * falls back to the Host's documented rule: the index is ordered live-Lead-first, so
+ * `selectedLeadSessionId` names a roster whose Lead is live, and the picker is the visible way out.
  *
  * React (and only React) comes from the browser module table, so there is no build step. Visible text is
  * registered as a Client locale namespace: the slot receives `locale: 'team-roster'` and the framework
@@ -29,22 +42,29 @@ window.__ModuleLoader__.load({
     const POLL_MS = 3000
     /** Slot order: after General (0), Models (10) and before shell-only sections. */
     const SECTION_ORDER = 25
+    /** Stable selector for the root session-catalog hook; identity keeps `useSessions` from re-reading. */
+    const ALL_SESSIONS = (state) => state
 
     /** Both built-in locales, because the locale service requires a complete pair. */
     const DICTIONARIES = {
       en: {
         nav: 'Team roster',
         title: 'Team roster',
-        subtitle: 'Every roster this profile owns. Retiring drains a member and moves its session to the trash; restoring moves it back.',
+        subtitle: 'One roster per Lead session. This page shows the session you are in, or the one you pick; retiring drains a member and moves its session to the trash, restoring moves it back.',
         refresh: 'Refresh',
-        loading: 'Loading rosters…',
-        empty: 'No team roster has been recorded in this profile yet.',
-        leadSession: 'Lead session',
+        loading: 'Loading the roster…',
+        empty: 'No team roster for this session yet.',
+        emptyProfile: 'No team roster has been recorded in this profile yet.',
+        session: 'Session',
+        picker: 'Session',
+        pickerHint: 'Sessions that have a roster.',
+        current: 'you are here',
+        noRosterOption: 'no roster yet',
         leadLive: 'live',
         leadOffline: 'not live',
-        leadOfflineHint: 'This Lead session is not open, so its members cannot be retired right now.',
+        leadOfflineHint: 'This Lead session is not open, so its members cannot be retired right now. Restoring a retired member still works.',
         members: 'members',
-        noMembers: 'No members recorded.',
+        noMembers: 'No members recorded for this session.',
         generation: 'gen',
         context: 'Context pressure',
         resident: 'resident',
@@ -68,16 +88,21 @@ window.__ModuleLoader__.load({
       zh: {
         nav: '团队花名册',
         title: '团队花名册',
-        subtitle: '本 profile 内的全部花名册。退役会排空成员并把会话移入回收站；恢复会把它移回去。',
+        subtitle: '每个 Lead 会话各自一份花名册。本页显示你当前所在的会话，或你选中的会话；退役会排空成员并把会话移入回收站，恢复会把它移回去。',
         refresh: '刷新',
         loading: '正在读取花名册…',
-        empty: '本 profile 还没有任何团队花名册。',
-        leadSession: 'Lead 会话',
+        empty: '这个会话还没有团队花名册。',
+        emptyProfile: '本 profile 还没有任何团队花名册。',
+        session: '会话',
+        picker: '会话',
+        pickerHint: '拥有花名册的会话。',
+        current: '当前所在',
+        noRosterOption: '尚无花名册',
         leadLive: '在线',
         leadOffline: '未在线',
-        leadOfflineHint: '该 Lead 会话未打开，成员暂时无法退役。',
+        leadOfflineHint: '该 Lead 会话未打开，成员暂时无法退役；恢复已退役成员仍然可用。',
         members: '名成员',
-        noMembers: '暂无成员。',
+        noMembers: '该会话暂无成员。',
         generation: '代次',
         context: '上下文压力',
         resident: '驻留',
@@ -156,6 +181,10 @@ window.__ModuleLoader__.load({
       '.tr-status--unloaded{color:var(--dsw-alias-label-tertiary)}',
       '.tr-dot{width:6px;height:6px;border-radius:50%;background:currentColor}',
       '.tr-pressure{font-variant-numeric:tabular-nums}',
+      '.tr-picker{display:flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-2)}',
+      '.tr-picker-label{color:var(--dsw-alias-label-tertiary);font-size:12px;white-space:nowrap}',
+      '.tr-select{flex:1;min-width:0;padding:4px 8px;border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px}',
+      '.tr-here{padding:1px 7px;border:.5px solid var(--dsw-alias-state-business-primary);border-radius:999px;color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px;white-space:nowrap}',
       '.tr-btn{padding:3px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap}',
       '.tr-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
       '.tr-btn:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}',
@@ -188,6 +217,46 @@ window.__ModuleLoader__.load({
       return String(tokens)
     }
 
+    /**
+     * The id of the session the shell currently has open, or undefined.
+     * Copied from the shipped root-scoped session browser:
+     * `@deepseek-ai/dsh-client-ui-workspace/lib/client.js` line 3697.
+     * @param {{byId?: Record<string, {retainedBy?: {mainView?: number}}>}} sessions - `useSessions` snapshot.
+     * @returns {string|undefined} the retained main-view session id.
+     */
+    function currentSessionIdOf(sessions) {
+      const byId = sessions?.byId
+      if (byId === null || typeof byId !== 'object') return undefined
+      return Object.values(byId).find((row) => (row?.retainedBy?.mainView ?? 0) > 0)?.id
+    }
+
+    /**
+     * A session's display title from the catalog the shell already holds, when it has one.
+     * `displayTitle` and `title` are projected by the session controller
+     * (`@deepseek-ai/dsh-api-session-controller/lib/client.js` lines 4171 and 4178).
+     * @param {object|undefined} sessions - `useSessions` snapshot.
+     * @param {string} id - Session id.
+     * @returns {string|undefined} the title, or undefined when the catalog does not know one.
+     */
+    function titleOf(sessions, id) {
+      const row = sessions?.byId?.[id]
+      const value = typeof row?.displayTitle === 'string' && row.displayTitle !== '' ? row.displayTitle : row?.title
+      return typeof value === 'string' && value !== '' ? value : undefined
+    }
+
+    /**
+     * Which roster the panel opens: the user's explicit pick while it still exists, else the session the
+     * user is in, else the Host's documented fallback selection.
+     * @param {{index?: {sessions: object[], selected?: string}, picked?: string, current?: string}} input
+     * @returns {string|undefined} the Lead Session id to render.
+     */
+    function resolveTarget({ index, picked, current }) {
+      const known = index?.sessions ?? []
+      if (picked !== undefined && (picked === current || known.some((row) => row.leadSessionId === picked))) return picked
+      if (current !== undefined) return current
+      return index?.selected
+    }
+
     /** Read one JSON response, turning a non-2xx answer into an Error carrying the server's reason. */
     async function readJson(response, t) {
       const body = await response.json().catch(() => ({}))
@@ -198,8 +267,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The settings page: the roster grouped by Lead Session, with one action per member.
-     * @param props - slot owner props `{ close }` plus the framework `t` seat and `renderSlot`.
+     * The settings page: one Lead Session's roster, chosen by the session the user is in and switchable
+     * through a picker over the sessions that have one.
+     * @param props - slot owner props `{ close }` plus the framework seats (`t`, `renderSlot`, root hooks).
      * @returns the panel element tree.
      */
     function TeamRosterPanel(props) {
@@ -207,55 +277,111 @@ window.__ModuleLoader__.load({
       const tRef = React.useRef(t)
       tRef.current = t
 
+      // Root-scoped standard hook. The seat is fixed for the life of the page, so calling it
+      // conditionally keeps the hook order stable while still tolerating a shell that lacks it.
+      const sessionHook = props?.useSessions
+      const sessions = typeof sessionHook === 'function' ? sessionHook(ALL_SESSIONS) : undefined
+      const currentSessionId = currentSessionIdOf(sessions)
+
       const [status, setStatus] = React.useState('loading')
-      const [rosters, setRosters] = React.useState([])
+      const [index, setIndex] = React.useState(undefined)
+      const [picked, setPicked] = React.useState(undefined)
+      const [roster, setRoster] = React.useState(undefined)
       const [readError, setReadError] = React.useState(undefined)
       const [actionError, setActionError] = React.useState(undefined)
       const [confirming, setConfirming] = React.useState(undefined)
       const [busy, setBusy] = React.useState(undefined)
       const alive = React.useRef(true)
 
-      const load = React.useCallback(async () => {
+      const target = resolveTarget({ index, picked, current: currentSessionId })
+      const targetRef = React.useRef(target)
+      targetRef.current = target
+      const currentRef = React.useRef(currentSessionId)
+      currentRef.current = currentSessionId
+
+      const readSessionState = React.useCallback(async (leadSessionId) => {
+        const body = await readJson(
+          await fetch(`${API_BASE}/state?leadSessionId=${encodeURIComponent(leadSessionId)}`, {
+            headers: { accept: 'application/json' },
+          }),
+          tRef.current,
+        )
+        // A slow answer for a session the user has already left must not replace the current one.
+        if (!alive.current || targetRef.current !== leadSessionId) return
+        setRoster(body)
+        setReadError(undefined)
+        setStatus('ready')
+      }, [])
+
+      const readIndex = React.useCallback(async () => {
+        const current = currentRef.current
+        const query = current === undefined ? '' : `?currentSessionId=${encodeURIComponent(current)}`
+        const body = await readJson(
+          await fetch(`${API_BASE}/sessions${query}`, { headers: { accept: 'application/json' } }),
+          tRef.current,
+        )
+        if (!alive.current) return
+        setIndex({
+          sessions: Array.isArray(body.sessions) ? body.sessions : [],
+          selected: typeof body.selectedLeadSessionId === 'string' ? body.selectedLeadSessionId : undefined,
+        })
+      }, [])
+
+      const refresh = React.useCallback(async () => {
         try {
-          const body = await readJson(await fetch(`${API_BASE}/state`, { headers: { accept: 'application/json' } }), tRef.current)
-          if (!alive.current) return
-          setRosters(Array.isArray(body.rosters) ? body.rosters : [])
-          setReadError(undefined)
-          setStatus('ready')
+          await readIndex()
+          const open = targetRef.current
+          if (open === undefined) {
+            if (alive.current) {
+              setRoster(undefined)
+              setReadError(undefined)
+              setStatus('ready')
+            }
+            return
+          }
+          await readSessionState(open)
         } catch (error) {
           if (!alive.current) return
           setReadError(messageOf(error))
           setStatus('ready')
         }
-      }, [])
+      }, [readIndex, readSessionState])
 
       React.useEffect(() => {
         alive.current = true
-        void load()
+        void refresh()
         const timer = setInterval(() => {
-          void load()
+          void refresh()
         }, POLL_MS)
         return () => {
           alive.current = false
           clearInterval(timer)
         }
-      }, [load])
+      }, [refresh, currentSessionId])
 
-      const run = async (kind, leadSessionId, target) => {
-        setBusy(target)
+      // A pick must read immediately rather than at the next poll.
+      React.useEffect(() => {
+        if (target === undefined) return
+        void readSessionState(target).catch((error) => {
+          if (alive.current) setReadError(messageOf(error))
+        })
+      }, [target, readSessionState])
+
+      const run = async (kind, leadSessionId, memberTarget) => {
+        setBusy(memberTarget)
         setActionError(undefined)
         try {
           const body = await readJson(await fetch(`${API_BASE}/${kind}`, {
             method: 'POST',
             headers: { accept: 'application/json', 'content-type': 'application/json' },
-            body: JSON.stringify({ leadSessionId, target }),
+            body: JSON.stringify({ leadSessionId, target: memberTarget }),
           }), tRef.current)
           const refused = kind === 'retire' ? body.retired === false : body.restored === false
           if (refused) {
             setActionError(typeof body.message === 'string' ? body.message : tRef.current('actionFailed'))
           }
           setConfirming(undefined)
-          await load()
+          await refresh()
         } catch (error) {
           setActionError(messageOf(error))
         } finally {
@@ -263,9 +389,9 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const startConfirm = (leadSessionId, target, kind) => {
+      const startConfirm = (leadSessionId, memberTarget, kind) => {
         setActionError(undefined)
-        setConfirming({ leadSessionId, target, kind })
+        setConfirming({ leadSessionId, target: memberTarget, kind })
       }
 
       const memberRow = (leadSessionId, member) => {
@@ -317,17 +443,65 @@ window.__ModuleLoader__.load({
             : null)
       }
 
-      const group = (roster) => h('section', { className: 'tr-group', key: roster.leadSessionId },
+      const known = index?.sessions ?? []
+      const open = roster !== undefined && target !== undefined && roster.leadSessionId === target ? roster : undefined
+
+      /** One label for the picker: the shell's title when it has one, else the short id. */
+      const labelOf = (id) => {
+        const title = titleOf(sessions, id)
+        return title === undefined ? shortId(id) : title
+      }
+
+      const options = known.map((row) => ({
+        value: row.leadSessionId,
+        label: `${labelOf(row.leadSessionId)} · ${String(row.memberCount)} ${t('members')}${row.leadLive ? '' : ` · ${t('leadOffline')}`}${row.leadSessionId === currentSessionId ? ` · ${t('current')}` : ''}`,
+      }))
+      if (target !== undefined && !known.some((row) => row.leadSessionId === target)) {
+        options.unshift({
+          value: target,
+          label: `${labelOf(target)} · ${t('noRosterOption')}${target === currentSessionId ? ` · ${t('current')}` : ''}`,
+        })
+      }
+
+      const picker = h('div', { className: 'tr-picker' },
+        h('label', { className: 'tr-picker-label', htmlFor: 'tr-session-select' }, t('picker')),
+        h('select', {
+          id: 'tr-session-select',
+          className: 'tr-select',
+          value: target ?? '',
+          disabled: options.length === 0,
+          title: t('pickerHint'),
+          onChange: (event) => setPicked(event.target.value),
+        }, options.map((option) => h('option', { key: option.value, value: option.value }, option.label))),
+        target !== undefined && target === currentSessionId
+          ? h('span', { className: 'tr-here' }, t('current'))
+          : null)
+
+      const header = h('section', { className: 'tr-group' },
         h('div', { className: 'tr-group-head' },
-          h('span', { className: 'tr-lead' }, t('leadSession')),
-          h('code', { className: 'tr-lead-id', title: roster.leadSessionId }, shortId(roster.leadSessionId)),
-          h('span', { className: `tr-badge${roster.leadLive ? ' tr-badge--live' : ''}` }, roster.leadLive ? t('leadLive') : t('leadOffline')),
+          h('span', { className: 'tr-lead' }, t('session')),
+          h('code', { className: 'tr-lead-id', title: target ?? '' }, target === undefined ? '—' : shortId(target)),
+          target === undefined ? null : h('span', { title: labelOf(target) }, labelOf(target)),
+          h('span', { className: `tr-badge${open?.leadLive ? ' tr-badge--live' : ''}` }, open?.leadLive ? t('leadLive') : t('leadOffline')),
           h('span', { className: 'tr-head-right' },
-            h('span', { className: 'tr-count' }, `${String(roster.members.length)} ${t('members')}`))),
-        roster.leadLive ? null : h('div', { className: 'tr-hint' }, t('leadOfflineHint')),
-        roster.members.length === 0
-          ? h('div', { className: 'tr-empty' }, t('noMembers'))
-          : h('ul', { className: 'tr-rows' }, roster.members.map((member) => memberRow(roster.leadSessionId, member))))
+            h('span', { className: 'tr-count' }, `${String(open?.members?.length ?? 0)} ${t('members')}`))),
+        open?.leadLive === false ? h('div', { className: 'tr-hint' }, t('leadOfflineHint')) : null,
+        open === undefined || open.exists === false
+          ? null
+          : open.members.length === 0
+            ? h('div', { className: 'tr-empty' }, t('noMembers'))
+            : h('ul', { className: 'tr-rows' }, open.members.map((member) => memberRow(open.leadSessionId, member))))
+
+      const body = status === 'loading' && open === undefined && index === undefined
+        ? h('p', { className: 'tr-empty' }, t('loading'))
+        : target === undefined || (known.length === 0 && currentSessionId === undefined)
+          // No current-session signal and no roster anywhere: nothing per-session to name yet.
+          ? h('p', { className: 'tr-empty' }, t('emptyProfile'))
+          : open === undefined
+            ? h('p', { className: 'tr-empty' }, t('loading'))
+            : open.exists === false
+              ? h('p', { className: 'tr-empty' }, t('empty'))
+              : header
 
       return h('div', { className: 'tr-panel' },
         h('style', null, CSS),
@@ -340,15 +514,12 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'tr-btn',
               disabled: status === 'loading',
-              onClick: () => void load(),
+              onClick: () => void refresh(),
             }, t('refresh')))),
+        picker,
         actionError === undefined ? null : h('p', { className: 'tr-note', role: 'alert' }, actionError),
         readError === undefined ? null : h('p', { className: 'tr-note', role: 'alert' }, readError),
-        status === 'loading' && rosters.length === 0
-          ? h('p', { className: 'tr-empty' }, t('loading'))
-          : rosters.length === 0
-            ? h('p', { className: 'tr-empty' }, t('empty'))
-            : rosters.map(group))
+        body)
     }
 
     return {

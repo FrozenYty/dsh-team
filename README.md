@@ -57,17 +57,30 @@ The bundle ships a Settings page (Settings → **Team roster**) as its browser h
 registered into the `settings.section` slot) over a loopback-only JSON bridge on the Host web server
 (`routes.js`).
 
-- Every roster in the store, grouped by Lead Session, with each member's target, phase, generation, live
-  status and context pressure. The panel needs no session picker: the store already knows its Leads.
+**The panel is per session.** The durable store already keys one roster per Lead Session, so the page shows
+exactly one of them:
+
+- It opens on the session you are in. That session is resolved in the browser from the shell's own session
+  catalog (`useSessions`), whose rows carry `retainedBy.mainView` — the shell's own "this session is open"
+  count — and `displayTitle`. The page shows the title when there is one and the short id otherwise. No
+  session data travels over the bridge.
+- A **picker** lists the sessions that have a roster, with member counts and whether their Lead is live, so
+  you can switch to another one. The session you are in stays an option even when it has no roster yet,
+  labelled `no roster yet`.
+- A session without a roster says so — *No team roster for this session yet.* — instead of rendering an
+  empty page. When the browser has no current-session signal at all, the Host's documented order picks the
+  opening session: live Leads first, then the most recently written roster.
 - **Refresh**, plus a three-second poll while the page is open, so a change made through a tool reaches
   the panel without a page reload.
 - **Retire** behind an inline confirmation, and **Restore** for a retired member. Both call the same
   functions the model tools call (`actions.js`), so parameter meaning, result fields and failure reasons
   cannot drift between the two callers.
 
-The bridge refuses non-loopback callers and cross-origin `Origin` headers, caps request bodies at 64 KiB,
-and answers a JSON error with a status. Retiring a member whose Lead Session is not live is reported as a
-readable failure, not a stack trace.
+The bridge is two reads and two writes: `GET /api/team-roster/sessions` (the counts-only picker index),
+`GET /api/team-roster/state?leadSessionId=…` (one roster with its member rows), `POST /api/team-roster/retire`
+and `POST /api/team-roster/restore`. It refuses non-loopback callers and cross-origin `Origin` headers,
+caps request bodies at 64 KiB, and answers a JSON error with a status. Retiring a member whose Lead Session
+is not live is reported as a readable failure, not a stack trace.
 
 Installing the updated bundle is the last step, and it has not been done: activation and the rendered
 panel are unverified (PLAN.md P3-04).
@@ -125,7 +138,7 @@ pass means what a green run means.
 |---|---|
 | `index.js` | Host plugin entry, tool definitions, Lead-only authority check |
 | `actions.js` | The roster operations, shared by the tools and the Settings bridge |
-| `routes.js` | `/api/team-roster` bridge: state, retire, restore, and the loopback/origin fence |
+| `routes.js` | `/api/team-roster` bridge: per-session state, the picker index, retire, restore, and the loopback/origin fence |
 | `client.js` | Settings panel (browser half) |
 | `roster.js` | Durable roster, name generations, adoption, legacy-domain migration |
 | `trash.js` | Session-artifact recovery directory |

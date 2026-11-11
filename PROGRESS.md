@@ -143,3 +143,37 @@
   trip through the panel are all untested. `node --test` uses fakes and opens no socket;
   `scripts/check.mjs` never loads the Harness. P3-04 was added to carry that check, and the P3 gate stays
   open.
+- **The flattened panel was the defect, not the store, so the store did not move.** The owner reported that
+  every session's roster was lumped into one list and hard to find; the durable record was already keyed per
+  Lead Session, so the fix is scoping the view rather than re-keying the data. `GET
+  /api/team-roster/state?leadSessionId=` now answers exactly one roster with its member rows and `GET
+  /api/team-roster/sessions` answers a counts-only picker index (`buildSessionState` /
+  `buildSessionsIndex`). An unknown session is a normal answer with `exists: false`, which is what lets the
+  page say *No team roster for this session yet.* instead of rendering an empty one; a missing id is a 400.
+  Six new tests pin both read shapes, those two answers, the index ordering, and the selection rule.
+- **The current session was resolved by reading the installed asar, not from memory — and the first place
+  that looked right was not it.** `@deepseek-ai/dsh-client-ui-workspace/lib/index.js` is only the plugin's
+  node half; the browser halves are `lib/client.js` in both packages, and only the file-read tool can open
+  them. The chain that was verified: `@deepseek-ai/dsh-client-ui-session/lib/client.js` lines 1120–1123
+  provide the root hook `useSessions` over `ctx.sessions.list`; the catalog rows carry `displayTitle`/`title`
+  and `retainedBy` (`@deepseek-ai/dsh-api-session-controller/lib/client.js` lines 4162–4182, `projectList`);
+  and "the session the user is in" is the row whose `retainedBy.mainView > 0`, copied verbatim from the
+  shipped root-scoped session browser (`@deepseek-ai/dsh-client-ui-workspace/lib/client.js` line 3697, whose
+  `useSessions((state) => state)` is on line 3669). Because that hook already holds the titles, the Host
+  bridge reads no Sessions at all: the browser joins its own catalog against the index, and the picker shows
+  real titles with a short-id fallback.
+- **The one question the Host does answer is which stored session to open, and it is answered in one place.**
+  `buildSessionsIndex` returns `selectedLeadSessionId`: a named `currentSessionId` always wins, even when
+  that session has no roster (the panel must be able to say so rather than silently showing another team),
+  and otherwise the documented order applies — live Leads first, then the newest write, then the id. That
+  ordering is also the fallback when the browser's session catalog is unavailable, and the code comment and
+  ADR 0006 say so instead of implying the hook always exists.
+- **What is verified and what is not, for this change.** `node --check index.js actions.js routes.js
+  client.js roster.js trash.js host-hooks.js` exits clean; `node --test --test-isolation=none
+  tests/*.test.mjs` is 41 tests, 41 passing; `node scripts/check.mjs` passes. Not verified, because the
+  bundle still has not been reinstalled: activation, the composed client bundle, the rendered page, and one
+  runtime fact the code depends on — whether `retainedBy.mainView` is still non-zero while the Settings
+  panel is open. The shipped browser suppresses its own "current" highlight when a sidebar panel is active
+  (`dsh-client-ui-workspace/lib/client.js` line 3615), so the retained count may or may not survive; if it
+  does not, the panel falls back to the Host's order. P3-04 carries the live check and the P3 gate stays
+  open.

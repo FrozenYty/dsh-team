@@ -4,7 +4,8 @@ import { test } from 'node:test'
 import { listMembers, retireMember, restoreMember } from '../actions.js'
 import {
   API_PREFIX,
-  buildState,
+  buildSessionState,
+  buildSessionsIndex,
   createApiHandler,
   isLoopbackAddress,
   rejectedRequest,
@@ -12,6 +13,7 @@ import {
 } from '../routes.js'
 
 const WRITTEN_AT = '2026-11-11T10:00:00.000Z'
+const LATER_AT = '2026-11-11T11:00:00.000Z'
 
 /** One member record, as the roster stores it. */
 const member = (overrides = {}) => ({
@@ -114,7 +116,7 @@ const makeHandler = (ctx, table) => createApiHandler({
   log: () => undefined,
 })
 
-test('the state groups rosters by Lead Session and reports live members', () => {
+test('the state carries exactly one Lead Session roster with its member rows', () => {
   const ctx = fakeContext({
     agents: new Map([
       ['lead-1', { session: { id: 'lead-1' }, status: 'idle' }],
@@ -126,14 +128,15 @@ test('the state groups rosters by Lead Session and reports live members', () => 
     'lead-2': roster('lead-2', [member({ memberId: 'member-2', childId: 'child-2', name: 'tester' })]),
   })
 
-  const state = buildState({ ctx, table })
+  const state = buildSessionState({ ctx, table, leadSessionId: 'lead-1' })
 
-  assert.equal(state.version, Date.parse(WRITTEN_AT))
-  assert.deepEqual(state.rosters.map((entry) => entry.leadSessionId), ['lead-1', 'lead-2'], 'live Leads sort first')
-  assert.equal(state.rosters[0].leadLive, true)
-  assert.equal(state.rosters[1].leadLive, false)
+  assert.equal(state.leadSessionId, 'lead-1')
+  assert.equal(state.leadLive, true)
+  assert.equal(state.exists, true)
+  assert.equal(state.updatedAt, WRITTEN_AT)
+  assert.equal(state.members.length, 1, 'the other roster never appears in this payload')
 
-  const row = state.rosters[0].members[0]
+  const row = state.members[0]
   assert.equal(row.target, 'reviewer')
   assert.equal(row.phase, 'active')
   assert.equal(row.generation, 1)
@@ -143,16 +146,80 @@ test('the state groups rosters by Lead Session and reports live members', () => 
   assert.equal(row.context_window, 1048576)
 })
 
-test('an empty store reports an empty roster list at version zero', () => {
-  const state = buildState({ ctx: fakeContext(), table: fakeTable() })
-  assert.deepEqual(state, { rosters: [], version: 0 })
+test('a session without a roster answers exists: false instead of an empty page', () => {
+  const state = buildSessionState({ ctx: fakeContext(), table: fakeTable({ 'lead-1': roster() }), leadSessionId: 'lead-9' })
+  assert.deepEqual(state, { leadSessionId: 'lead-9', leadLive: false, exists: false, members: [] })
+})
+
+test('the sessions index lists counts only, never member rows', () => {
+  const ctx = fakeContext({ agents: new Map([['lead-2', { session: { id: 'lead-2' }, status: 'idle' }]]) })
+  const table = fakeTable({
+    'lead-1': roster('lead-1', [
+      member(),
+      member({ memberId: 'member-2', name: 'retired-one', childId: 'child-2', phase: 'retired' }),
+    ]),
+    'lead-2': roster('lead-2', [member({ memberId: 'member-3', childId: 'child-3', name: 'tester' })], LATER_AT),
+  })
+
+  const index = buildSessionsIndex({ ctx, table })
+
+  assert.equal(index.sessions.length, 2)
+  const live = index.sessions[0]
+  assert.deepEqual(live, { leadSessionId: 'lead-2', memberCount: 1, liveCount: 1, leadLive: true, updatedAt: LATER_AT })
+  assert.equal(live.members, undefined, 'the index carries no member rows')
+  assert.equal(live.memberCount, 1, 'the index carries a count instead')
+
+  const offline = index.sessions[1]
+  assert.deepEqual(offline, {
+    leadSessionId: 'lead-1',
+    memberCount: 2,
+    liveCount: 1,
+    leadLive: false,
+    updatedAt: WRITTEN_AT,
+  })
+})
+
+test('the index is ordered live Leads first, then newest write, and that order is the default pick', () => {
+  const ctx = fakeContext({ agents: new Map([['lead-b', { session: { id: 'lead-b' } }]]) })
+  const table = fakeTable({
+    'lead-a': roster('lead-a', [member()], WRITTEN_AT),
+    'lead-b': roster('lead-b', [member()], '2026-11-10T09:00:00.000Z'),
+    'lead-c': roster('lead-c', [member()], LATER_AT),
+  })
+
+  const index = buildSessionsIndex({ ctx, table })
+  assert.deepEqual(index.sessions.map((row) => row.leadSessionId), ['lead-b', 'lead-c', 'lead-a'])
+  assert.equal(index.selectedLeadSessionId, 'lead-b', 'no current-session signal: the live Lead wins')
+})
+
+test('a named current session wins the selection even when it has no roster', () => {
+  const ctx = fakeContext()
+  const table = fakeTable({ 'lead-1': roster('lead-1') })
+
+  const named = buildSessionsIndex({ ctx, table, currentSessionId: 'lead-9' })
+  assert.equal(named.selectedLeadSessionId, 'lead-9', 'the panel must be able to say this session has none')
+  assert.deepEqual(named.sessions.map((row) => row.leadSessionId), ['lead-1'])
+
+  const present = buildSessionsIndex({ ctx, table, currentSessionId: 'lead-1' })
+  assert.equal(present.selectedLeadSessionId, 'lead-1')
+
+  const blank = buildSessionsIndex({ ctx, table, currentSessionId: '  ' })
+  assert.equal(blank.selectedLeadSessionId, 'lead-1', 'a blank parameter is not a signal')
+})
+
+test('an empty store reports an empty index with no selection', () => {
+  const index = buildSessionsIndex({ ctx: fakeContext(), table: fakeTable() })
+  assert.deepEqual(index, { sessions: [] })
+  assert.equal(index.selectedLeadSessionId, undefined)
 })
 
 test('the route table matches path and method exactly', () => {
   assert.deepEqual(resolveRoute('GET', `${API_PREFIX}/state`), { name: 'state' })
+  assert.deepEqual(resolveRoute('GET', `${API_PREFIX}/sessions`), { name: 'sessions' })
   assert.deepEqual(resolveRoute('POST', `${API_PREFIX}/retire`), { name: 'retire' })
   assert.deepEqual(resolveRoute('POST', `${API_PREFIX}/restore`), { name: 'restore' })
   assert.deepEqual(resolveRoute('GET', `${API_PREFIX}/retire`), { methodNotAllowed: true, allow: ['POST'] })
+  assert.deepEqual(resolveRoute('POST', `${API_PREFIX}/sessions`), { methodNotAllowed: true, allow: ['GET'] })
   assert.deepEqual(resolveRoute('HEAD', `${API_PREFIX}/state`), { methodNotAllowed: true, allow: ['GET'] })
   assert.equal(resolveRoute('GET', API_PREFIX), undefined)
   assert.equal(resolveRoute('GET', `${API_PREFIX}/state/extra`), undefined)
@@ -187,25 +254,56 @@ test('a cross-origin request is refused even from loopback', () => {
   assert.match(rejectedRequest(crossSite), /Cross-site/)
 })
 
-test('the handler serves the state as JSON', async () => {
+test('the handler serves one session state and the picker index as JSON', async () => {
   const table = fakeTable({ 'lead-1': roster() })
-  const response = fakeResponse()
-  await makeHandler(fakeContext(), table)(fakeRequest({ url: `${API_PREFIX}/state` }), response)
+  const handler = makeHandler(fakeContext(), table)
 
-  assert.equal(response.status, 200)
-  assert.equal(response.headers['content-type'], 'application/json; charset=utf-8')
-  assert.equal(response.body.rosters.length, 1)
+  const state = fakeResponse()
+  await handler(fakeRequest({ url: `${API_PREFIX}/state?leadSessionId=lead-1` }), state)
+  assert.equal(state.status, 200)
+  assert.equal(state.headers['content-type'], 'application/json; charset=utf-8')
+  assert.equal(state.body.leadSessionId, 'lead-1')
+  assert.equal(state.body.members.length, 1)
+
+  const index = fakeResponse()
+  await handler(fakeRequest({ url: `${API_PREFIX}/sessions?currentSessionId=lead-9` }), index)
+  assert.equal(index.status, 200)
+  assert.equal(index.body.sessions.length, 1)
+  assert.equal(index.body.sessions[0].members, undefined)
+  assert.equal(index.body.selectedLeadSessionId, 'lead-9')
+})
+
+test('the handler refuses a state read without a Lead Session id', async () => {
+  const handler = makeHandler(fakeContext(), fakeTable({ 'lead-1': roster() }))
+
+  const missing = fakeResponse()
+  await handler(fakeRequest({ url: `${API_PREFIX}/state` }), missing)
+  assert.equal(missing.status, 400)
+  assert.match(missing.body.error, /leadSessionId is required/)
+
+  const blank = fakeResponse()
+  await handler(fakeRequest({ url: `${API_PREFIX}/state?leadSessionId=` }), blank)
+  assert.equal(blank.status, 400)
+
+  const unknown = fakeResponse()
+  await handler(fakeRequest({ url: `${API_PREFIX}/state?leadSessionId=lead-9` }), unknown)
+  assert.equal(unknown.status, 200, 'an unknown session is an answer, not a failure')
+  assert.equal(unknown.body.exists, false)
+  assert.deepEqual(unknown.body.members, [])
 })
 
 test('the handler refuses a non-loopback caller, a cross-origin caller, and an oversized body', async () => {
   const handler = makeHandler(fakeContext(), fakeTable({ 'lead-1': roster() }))
 
   const remote = fakeResponse()
-  await handler(fakeRequest({ url: `${API_PREFIX}/state`, address: '192.168.1.20' }), remote)
+  await handler(fakeRequest({ url: `${API_PREFIX}/state?leadSessionId=lead-1`, address: '192.168.1.20' }), remote)
   assert.equal(remote.status, 403)
 
   const crossOrigin = fakeResponse()
-  await handler(fakeRequest({ url: `${API_PREFIX}/state`, headers: { origin: 'https://evil.example' } }), crossOrigin)
+  await handler(fakeRequest({
+    url: `${API_PREFIX}/state?leadSessionId=lead-1`,
+    headers: { origin: 'https://evil.example' },
+  }), crossOrigin)
   assert.equal(crossOrigin.status, 403)
 
   const oversized = fakeResponse()
