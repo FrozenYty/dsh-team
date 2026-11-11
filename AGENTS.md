@@ -20,7 +20,7 @@ PLAN.md  ->  PROGRESS.md  ->  CONTRIBUTING.md  ->  docs/architecture-en.md  ->  
 
 ## 2. The project
 
-`dsh-team-control` is a DeepSeek Harness profile bundle. It gives an agent team the lifecycle the
+`dsh-team-roster` is a DeepSeek Harness profile bundle. It gives an agent team the lifecycle the
 shipped experimental Agent Teams packages lack: a roster whose members can be retired, removed and
 replaced, instead of one that only grows.
 
@@ -86,7 +86,13 @@ lands in — in `docs/architecture-en.md`, not in a comment — before implement
 ```bash
 node scripts/check.mjs                 # manifest, entry syntax, locale parity, no machine paths
 node --check index.js                  # the bundle entry parses as ESM
+node --test --test-isolation=none tests/*.test.mjs   # unit tests, one process on purpose
 ```
+
+`--test-isolation=none` is required here: the default runner spawns one process per file and this
+machine's sandbox refuses that spawn. It also requires Node 24 — the flag does not exist in Node 22, which
+is why CI pins Node 24. Do not "simplify" the flag away in CI either: both sides run the same command so
+a local pass means the same thing as a green run.
 
 `scripts/check.mjs` cannot prove the plugin works: it never loads the Harness. Installing the bundle
 into a profile and calling the tools is the only real check, and it is the user's call each time.

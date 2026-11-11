@@ -1,21 +1,18 @@
-# Team Control bundle patch.
+# dsh-team-roster bundle patch.
 #
-# 1. Enable the shipped compaction backend. The row is present in the composed
-#    profile but inactive, so nothing condenses today: an agent has no automatic
-#    reduction, and a teammate (or the Lead) grows unchecked toward the window.
-#    `@deepseek-ai/dsh-compaction-basic` is a shipped package, so this bundle
+# 1. Enable the shipped compaction backend. The row is present in the composed profile but inactive, so
+#    nothing condenses: an agent grows unchecked toward the window. A shipped package, so this bundle
 #    declares no dependency on it; the row resolves from the dsh installation.
 #
-#    Deliberately NOT enabled here: `command-compact` (`/compact`). It needs the
-#    `commands` service, which this profile also leaves unmounted, so enabling
-#    the row alone leaves it `absent`. Turning that chain on is a separate
-#    decision.
+#    Deliberately NOT enabled: `command-compact` (`/compact`). It needs the `commands` service, which
+#    this profile also leaves unmounted, so enabling the row alone leaves it `absent`.
 #
-# 2. Insert this bundle's own Host plugin.
+# 2. Insert this bundle's own Host plugin. It owns the roster, the host-side projection filter and the
+#    roster slot credit; the shipped team tool row stays enabled because it owns the shared task board.
 - id: compaction-basic
   disabled: false
 
 - insert:
-    - id: team-control
-      name: '@local/team-control'
+    - id: team-roster
+      name: 'dsh-team-roster'
       config: {}

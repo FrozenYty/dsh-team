@@ -10,7 +10,7 @@ The decisions behind the design live in `docs/adr/`; this file describes the res
 A DeepSeek Harness **profile bundle**. Installing it does two things:
 
 1. selects a shipped plugin row that the profile leaves disabled (`compaction-basic`);
-2. inserts one Host plugin of our own (`@local/team-control`).
+2. inserts one Host plugin of our own (`dsh-team-roster`).
 
 There is no build step and no runtime dependency: the installed Harness resolves the shipped row from
 its own installation, and our entry imports nothing (ADR 0002).
@@ -72,6 +72,30 @@ collides with a retired name. Spawning the same base name after a retirement is 
 
 The shipped team roster and this roster coexist until P2-07 disables the shipped tool row. `list_agents`
 reports one; `list_members` reports the other. They are different sets.
+
+### 2.4 Host-side effects
+
+Two effects make a retirement visible to clients and keep the shipped member budget usable. Both are
+capability-probed, both restore exactly what they replaced on plugin unload, and neither writes to the
+Lead Session (ADR 0004).
+
+| Effect | Mechanism | Behaviour when the host shape is absent |
+|---|---|---|
+| Projection filter | wraps `sessionController.list` / `projections` / `control` / `follow` and strips retired ids from `subagentCatalog` and `agentTeam` frames | retirement still works; clients keep rendering the member |
+| Slot credit | replaces the legacy roster's `maxMembers` getter and wraps `spawn`, adding the retired count of the spawning Lead for the duration of that spawn | retirement still works; the shipped budget stays consumed |
+
+Both read retired records through a two-second cache that `retire_member` invalidates, and both are
+transparent to other plugins: same arguments, same return shape, and the payload is mutated rather than
+copied so a caller's reference stays valid.
+
+### 2.5 Retirement moves the artifact
+
+`retire_member` drains the child, moves its persisted Session into
+`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, tombstones the record with that path, and
+refreshes the two effects above. The move is what removes the member from the host's own discovery, since
+session-query drops an artifact that no longer exists. Nothing is deleted: the cross-device fallback is
+the only branch that removes the source, and the workspace archive hides the Session when no artifact can
+be moved.
 
 ## 3. Why the shipped roster is not extended
 
@@ -173,10 +197,11 @@ half-finished:
    it; a brief that contradicts the repository is a finding, not a plan.
 3. **Drain.** The child is drained through `ctx.subagents.drainChildren(lead, [childId])`, releasing its
    activation slot and residency.
-4. **Tombstone.** The record moves to `retired`. The member is no longer addressable by the roster
-   tools, and its name becomes available to a successor at `generation + 1`.
-5. **Hide.** `ctx.workspaceRegistry.archiveSession` removes the retired child from the workspace
-   surfaces. It deletes nothing and is reversible.
+4. **Move and tombstone.** The persisted Session moves into the plugin's trash directory, and the record
+   moves to `retired` carrying that path. The workspace archive is the fallback when no artifact can be
+   moved.
+5. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the member,
+   while the roster keeps the trash path for manual recovery.
 6. **Replace (optional).** A successor is spawned with a pointer to the brief — never with the
    predecessor's transcript — and a read-back gate before it edits anything.
 
@@ -200,6 +225,9 @@ they own the shared task board, and adoption makes the members they create retir
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
 | hide a retired child | `ctx.workspaceRegistry.archiveSession` (reversible, deletes nothing) |
+| make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
+| credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
+| move a retired session aside | `ctx.get('sessionPersistence').stat(id).location.path` + a rename into the trash |
 
 ## 6. Risks and limits
 

@@ -79,6 +79,17 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   successor completes the predecessor's task without redoing it.
 - [ ] **P2-09** Own task board: create, list, read, compare-and-set, dependencies.
   Done when the four task tools are served by this plugin and P2-07 can proceed.
+- [x] **P2-10** Session trash: move a retired member's persisted session into a recoverable directory.
+  Done when retirement reports `trashed` and a `trash_path`, and a missing artifact falls back to the
+  workspace archive with a reported reason.
+- [x] **P2-11** Projection filter: retired ids are stripped at the host session-list exits.
+  Done when a retired member is absent from `list`/`projections` and the `control`/`follow` frames, and
+  the wrappers restore exactly on unload.
+- [x] **P2-12** Roster slot credit: one retirement buys back one shipped budget slot for its own Lead.
+  Done when the effective `maxMembers` is raised only while that Lead spawns, and the patch is skipped
+  when the roster has no such shape.
+- [ ] **P2-13** `restore_member`: move a trashed session back and return the record to `active`.
+  Done when a retired member with a `trashPath` can be restored and appears in `list_members` again.
 - [x] **Gate P2** — removal and replacement work in a live session.
 
 ### P3 — Settings panel

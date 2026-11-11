@@ -9,7 +9,7 @@
 一个 DeepSeek Harness **profile bundle**。安装它会做两件事：
 
 1. 选中一条 profile 默认关闭的官方插件行（`compaction-basic`）；
-2. 插入一个我们自己写的 Host 插件（`@local/team-control`）。
+2. 插入一个我们自己写的 Host 插件（`dsh-team-roster`）。
 
 没有构建步骤，也没有运行时依赖：官方行由已安装的 Harness 自己解析，我们的入口不导入任何东西（ADR 0002）。
 
@@ -52,6 +52,22 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 记录存在一个以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。命名规则：代次 1 用裸名字；代次 2 起用 `<base>-g<N>`，因此继任者绝不会与已退役的名字相撞。退役后再用同一个基名创建，就是替换操作：`probe-a` 退役、`probe-a-g2` 启动，两条记录都在。
 
 在 P2-07 关闭官方工具行之前，两个花名册并存：`list_agents` 报官方那套，`list_members` 报自建这套，二者不是同一集合。
+
+### 2.4 宿主侧效果
+
+两个效果让退役对客户端可见，并让官方的成员名额重新可用。两者都做能力探测、都在插件卸载时精确还原，且都不写 Lead 会话（ADR 0004）。
+
+| 效果 | 机制 | 宿主形状缺失时 |
+|---|---|---|
+| 投影过滤 | 包装 `sessionController.list`／`projections`／`control`／`follow`，从 `subagentCatalog` 与 `agentTeam` 帧里摘掉已退役 id | 退役仍生效，客户端仍显示该成员 |
+| 名额补偿 | 替换旧花名册的 `maxMembers` getter 并包装 `spawn`，在一次 spawn 期间按发起 Lead 的退役数临时抬高上限 | 退役仍生效，官方名额仍被占用 |
+
+两者都通过一个两秒缓存读取退役记录，`retire_member` 会主动使缓存失效；两者对其他插件透明：参数相同、返回形状相同，载荷是原地修改而不是复制，调用方持有的引用继续有效。
+
+### 2.5 退役会移走产物
+
+`retire_member` 先排空子代理，再把它的持久化会话移入
+`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，带着这个路径给记录立碑，并刷新上面两个效果。真正让成员从宿主的自有发现里消失的是**移动**——session-query 会摘掉已经不在的文件。没有删除：跨设备兜底是唯一会移除源的分支；产物移不动时退回工作区归档隐藏会话。
 
 ## 3. 为什么不扩展官方花名册
 
@@ -124,8 +140,8 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 1. **交接书**——向成员索要一份有界的、固定 schema 的交接书：目标、已完成、进行中、下一步、涉及文件、继任者不得重做的事，写到 Lead 可读的路径。如果成员无响应、已退化或已失败，则由 Lead 代写。绝不引入第三个摘要模型。
 2. **对账**——Lead 在采信之前，用花名册和工作区核对交接书；与仓库矛盾的交接书是发现，不是计划。
 3. **排空**——通过 `ctx.subagents.drainChildren(lead, [childId])` 排空子代理，释放它的激活名额与驻留。
-4. **立碑**——记录转为 `retired`。该成员不再能被花名册工具寻址，名字可供 `generation + 1` 的继任者使用。
-5. **隐藏**——用 `ctx.workspaceRegistry.archiveSession` 把已退役的子代理从工作区界面移除。它不删除任何东西，且可逆。
+4. **移动并立碑**——持久化会话移入插件的回收站目录，记录转为 `retired` 并带上该路径。没有可移动的产物时，退回工作区归档作为隐藏手段。
+5. **隐藏**——宿主投影出口不再下发已退役 id，所有客户端因此丢掉该成员；花名册保留回收站路径以便手工恢复。
 6. **替换（可选）**——继任者只带交接书的**指针**启动（绝不给前任的完整对话），并在动手编辑前做一次复述门禁。
 
 ### 4.5 模型侧接口
@@ -145,6 +161,9 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | 子代理生命周期 | `ctx.subagents.startActivation`、`sendMessage`、`interrupt`、`drainChildren` |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
 | 隐藏已退役的子代理 | `ctx.workspaceRegistry.archiveSession`（可逆，不删除） |
+| 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
+| 补偿官方花名册名额 | 补丁旧花名册的 `maxMembers` getter 与 `spawn`（ADR 0004） |
+| 把退役会话挪开 | `ctx.get('sessionPersistence').stat(id).location.path` + rename 进回收站 |
 
 ## 6. 风险与边界
 

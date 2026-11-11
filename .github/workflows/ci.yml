@@ -14,10 +14,21 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24: `--test-isolation` does not exist in Node 22, and the local runner is Node 24. Pinning
+          # the same major keeps "passes locally" and "green in CI" the same statement.
+          node-version: "24"
 
-      - name: Bundle entry parses as ESM
-        run: node --check index.js
+      - name: Bundle modules parse as ESM
+        run: |
+          node --check index.js
+          node --check roster.js
+          node --check trash.js
+          node --check host-hooks.js
+
+      - name: Unit tests
+        # One process: the tests are pure or use temporary directories, and process isolation is the only
+        # thing the default runner adds. It also matches how they are run on Windows.
+        run: node --test --test-isolation=none tests/*.test.mjs
 
       - name: Repository checks
         run: node scripts/check.mjs
