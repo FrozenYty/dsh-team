@@ -30,3 +30,12 @@
 - **Two spikes are open and named in `PLAN.md`.** P2-01 needs the durable-storage API, P2-02 needs the
   exact subagent lifecycle semantics including whether a retired child can be hidden from the app. Both
   are being answered from the installed asar, not from memory.
+- **P0-02 is ticked on evidence, not on intent.** The repository was pushed to
+  `github.com/FrozenYty/dsh-team-control` (private for now), then cloned into a fresh temporary
+  directory and checked there: `node --check index.js` and `node scripts/check.mjs` both pass from the
+  clone. A repository that only passes in the directory that produced it has not been tested.
+- **P0-03 is ticked because the check job actually ran, not because the workflow file exists.** Pull
+  request 1 ran the `check` job on GitHub and finished green. The same PR also caught a real defect in
+  the check script: the machine-path rule matched the letter-plus-colon inside an `https` URL, so it
+  failed on the README line that links this repository. The rule now requires the drive letter to
+  follow a non-word character, and a five-case self-test pins both directions.

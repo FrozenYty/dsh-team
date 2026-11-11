@@ -10,6 +10,8 @@ grows.
 real removal) in progress. Live task state is in [PLAN.md](PLAN.md); recent changes
 are in [PROGRESS.md](PROGRESS.md).
 
+**Repository**: [github.com/FrozenYty/dsh-team-control](https://github.com/FrozenYty/dsh-team-control)
+
 ## Why this exists
 
 The shipped experimental Agent Teams packages (`@deepseek-ai/dsh-experimental-agent-team`
