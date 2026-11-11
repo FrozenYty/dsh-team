@@ -18,7 +18,7 @@ change before you edit anything.
 
 ## 2. The project
 
-`dsh-team-roster` is a DeepSeek Harness profile bundle. It gives an agent team the lifecycle the
+`dsh-team-relay` is a DeepSeek Harness profile bundle. It gives an agent team the lifecycle the
 shipped experimental Agent Teams packages lack: a roster whose members can be retired, removed and
 replaced, instead of one that only grows.
 
@@ -30,6 +30,11 @@ Two layers, and they must not be confused:
   what gets installed into a profile. It is linked from this repository, so no build step exists.
   It has no browser half: every surface is a model-facing tool (ADR 0008).
 - **The Harness** is the host. Its APIs are read from the installed asar, never from this repository.
+
+The project was renamed `dsh-team-relay` in v0.10.0. Three names did not change with it and are not
+typos: the storage domain `team_roster` (`roster.js`, `ROSTER_SPEC`), the patch row id `team-roster`
+(`cordis.patch.yml`) and the trash directory `~/.dsh/team-roster`. Renaming any of them orphans stored
+state or silently drops a profile's override — read ADR 0014 before "finishing" the rename.
 
 `PLAN.md` owns task state; `PROGRESS.md` owns the record of what changed. Do not restate either here.
 

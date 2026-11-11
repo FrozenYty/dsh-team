@@ -23,6 +23,7 @@
 - [ ] a bundle config key or patch row → README pair, `docs/architecture-en.md` §1
 - [ ] the durable record shape → `docs/architecture-en.md` §4.2 and a new ADR
 - [ ] a document added, renamed or removed → `docs/INDEX-en.md` and `INDEX-zh.md`
+- [ ] the plugin's name or display title → `package.json`, `cordis.patch.yml`, README pair, `AGENTS.md`, `docs/architecture-en.md` + `docs/architecture-zh.md`, a new ADR
 
 ## Checklist
 

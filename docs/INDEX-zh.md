@@ -38,6 +38,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么回收站有上限，被剪除的成员会怎样？ | `docs/adr/0011-trash-retention.md`——第 1 点已被 0012 取代 | 英文 |
 | 为什么回收站上限是一个配置字段，以及为什么入口不声明 Config schema？ | `docs/adr/0012-configurable-retention.md` | 英文 |
 | 为什么一次性成员会自行离开，以及清扫为什么需要证据？ | `docs/adr/0013-ephemeral-members.md` | 英文 |
+| 为什么插件叫 `dsh-team-relay`，以及哪些标识符没有随之改名？ | `docs/adr/0014-plugin-name.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 
@@ -64,6 +65,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
 | 持久记录结构 | `docs/architecture-zh.md` §4.2、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
 | 新增、改名或删除文档 | 本文件与 `INDEX-zh.md` |
+| 插件名称或显示标题，或补丁行的 `name` | `package.json`、`cordis.patch.yml`、`AGENTS.md`、`README.md` + `README-zh.md`、`docs/architecture-en.md` + `docs/architecture-zh.md`、一份新 ADR |
 | 任何改变安装步骤的改动 | `README.md` + `README-zh.md` |
 
 ## 5. 不在本仓库里的东西

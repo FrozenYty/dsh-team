@@ -10,11 +10,15 @@ The decisions behind the design live in `docs/adr/`; this file describes the res
 A DeepSeek Harness **profile bundle**. Installing it does two things:
 
 1. selects a shipped plugin row that the profile leaves disabled (`compaction-basic`);
-2. inserts one Host plugin of our own (`dsh-team-roster`).
+2. inserts one Host plugin of our own (`dsh-team-relay`).
 
 There is no build step and no runtime dependency: the installed Harness resolves the shipped row from
 its own installation, and our entry imports nothing (ADR 0002). The bundle is Host-only: it has no
 browser half (ADR 0008).
+
+The plugin was renamed from `dsh-team-roster` in v0.10.0 while its storage domain (`team_roster`), its
+patch row id (`team-roster`) and its trash directory (`~/.dsh/team-roster`) kept the old spelling on
+purpose (ADR 0014).
 
 Its one tunable is the per-Lead session-trash cap, carried by the `trashLimit` field of the bundle's own
 patch row (`- id: team-roster`, `config: { trashLimit: <integer> }`). `apply(ctx, config)` resolves it
@@ -38,6 +42,9 @@ A short map, not a changelog: each release below names what it added and the sec
   (§2.5, ADR 0011, ADR 0012).
 - **v0.9** — ephemeral members: a member can be marked one-shot at spawn, and a lazy sweep in the roster
   operations the model calls anyway retires it once it has run and stopped (§4.3.1, ADR 0013).
+- **v0.10** — the rename: the package, the patch row's `name` and the display title became
+  `dsh-team-relay` / *Team relay*, while the storage domain, the patch row id and the trash directory kept
+  their pre-rename names (§1, ADR 0014).
 
 ### 2.1 Compaction is enabled
 
