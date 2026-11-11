@@ -45,6 +45,8 @@ A short map, not a changelog: each release below names what it added and the sec
 - **v0.10** — the rename: the package, the patch row's `name` and the display title became
   `dsh-team` / *Team*, while the storage domain, the patch row id and the trash directory kept
   their pre-rename names (§1, ADR 0014).
+- **v0.11** — a stored, reusable handoff-brief template per Lead, set through one tool, which the
+  replacement handoff composes the successor's brief from (§4.4, §4.5, ADR 0015).
 
 ### 2.1 Compaction is enabled
 
@@ -204,6 +206,9 @@ ephemeral     true when the member retires itself once its work is over, set by 
               by message_member (§4.3.1); optional, absent otherwise, so a non-ephemeral record is unchanged
 startedAt     ISO timestamp on an ephemeral member: when its child was started. This is the positive
               evidence the lazy sweep requires, so a reservation that never published is never swept
+handoffTemplate  on the roster record, not on a member: this Lead's handoff-brief template, whose
+              placeholders a replacement interpolates (§4.4); optional, so every record written before
+              P4-02 loads and behaves exactly as it did
 ```
 
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
@@ -211,9 +216,17 @@ startedAt     ISO timestamp on an ephemeral member: when its child was started. 
 the artifact went — and is the only value that makes `restore_member` a typed refusal without a move.
 
 There is no other field, and in particular no `dormant` phase (§4.3) and no `briefPath`: the brief is
-composed at replacement time from `assignment`, and a stored, reusable template is still P4-02. The
+composed at replacement time from `assignment` and from the Lead's `handoffTemplate` (§4.4). The
 `ephemeral` and `startedAt` fields are the P4-01 pair, and both are optional: a record written by any
 earlier release loads and behaves exactly as it did.
+
+`handoffTemplate` is the one field on this record that describes the Lead rather than a member. Its
+**type** is validated when the record loads; its **content** — the placeholder vocabulary, the required
+`{assignment}` reference and the length cap — is checked when it is stored and re-reported by the read
+form (§4.5). That split is deliberate: the storage facility validates every record of every Lead when it
+opens the domain, so refusing a whole roster over one Lead's brief preference would hide every team. A
+stored template that no longer passes validation is reported, never silently dropped, and the
+composition falls back to the built-in brief instead of writing the offending token into a child.
 
 `assignment` is the durable statement a successor is briefed with. It is set with
 `spawn_member.assignment`, replaced with `message_member.assignment`, reported on every `list_members`
@@ -257,6 +270,11 @@ What the cells depend on:
 - **`replace` is one model call composed of `spawn` and `retire`.** The successor starts first in every
   cell, so a start that fails leaves the row exactly as it was, and the retire half reports
   `predecessor_retired: false` when it fails.
+- **`replace` with a stored template is the same cell.** The phases and the order of the two halves do
+  not change: the successor starts from the brief, and the brief is rendered from the Lead's
+  `handoffTemplate` instead of the built-in shape (§4.4). Two refusals are added and both happen before
+  anything starts — a stored template is validated when it is set, and a rendered brief past its cap
+  refuses the call — so the cells stay as written and the record is not touched.
 - **Two tools in one model turn.** Every call re-reads the roster and every mutation is one atomic
   `update` (§4.2), so the second call acts on the first one's result: `message_member` then
   `retire_member` in one turn delivers and then tombstones, the reverse order refuses with `retired`,
@@ -309,9 +327,9 @@ nowhere else. Both already re-read the roster; neither runs on a plugin-owned cl
 task, timer or model call is involved. It runs before the triggering operation's own read, so a
 `list_members` result already shows a swept member as `retired`, and `spawn_member` can reuse the freed
 target. It returns immediately — no read of the subagent registry, no write — when no member is
-ephemeral. Every other tool is target-scoped (`message_member`, `stop_member`, `retire_member`,
-`restore_member`, `compact_member`), so a sweep there would be an unrelated retirement on a result that
-does not report it.
+ephemeral. Every other tool is either target-scoped (`message_member`, `stop_member`, `retire_member`,
+`restore_member`, `compact_member`) or touches no member at all (`handoff_template`), so a sweep there
+would be an unrelated retirement on a result that does not report it.
 
 **Retirement stays one implementation.** A swept member goes through `retireMember` exactly like a
 model-invoked retirement — drain, tombstone-first, artifact move, retention cap, host effects — and its
@@ -380,16 +398,30 @@ The successor's brief is inherited work, not a copy of the predecessor's state: 
 the predecessor's `assignment` unless the model records a different one, so repeated replacement does not
 thin the record out one generation at a time.
 
-**Not built, and therefore not described as behaviour (P4-02).** There is no member-written brief and no
-brief file: asking a member for one costs a model round-trip exactly when the member may be unresponsive
-or already failed, so the brief is composed from the record instead. Nothing in the code reconciles an
+**The brief's shape is the Lead's; the inherited work is the record's.** A Lead that replaces members
+repeatedly stores a template with `handoff_template` (§4.5) and the composition uses it; a Lead that
+stores none gets the built-in shape. The placeholders are `{successor}` and `{predecessor}` (the two
+targets), `{label}` (the predecessor's role), `{assignment}` (what it was recorded as doing) and
+`{task_board}` (the pointer to the shared team task board). `{assignment}` is required, because a brief
+that omits it hands the successor a role and a board pointer but not the work it inherited — which is the
+whole point of the handoff. The template is validated when it is stored: an unknown placeholder is refused
+by name, so a typo cannot reach a child as literal text. The successor's own task is always appended after
+the rendered template, so no template can drop it. The rendered section is capped at 2000 characters and
+refused rather than truncated, measured only when a template is stored — which is what keeps the built-in
+path byte-identical to the release before P4-02. The template belongs to one Lead's roster record, so two
+Leads never share one, and `list_members` rows never carry it.
+
+**Not built, and therefore not described as behaviour.** There is no member-written brief and no brief
+file: asking a member for one costs a model round-trip exactly when the member may be unresponsive or
+already failed, so the brief is composed from the record instead. Nothing in the code reconciles an
 assignment against the working tree or the task board — that check is the Lead's judgment, and the plugin
-only points at the board. A stored, reusable brief template is P4-02.
+only points at the board.
 
 ### 4.5 Model-facing surface
 
 The plugin is Host-only, so every operation it owns is a tool (ADR 0008). All of them are Lead-scoped,
-and the `target` of a `list_members` row is the selector every other tool takes. `child_id` on the row
+and the `target` of a `list_members` row is the selector every member-scoped tool takes
+(`handoff_template` takes no target: it acts on the Lead's own record). `child_id` on the row
 is the durable identity the host's own listings show; it is reported, not used as a second selector,
 because a second addressing mode would have to be honoured by seven tools to stay consistent while the
 target is already unique among addressable members. The Lead check is deliberately forgiving about the
@@ -405,13 +437,15 @@ so a failed projection cannot disable every tool.
 | `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, and a repeat is a no-op that answers `reason: 'already-retired'`. |
 | `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, and a pruned tombstone answers `reason: 'pruned'` without touching the workspace. |
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
+| `handoff_template` | Read, store or clear this Lead's handoff-brief template: omit `template` to read it back, pass a template to validate and store it, pass an empty string to clear it and return to the built-in brief (§4.4). One template per Lead, validated at set time; a stored value that no longer passes validation is reported by the read (`valid`, `problem`) rather than silently dropped, and the composition falls back to the built-in. |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
 check and the tool result schemas. Replacement deliberately has no tool of its own: `spawn_member` and
 `message_member` gained one parameter each rather than the model learning a third name for the same job
-(ADR 0009). The shipped roster tools stay enabled: they own the shared task board, and adoption makes the
-members they create retirable. A future task (P2-09) can replace the task board and then disable the
-shipped tool row.
+(ADR 0009). The brief's *shape* is one further tool rather than a parameter on `spawn_member`, because a
+stored preference must not change as a side effect of creating a member (ADR 0015). The shipped roster
+tools stay enabled: they own the shared task board, and adoption makes the members they create retirable.
+A future task (P2-09) can replace the task board and then disable the shipped tool row.
 
 #### 4.5.1 Adoption is the control surface
 

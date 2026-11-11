@@ -39,6 +39,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么回收站上限是一个配置字段，以及为什么入口不声明 Config schema？ | `docs/adr/0012-configurable-retention.md` | 英文 |
 | 为什么一次性成员会自行离开，以及清扫为什么需要证据？ | `docs/adr/0013-ephemeral-members.md` | 英文 |
 | 为什么插件叫 `dsh-team`，以及哪些标识符没有随之改名？ | `docs/adr/0014-plugin-name.md` | 英文 |
+| 为什么交接书是一个可存模板，以及为什么只有一个工具？ | `docs/adr/0015-handoff-template.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 

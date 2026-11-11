@@ -585,3 +585,47 @@
   activation with the new `name`, the provider reporting `include:dsh-team`, and a profile's
   existing `- id: team-roster` override still matching are argued from the loader and the patch shape, not
   observed in a running profile. The live check is the owner's install decision.
+
+## 2026-11-11 — the handoff brief's shape is a stored template per Lead (v0.11.0)
+
+- **P4-02 is one Lead-scoped tool, `handoff_template`, and one optional record field.** Omitting
+  `template` reads the stored template back, a template string validates and stores it, and an empty
+  string clears it and returns that Lead to the built-in brief. The value lives on the Lead's roster
+  record as `handoffTemplate`, so it is per-Lead by construction: two Leads cannot share one, and
+  `list_members` rows are unchanged because the template is a Lead preference, not a member fact. The
+  name is noun-only instead of the usual `verb_noun`: the call reads, writes or clears depending on its
+  argument, so `set_` and `get_` would each name one third of it. ADR 0015 records the surface.
+- **The built-in brief is the default template, not a second code path.** `handoffPrompt` renders
+  `{successor}`, `{predecessor}`, `{label}`, `{assignment}` and `{task_board}` from the predecessor's
+  record, and the built-in shape is written in the same vocabulary, so one renderer serves both. A test
+  pins the exact five-line string for a recorded assignment and for the "not recorded" fallback, which is
+  what makes "a profile that stores no template is byte-identical" checkable rather than asserted.
+  Clearing the field returns to it; the successor's own task is appended after the rendered template and
+  is never a placeholder, so no template can drop the task it was started for.
+- **Both refusals happen before a child exists.** An unknown placeholder is refused at set time with the
+  token named (`{asignment}` never reaches a prompt as literal text), and a template that does not
+  reference `{assignment}` is refused with the reason: a brief without it tells a successor its
+  predecessor's role and where the work is, but not what the work was. The template is capped at 1000
+  characters and the rendered brief at 2000 — refused, never truncated — and the rendered cap is measured
+  only when a template is stored. `spawnMember` composes the brief before it writes the reservation, so a
+  rendered-cap refusal leaves the predecessor active and writes no failed record.
+- **The record is validated differently on purpose.** `parseRoster` checks only that a stored
+  `handoffTemplate` is a string. The storage facility validates every record of every Lead when it opens
+  a domain, so refusing the whole domain over one Lead's brief preference would hide every roster; the
+  content rules are enforced on write and re-reported by the read (`valid`, `problem`), and a stored
+  value that no longer passes is kept and reported while the composition falls back to the built-in
+  brief. ADR 0015 records that exception and its reason.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` is 97 tests, 97 passing — the 87 that
+  existed plus ten in `tests/handoff.test.mjs` covering the byte-identical built-in brief, read-back of a
+  stored template, interpolation with the real values, the two set-time refusals, the template cap and the
+  rendered cap (the latter before any child starts), two Leads not sharing a template, clearing returning
+  to the built-in, and load-time type validation of the field; `node scripts/check.mjs` passes.
+- **What stays unverified.** The bundle was not installed, so no live call has run: the tool's activation,
+  the read/set/clear argument handling through `index.js`, and the rendered brief reaching a real child
+  are covered by fakes and the unit tests, not by a running profile. The live check — store a template,
+  replace a member, read the child's first prompt — remains the owner's install decision.
+- **The README pair is the remaining documentation work in this release.** `README.md` and `README-zh.md`
+  still list seven tools and do not describe how to fix the brief shape; they belong to another lane in
+  this change, so the tool row and the short "how to fix the brief shape" note are recorded here instead
+  of being silently assumed.

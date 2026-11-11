@@ -53,6 +53,7 @@ that is a move rather than a deletion.
 | `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. |
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
+| `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the stored one, pass a template to store it, pass an empty string to return to the built-in. |
 
 Two host-side effects run for every retirement, both capability-probed: the host's session-list exits strip
 retired ids from `subagentCatalog` and `agentTeam` frames, so the top subagent picker and the built-in team
@@ -113,6 +114,13 @@ assignment unless the model records a different one.
 - **The assignment is durable and capped.** `spawn_member.assignment` sets it, `message_member.assignment`
   replaces it, both capped at 1000 characters (refused, never truncated); `list_members` reports it and the
   tombstone keeps it.
+- **The brief's shape can be fixed once per Lead.** `handoff_template` stores a template that interpolates
+  `{successor}`, `{predecessor}`, `{label}`, `{assignment}` and `{task_board}`. A template that does not
+  reference `{assignment}` is refused when it is stored, because a successor that never learns what it
+  inherited has not been handed anything; an unknown placeholder is refused there too, rather than written
+  literally into a child's prompt. The built-in brief *is* the default template, rendered by the same code,
+  so a Lead that stores nothing gets exactly the words it got before, and clearing the template returns to
+  it (ADR 0015).
 
 ## Ephemeral members
 

@@ -2,7 +2,7 @@
  * The roster operations, called by the model-facing tools in `index.js`.
  *
  * `index.js` validates arguments, checks that the model caller is a Team Lead, and returns the result
- * unchanged. The bodies live here so the six lifecycle operations read as one file rather than as tool
+ * unchanged. The bodies live here so the roster's operations read as one file rather than as tool
  * closures; the plugin has no second, browser-facing caller (ADR 0008).
  *
  * `leadAgent` is explicit rather than read from the caller: only a live Lead yields
@@ -19,18 +19,22 @@
 import { join } from 'node:path'
 
 import {
+  HANDOFF_BRIEF_MAX,
   PHASE,
   TRASH_STATE,
   adoptMember,
   checkAssignment,
+  checkHandoffTemplate,
   findByTarget,
   findAnyTarget,
+  handoffTemplateProblem,
   hasLiveTarget,
   liveStateOf,
   planMember,
   readRoster,
   targetOf,
   updateRoster,
+  usableHandoffTemplate,
   withMember,
 } from './roster.js'
 import {
@@ -104,6 +108,35 @@ export function memberRow(ctx, member) {
   return row
 }
 
+/** What a brief says about the work when the predecessor's record carries no assignment. */
+const UNRECORDED_ASSIGNMENT = 'not recorded; take it from the shared team task board'
+
+/**
+ * The pointer a successor follows to the work it inherited: the shared team task board under the
+ * predecessor's name. The board is not copied and not duplicated, because the rows may already have
+ * changed and the child pays for every word.
+ * @param {string} target - the predecessor's model-facing target.
+ * @returns {string} the sentence the brief points with.
+ */
+function boardPointer(target) {
+  return `the shared team task board under the name "${target}": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.`
+}
+
+/**
+ * The built-in brief shape, in the vocabulary a stored template uses.
+ *
+ * Expressing it as a template is what makes one renderer serve both paths, and therefore what makes a
+ * profile that stores no template produce byte-identical briefs to the release before P4-02. The fifth
+ * line — the successor's own task — is not part of the shape: it is appended after it, so no template
+ * can drop the task it was started for.
+ */
+const BUILT_IN_HANDOFF = [
+  'You are {successor}, the successor of {predecessor}. {predecessor} has been retired and is gone; it cannot be messaged.',
+  'Its role was: {label}.',
+  'What it was doing: {assignment}',
+  'Its unfinished work is still on {task_board}',
+].join('\n')
+
 /**
  * Compose the short, self-contained prompt a cold successor starts from.
  *
@@ -111,21 +144,96 @@ export function memberRow(ctx, member) {
  * the work is, that it is the successor, and that the predecessor is gone. The work itself stays on the
  * shared team task board, which this plugin does not own, so the brief points at the board by the
  * predecessor's name instead of copying it.
- * @param {{successor: string, predecessor: object, prompt: string}} request
+ *
+ * A Lead may store a template that fixes this shape (`handoff_template`, ADR 0015). The built-in shape
+ * is the default, and both go through the same interpolation, so "no template stored" is byte-identical
+ * to the earlier release. The placeholders are validated when the template is stored; the stored value
+ * is also re-checked by the read form, and `spawnMember` only passes a usable one here, so a token can
+ * never be handed to a child as literal text.
+ *
+ * @param {{successor: string, predecessor: object, prompt: string, template?: string}} request
+ *   `template` is an already-checked stored template, or undefined for the built-in.
  * @returns {string} the prompt handed to `startActivation`.
+ * @throws when a stored template renders past `HANDOFF_BRIEF_MAX` — refused, never truncated.
  */
-export function handoffPrompt({ successor, predecessor, prompt }) {
+export function handoffPrompt({ successor, predecessor, prompt, template }) {
   const target = targetOf(predecessor)
-  const doing = typeof predecessor.assignment === 'string' && predecessor.assignment.length > 0
-    ? predecessor.assignment
-    : 'not recorded; take it from the shared team task board'
-  return [
-    `You are ${successor}, the successor of ${target}. ${target} has been retired and is gone; it cannot be messaged.`,
-    `Its role was: ${predecessor.label}.`,
-    `What it was doing: ${doing}`,
-    `Its unfinished work is still on the shared team task board under the name "${target}": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.`,
-    `Your task: ${prompt}`,
-  ].join('\n')
+  const values = {
+    successor,
+    predecessor: target,
+    label: predecessor.label,
+    assignment: typeof predecessor.assignment === 'string' && predecessor.assignment.length > 0
+      ? predecessor.assignment
+      : UNRECORDED_ASSIGNMENT,
+    task_board: boardPointer(target),
+  }
+  const usingTemplate = typeof template === 'string' && template.length > 0
+  const shape = usingTemplate ? template : BUILT_IN_HANDOFF
+  const rendered = shape.replace(/\{([a-z][a-z0-9_]*)\}/g, (token, name) => (
+    Object.hasOwn(values, name) ? values[name] : token
+  ))
+  if (usingTemplate && rendered.length > HANDOFF_BRIEF_MAX) {
+    throw new Error(
+      `handoff template: the rendered brief is ${rendered.length} characters; the cap is ${HANDOFF_BRIEF_MAX}. Shorten the stored template or the predecessor's assignment.`,
+    )
+  }
+  return `${rendered}\nYour task: ${prompt}`
+}
+
+/** Project one stored handoff template into the tool's result. */
+function describeHandoffTemplate(stored) {
+  const problem = handoffTemplateProblem(stored)
+  const value = {
+    template: typeof stored === 'string' ? stored : '',
+    stored: typeof stored === 'string',
+    valid: stored === undefined || problem === undefined,
+  }
+  if (!value.valid) value.problem = problem
+  value.message = !value.stored
+    ? 'No handoff template is stored; spawn_member with replace composes the built-in brief.'
+    : value.valid
+      ? 'This Lead\'s replacements compose their brief from the stored template.'
+      : 'The stored template does not pass validation, so replacements use the built-in brief. Store a corrected template, or pass an empty string to clear it.'
+  return value
+}
+
+/**
+ * Read, store or clear one Lead's handoff-brief template.
+ *
+ * The template is a per-Lead preference, so this is the one operation here that needs no live Lead
+ * Agent: it reads and writes one field of that Lead's roster record. Called with no `template` it
+ * reports what is stored; with an empty (or whitespace-only) string it clears the field, which returns
+ * that Lead to the built-in composition; with a template it validates and stores it, so two Leads never
+ * share one.
+ *
+ * The stored value is re-checked on read. The storage facility validates every record when a domain
+ * opens, so only its type can be checked there without risking the whole roster; the content rules are
+ * reported here (`valid`, `problem`) instead of being thrown away, and the composition falls back to the
+ * built-in rather than writing the offending token into a child's prompt.
+ *
+ * @param {{table: object, leadSessionId: string, template?: string}} request
+ * @returns {Promise<object>} the tool's result object, unchanged.
+ */
+export async function handoffTemplate({ table, leadSessionId, template }) {
+  if (template === undefined) return describeHandoffTemplate(readRoster(table, leadSessionId).handoffTemplate)
+  if (typeof template !== 'string') throw new Error('handoff_template: template must be a string')
+  if (template.trim().length === 0) {
+    await updateRoster(table, leadSessionId, (current) => {
+      const next = { ...current }
+      delete next.handoffTemplate
+      return next
+    })
+    return {
+      ...describeHandoffTemplate(undefined),
+      message: 'The handoff template was cleared; replacements use the built-in brief again.',
+    }
+  }
+  const checked = checkHandoffTemplate(template, 'handoff_template')
+  await updateRoster(table, leadSessionId, (current) => ({ ...current, handoffTemplate: checked }))
+  return {
+    ...describeHandoffTemplate(checked),
+    message: 'Handoff template stored. spawn_member with replace composes the successor brief from it; read it back by omitting template, and clear it with an empty string.',
+  }
 }
 
 /**
@@ -369,7 +477,12 @@ export async function spawnMember({
   const successorTarget = targetOf(planned)
   const text = predecessor === undefined
     ? prompt
-    : handoffPrompt({ successor: successorTarget, predecessor, prompt })
+    : handoffPrompt({
+      successor: successorTarget,
+      predecessor,
+      prompt,
+      template: usableHandoffTemplate(roster.handoffTemplate),
+    })
   // Persist the reservation before starting anything: a crash must leave a visible member,
   // never an invisible child.
   await updateRoster(table, leadSessionId, (current) => withMember(current, planned))

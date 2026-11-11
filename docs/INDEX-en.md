@@ -40,6 +40,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the trash cap a config field, and why does the entry declare no Config schema? | `docs/adr/0012-configurable-retention.md` | English |
 | Why do one-shot members leave on their own, and why does the sweep need evidence? | `docs/adr/0013-ephemeral-members.md` | English |
 | Why is the plugin called `dsh-team`, and which identifiers did not change? | `docs/adr/0014-plugin-name.md` | English |
+| Why is the handoff brief a stored template, and why is it one tool? | `docs/adr/0015-handoff-template.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

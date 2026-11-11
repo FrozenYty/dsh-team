@@ -171,7 +171,17 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   `running | inactive`, and `inactive` also covers a child that never started, so the sweep requires the
   plugin's own `startedAt` plus a non-resident live registry (`dsh-subagent` 0.2.2-rc.1
   `lib/index.js:2435`). The live end-to-end check on a real profile is the owner's install decision.
-- [ ] **P4-02** A stored, reusable handoff-brief template.
+- [x] **P4-02** A stored, reusable handoff-brief template.
+  Done when a Lead can store a brief template, read it back and clear it, a replacement renders it with the
+  predecessor's real values, and a profile that stores none produces the built-in brief byte for byte.
+  Delivered (v0.11.0, ADR 0015): `handoff_template` reads (no `template`), stores (a validated template)
+  and clears (an empty string) one template per Lead, held on that Lead's roster record. The placeholders
+  are `{successor}`, `{predecessor}`, `{label}`, `{assignment}` and `{task_board}`; an unknown placeholder
+  is refused at set time by name, a template without `{assignment}` is refused with the reason, and both
+  the template (1000 characters) and the rendered brief (2000) are refused rather than truncated. The
+  built-in brief is the default template rendered by the same code, so a profile that stores none is
+  byte-identical, and `list_members` rows are unchanged — the read form of the tool answers. The live
+  tool call and the rendered brief still need the owner's install check.
 - [ ] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
   P4-03 until v0.8.0; that ID belongs to the retention task, and two tasks sharing one ID made the
   reference ambiguous.)
