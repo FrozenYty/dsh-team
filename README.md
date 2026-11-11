@@ -19,7 +19,7 @@ state in a `storageDomain` domain keyed by Lead Session id (ADR 0003).
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
   refused at load.
 - Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn, and
-  two roster tools used in one model turn.
+  the lost-update protection when two roster operations overlap.
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -37,12 +37,12 @@ The plugin supplies the missing half without forking the shipped roster: its own
 subagent substrate, a real `retired` phase, a reusable name at the next generation, and a session trash
 that is a move rather than a deletion.
 
-## What you get
+## What you can do
 
 | Tool | Behaviour |
 |---|---|
 | `spawn_member` | Start a named member as a continuable child; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call. |
-| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, live state and, while resident, context pressure and `compactable`. |
+| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, live state, `compactable` and — while resident — context pressure. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
 | `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. |
@@ -61,7 +61,7 @@ automatic compaction covers every agent in the process, subagents included.
 | Step | Behaviour |
 |---|---|
 | Stop | `retire_member` drains the child: its turn ends, and its activation and capacity slot are released. |
-| Move | Its persisted Session is moved to `<data dir>/trash/<leadSessionId>/<memberId>-<ms>/` (default `<home>/.dsh/team-roster/trash/…`), with the original path and artifact kind recorded. Recovery is a directory move back. |
+| Move | Its persisted Session is moved to `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, with the original path and artifact kind recorded. Recovery is a directory move back. |
 | Tombstone | The record becomes `retired` and keeps the assignment and the paths; the next generation of the name can then be spawned. The projections stop serving the member, and a repeated retirement is a no-op that says so. |
 | Archive fallback | When no artifact can be moved, the workspace archive hides the Session instead, and the record and the result say so (`archived: true`). |
 | Retention | A retirement that moved an artifact in removes the oldest entries past the effective per-Lead cap in the same call and reports the count in `pruned`; nothing is swept on a timer or on a read. The platform has no Session-deletion API, which is why the plugin deletes only its own trash copies (ADR 0011); the cap and its refusal are in Configuration below. |
@@ -101,7 +101,7 @@ tree — there is no build step. Verification after installing is live calls, no
 
 ## Configuration
 
-The plugin's data directory is `<home>/.dsh/team-roster`, overridable with `DSH_TEAM_ROSTER_DATA_DIR`; its
+The plugin's data directory is `~/.dsh/team-roster`, overridable with `DSH_TEAM_ROSTER_DATA_DIR`; its
 `trash/` holds retired sessions, while the roster lives in a `storageDomain` domain (ADR 0003).
 
 One Lead's trash keeps at most **20** retired sessions. The cap is the `trashLimit` field of the bundle's

@@ -12,7 +12,7 @@
 
 - 当前版本：v0.8.0。
 - 在作者本机 profile 上实测：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0，v0.6.0 复测）；回收站上限（v0.7.0）；可配置上限（v0.8.0），配置值生效，越界值在加载时被拒绝。
-- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、同一轮模型调用里使用两个花名册工具。
+- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役，以及两个花名册操作重叠时的丢失更新保护。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -22,12 +22,12 @@
 
 本插件补上缺的那一半，不 fork 官方花名册：在 Harness 子代理底座上维护自己的花名册，有真正的 `retired` 相态、下一代可复用的名字，以及一个“移动而非删除”的会话回收站。
 
-## 你得到什么
+## 能做什么
 
 | 工具 | 行为 |
 |---|---|
 | `spawn_member` | 把成员作为一个可续跑的子代理启动；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任。 |
-| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、实时状态，驻留时还有上下文压力与 `compactable`。 |
+| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、实时状态、`compactable`，驻留时还有上下文压力。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
 | `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。 |
@@ -41,7 +41,7 @@
 | 步骤 | 行为 |
 |---|---|
 | 停止 | `retire_member` 排空子代理：它的这一轮结束，激活与容量名额随之释放。 |
-| 移动 | 持久化会话被移到 `<data dir>/trash/<leadSessionId>/<memberId>-<ms>/`（默认 `<home>/.dsh/team-roster/trash/…`），原始路径与产物类型记在记录上。恢复就是把目录移回去。 |
+| 移动 | 持久化会话被移到 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，原始路径与产物类型记在记录上。恢复就是把目录移回去。 |
 | 立碑 | 记录转为 `retired`，保留 assignment 与各条路径；之后可以启动该名字的下一代。投影不再下发该成员，再次退役是无操作，并会说明这一点。 |
 | 归档兜底 | 产物移不动时，改由工作区归档隐藏该会话，记录与返回结果都会说明（`archived: true`）。 |
 | 保留上限 | 成功移入产物的那次退役，会在同一次调用里删掉超出该 Lead 生效上限的最旧条目，并在 `pruned` 里报告数量；不会按定时器清理，也不会在读取时清理。平台没有会话删除 API，所以插件只删自己回收站里的副本（ADR 0011）；上限本身与越界拒绝见下面的配置一节。 |
@@ -71,7 +71,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 
 ## 配置
 
-插件的数据目录是 `<home>/.dsh/team-roster`，可用 `DSH_TEAM_ROSTER_DATA_DIR` 覆盖；其 `trash/` 存退役会话，花名册本身则放在 `storageDomain` 域里（ADR 0003）。
+插件的数据目录是 `~/.dsh/team-roster`，可用 `DSH_TEAM_ROSTER_DATA_DIR` 覆盖；其 `trash/` 存退役会话，花名册本身则放在 `storageDomain` 域里（ADR 0003）。
 
 每个 Lead 的回收站最多保留 **20** 份退役会话。这个上限是 bundle 补丁行上的 `trashLimit` 字段，所以改它是改 profile 自己的 `cordis.patch.yml`，按 id 匹配：
 
@@ -113,4 +113,4 @@ node scripts/check.mjs
 
 ## 文档与参与
 
-[docs/INDEX-en.md](docs/INDEX-en.md) 是文档地图；设计文档在 [docs/architecture-en.md](docs/architecture-en.md)；难以回退的决策在 [docs/adr/](docs/adr/)。AI 助手请先读 [AGENTS.md](AGENTS.md)；分支、提交与 CI 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+[docs/INDEX-zh.md](docs/INDEX-zh.md) 是文档地图；设计文档在 [docs/architecture-zh.md](docs/architecture-zh.md)；难以回退的决策在 [docs/adr/](docs/adr/)。AI 助手请先读 [AGENTS.md](AGENTS.md)；分支、提交与 CI 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
