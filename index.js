@@ -184,9 +184,15 @@ function memberRow(ctx, member) {
   if (live.resident) {
     const agent = ctx.agents.get(member.childId)
     if (agent !== undefined) {
-      const { pressureTokens, contextWindow } = ctx.tokenMeter.contextPressure(agent.session)
-      row.pressure_tokens = pressureTokens
-      row.context_window = contextWindow
+      try {
+        const { pressureTokens, contextWindow } = ctx.tokenMeter.contextPressure(agent.session)
+        // A child that has not issued a model request yet has no measurable window. Assigning
+        // `undefined` would make the tool result non-lossless JSON, which the registry rejects.
+        if (Number.isFinite(pressureTokens)) row.pressure_tokens = pressureTokens
+        if (Number.isFinite(contextWindow)) row.context_window = contextWindow
+      } catch (error) {
+        row.note = 'Context pressure is not measurable for this member yet.'
+      }
     }
   }
   return row
@@ -236,9 +242,9 @@ function install(agent, ctx, store) {
           }
           row.resident = true
           const { pressureTokens, contextWindow, ratio } = pressureOf(ctx, live)
-          row.pressure_tokens = pressureTokens
-          row.context_window = contextWindow
-          if (ratio !== undefined) row.usage_ratio = ratio
+          if (Number.isFinite(pressureTokens)) row.pressure_tokens = pressureTokens
+          if (Number.isFinite(contextWindow)) row.context_window = contextWindow
+          if (typeof ratio === 'number') row.usage_ratio = ratio
           row.under_pressure = ratio !== undefined && ratio >= WARN_USAGE_RATIO
           row.compactable = compaction !== undefined && live.status !== 'running'
           if (live.status === 'running') {
@@ -295,7 +301,14 @@ function install(agent, ctx, store) {
           }
         }
 
-        const before = pressureOf(ctx, live).pressureTokens
+        // A member with no committed request has no measurable pressure; an `undefined` field would
+        // make the tool result non-lossless JSON, so numbers are attached only when real.
+        const tokensNow = () => {
+          const current = pressureOf(ctx, live).pressureTokens
+          return Number.isFinite(current) ? current : undefined
+        }
+        const numberField = (name, value) => (Number.isFinite(value) ? { [name]: value } : {})
+        const before = tokensNow()
         let result
         try {
           result = await compaction.compactNow(live, exec.signal)
@@ -304,7 +317,7 @@ function install(agent, ctx, store) {
             target: member.name,
             compacted: false,
             reason: 'failed',
-            before_tokens: before,
+            ...numberField('before_tokens', before),
             message: error instanceof Error ? error.message : String(error),
           }
         }
@@ -313,8 +326,8 @@ function install(agent, ctx, store) {
             target: member.name,
             compacted: false,
             reason: 'nothing-to-compact',
-            before_tokens: before,
-            after_tokens: pressureOf(ctx, live).pressureTokens,
+            ...numberField('before_tokens', before),
+            ...numberField('after_tokens', tokensNow()),
             message: 'No safely compactable range was found; the older history is likely one indivisible unit.',
           }
         }
@@ -322,8 +335,8 @@ function install(agent, ctx, store) {
           target: member.name,
           compacted: true,
           reason: 'done',
-          before_tokens: before,
-          after_tokens: pressureOf(ctx, live).pressureTokens,
+          ...numberField('before_tokens', before),
+          ...numberField('after_tokens', tokensNow()),
           message: 'The member was compacted in place; its identity and session are unchanged.',
         }
         if (typeof result.shadowedTokenCount === 'number') value.shadowed_tokens = result.shadowedTokenCount
