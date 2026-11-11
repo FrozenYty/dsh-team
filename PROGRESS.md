@@ -484,3 +484,23 @@
   reaching a real retirement are covered by fakes and by the loader/cordis source, not by a running
   profile. The Config provider will keep reporting `absent` for this entry — that is the recorded decision
   (ADR 0012), not a regression.
+
+- **The configurable cap was verified live, in both directions, without touching the owner's profile.** The
+  probe used this bundle's own patch row, which is the same mechanism a profile override reaches:
+  - `config: { trashLimit: 5 }` installed and applied, then a retirement reported `pruned: 2` and the
+    message read "it keeps at most **5**" — the configured number in force, not the default 20, and the
+    trash directory then held exactly 5 entries on disk.
+  - `config: { trashLimit: 0 }` refused at load with `application: failed` and
+    `config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`, naming the field, the rule
+    and the value. That is the official schema's `minimum: 1` behaviour — refused, never silently clamped.
+  - The patch row was put back to `config: {}` before this was recorded, so a config-less profile keeps the
+    documented default; the temporary 5 and 0 were only the probe.
+- **A zero-import bundle cannot declare a Config, and that is a finding rather than an omission.** Cordis
+  validates a plugin's `Config` through `runtime.Config["~standard"].validate` (installed
+  `@deepseek-ai/cordis/lib/index.js:244-250`, stored at `:1703`), so a plain JSON-Schema-shaped object
+  throws at activation. A hand-written Standard Schema would satisfy Cordis, but the Config provider reports
+  `"schema"` only for a native Schemastery graph (`dsh-tool-cordis/lib/types/config.js:12-17`,
+  `dsh-app-boot/lib/index.js:3197-3201`) and records an error diagnostic for anything else
+  (`:4152-4155`). The entry therefore stays `absent` on purpose and the value is validated in `apply`,
+  with the raw patch config reaching it unchanged (loader `lib/index.js:588-591`). ADR 0012 records this,
+  so the next person does not read `absent` as "unfinished".
