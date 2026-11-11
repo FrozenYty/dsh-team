@@ -28,10 +28,10 @@
     },
     "client": {
       "platform": "web",
-      "immediately": false,
+      "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-settings-general"
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
   }

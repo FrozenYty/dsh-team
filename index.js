@@ -42,7 +42,7 @@ import { resolveDataDir } from './trash.js'
 
 export const name = 'team-roster'
 
-export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
+export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents', 'webServer']
 
 /** Build a registry-ready definition from canonical JSON Schemas. */
 function defineTool(options) {
@@ -499,14 +499,11 @@ export function apply(ctx) {
     slots.dispose()
   }, 'team-roster.hostHooks()')
 
-  // The Settings panel's bridge. A profile without a web server (the desktop shell) keeps the tools and
-  // loses only the panel, so the route waits for `webServer` instead of joining the plugin's own inject
-  // list. The registered shape is the raw-node handler the shipped client-connection plugin uses.
-  const registerRoutes = (webCtx) => {
-    registerTeamRosterRoutes(webCtx, { ctx, store, dataDir, hooks, log })
-  }
-  if (ctx.get('webServer') === undefined) ctx.inject(['webServer'], registerRoutes)
-  else registerRoutes(ctx)
+  // The Settings panel's bridge. `webServer` is a required injection: this plugin exists for a browser
+  // profile, and Cordis refuses a service property that was not injected, so the earlier conditional
+  // wiring failed activation instead of degrading. The registered shape is the raw-node handler the
+  // shipped client-connection plugin uses.
+  registerTeamRosterRoutes(ctx, { ctx, store, dataDir, hooks, log })
 
   const maybeInstall = (agent) => {
     if (installed.has(agent)) return
