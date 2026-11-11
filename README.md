@@ -14,12 +14,14 @@ state in a `storageDomain` domain keyed by Lead Session id (ADR 0003).
 
 ## Status
 
-- Current version: v0.8.0.
+- Current version: v0.9.0.
 - Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
-  refused at load.
-- Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn, and
-  the lost-update protection when two roster operations overlap.
+  refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
+  `list_members` answered `swept: 2` with both targets, and both rows came back `retired`.
+- Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn,
+  the lost-update protection when two roster operations overlap, and that a member still running is never
+  swept.
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
