@@ -1,5 +1,5 @@
 /**
- * Durable roster storage and lifecycle helpers for dsh-team-control.
+ * Durable roster storage and lifecycle helpers for dsh-team-roster.
  *
  * No imports beyond `node:crypto`: a profile-linked bundle cannot resolve `@deepseek-ai/*` or `zod`
  * (ADR 0002). The domain spec below is therefore hand-built. That is safe because the storage facility
@@ -14,7 +14,9 @@
 import { randomUUID } from 'node:crypto'
 
 /** Domain name: /^[a-z][a-z0-9_]*$/ per the storage facility. */
-const DOMAIN_NAME = 'team_control'
+const DOMAIN_NAME = 'team_roster'
+/** The domain this plugin used before it was renamed; read once so an existing roster is not orphaned. */
+const LEGACY_DOMAIN_NAME = 'team_control'
 
 /** Lifecycle phases. `dormant` is deliberately absent: P4-01 adds it with the completion hook. */
 export const PHASE = {
@@ -53,12 +55,40 @@ function parseRoster(value) {
 }
 
 /** The hand-built domain specification. */
-export const ROSTER_SPEC = {
-  name: DOMAIN_NAME,
-  version: 1,
-  tables: {
-    rosters: { valueSchema: { parse: parseRoster } },
-  },
+export const ROSTER_SPEC = domainSpec(DOMAIN_NAME)
+
+/** Build the domain spec for one domain name; the shape is identical for the legacy domain. */
+function domainSpec(name) {
+  return {
+    name,
+    version: 1,
+    tables: {
+      rosters: { valueSchema: { parse: parseRoster } },
+    },
+  }
+}
+
+/**
+ * Copy a roster from the pre-rename domain the first time the new domain is opened.
+ * The legacy domain is left in place: if this copy is ever wrong, the source is still there.
+ * @param ctx - plugin context, with `storageDomain` injected.
+ * @param table - the new domain's roster table.
+ */
+async function migrateLegacyRoster(ctx, table) {
+  for (const _existing of table.entries()) return
+  let legacy
+  try {
+    legacy = await ctx.storageDomain.open(domainSpec(LEGACY_DOMAIN_NAME))
+  } catch (error) {
+    return
+  }
+  try {
+    for (const [leadSessionId, roster] of legacy.table('rosters').entries()) {
+      await table.put(leadSessionId, roster)
+    }
+  } finally {
+    await legacy.close()
+  }
 }
 
 /**
@@ -68,8 +98,10 @@ export const ROSTER_SPEC = {
  */
 export async function openRosterStore(ctx) {
   const domain = await ctx.storageDomain.open(ROSTER_SPEC)
-  ctx.effect(() => () => domain.close(), 'team-control.domainClose()')
-  return domain.table('rosters')
+  ctx.effect(() => () => domain.close(), 'team-roster.domainClose()')
+  const table = domain.table('rosters')
+  await migrateLegacyRoster(ctx, table)
+  return table
 }
 
 /** Read one Lead's roster, or an empty roster when none exists yet. */

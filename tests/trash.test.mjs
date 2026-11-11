@@ -1,0 +1,99 @@
+import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+
+import {
+  decodeSegment,
+  moveSessionArtifact,
+  resolveDataDir,
+  resolveSource,
+  trashMemberSession,
+} from '../trash.js'
+
+const scratch = () => mkdtemp(join(tmpdir(), 'team-roster-test-'))
+
+test('the data directory is overridable and defaults under the home directory', () => {
+  assert.equal(resolveDataDir({ DSH_TEAM_ROSTER_DATA_DIR: '/tmp/custom' }, '/home/x'), '/tmp/custom')
+  assert.equal(resolveDataDir({ DSH_TEAM_ROSTER_DATA_DIR: '   ' }, '/home/x'), join('/home/x', '.dsh', 'team-roster'))
+})
+
+test('the persistence path encoding is decoded before comparing a directory name', () => {
+  // The backend encodes a non-safe character as `~` plus four hex digits.
+  assert.equal(decodeSegment('sess~002d1~002e2'), 'sess-1.2')
+  assert.equal(decodeSegment('plain'), 'plain')
+})
+
+test('a whole session directory is moved, not copied', async () => {
+  const root = await scratch()
+  const source = join(root, 'sessions', 'member-1')
+  await mkdir(source, { recursive: true })
+  await writeFile(join(source, 'session.jsonl'), 'log')
+  const trashRoot = join(root, 'trash', 'lead-1')
+
+  const trashPath = await moveSessionArtifact({ sourcePath: source, isDirectory: true, trashRoot, dirName: 'member-1-1' })
+  assert.equal(existsSync(source), false, 'the source directory is gone')
+  assert.equal(await readFile(join(trashPath, 'session.jsonl'), 'utf8'), 'log')
+})
+
+test('a cross-device move falls back to copy plus remove', async () => {
+  const root = await scratch()
+  const source = join(root, 'artifact.jsonl')
+  await writeFile(source, 'log')
+  const trashRoot = join(root, 'trash')
+  const renameFn = async () => {
+    const error = new Error('cross-device')
+    error.code = 'EXDEV'
+    throw error
+  }
+
+  const trashPath = await moveSessionArtifact({ sourcePath: source, trashRoot, dirName: 'a-1', renameFn })
+  assert.equal(existsSync(source), false)
+  assert.equal(await readFile(join(trashPath, 'artifact.jsonl'), 'utf8'), 'log')
+})
+
+test('a file whose parent is the member directory becomes a directory move', async () => {
+  const root = await scratch()
+  const member = join(root, 'sessions', 'member-2')
+  await mkdir(member, { recursive: true })
+  const artifact = join(member, 'session.jsonl')
+  await writeFile(artifact, 'log')
+
+  const source = await resolveSource(artifact, 'member-2')
+  assert.deepEqual(source, { path: member, isDirectory: true })
+  assert.equal(await resolveSource(join(root, 'nope.jsonl'), 'member-3'), undefined)
+})
+
+test('trashMemberSession moves the reported artifact and reports where it went', async () => {
+  const root = await scratch()
+  const member = join(root, 'sessions', 'member-4')
+  await mkdir(member, { recursive: true })
+  await writeFile(join(member, 'session.jsonl'), 'log')
+  const ctx = {
+    get: (name) => (name === 'sessionPersistence'
+      ? { stat: async (id) => (id === 'member-4' ? { location: { path: member } } : undefined) }
+      : undefined),
+  }
+  const result = await trashMemberSession(ctx, {
+    leadSessionId: 'lead-1',
+    memberId: 'member-4',
+    dataDir: join(root, 'data'),
+    now: 1700000000000,
+  })
+  assert.equal(result.moved, true)
+  assert.equal(result.trashPath, join(root, 'data', 'trash', 'lead-1', 'member-4-1700000000000'))
+  assert.equal(existsSync(member), false)
+})
+
+test('a missing persistence service or artifact is reported, never thrown', async () => {
+  const noService = await trashMemberSession({ get: () => undefined }, { leadSessionId: 'l', memberId: 'm', dataDir: 'd' })
+  assert.deepEqual(noService, { moved: false, reason: 'no-persistence' })
+
+  const noArtifact = await trashMemberSession(
+    { get: () => ({ stat: async () => ({ location: {} }) }) },
+    { leadSessionId: 'l', memberId: 'm', dataDir: 'd' },
+  )
+  assert.deepEqual(noArtifact, { moved: false, reason: 'no-artifact' })
+})

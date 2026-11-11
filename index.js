@@ -1,10 +1,13 @@
 /**
- * Team Control — a team roster whose members can be retired, removed and replaced.
+ * Team Roster — a team roster whose members can be retired, removed and replaced.
  *
- * Host half. It owns the roster (`roster.js`), exposes it as Lead-scoped tools, and compacts one
- * member's context in place. The shipped team tool row is disabled by the bundle patch so only one
- * roster answers the model; the shipped roster *service* stays mounted so this plugin can adopt the
- * members it created before the switch, and can keep using its Lead membership test.
+ * Host half. It owns the roster (`roster.js`), exposes it as Lead-scoped tools, compacts one member's
+ * context in place, and applies two host-side effects on retirement (`host-hooks.js`): retired members
+ * are stripped from the session-list projections every client renders, and their budget is credited back
+ * to the shipped roster. The member's persisted session is moved to a recoverable trash directory
+ * (`trash.js`) rather than deleted. The shipped team tool row stays enabled because it owns the shared
+ * task board; the roster *service* stays mounted so this plugin can adopt the members it created before
+ * the switch, and can keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
  * `compact_member`.
@@ -33,8 +36,10 @@ import {
   withMember,
   writeRoster,
 } from './roster.js'
+import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
+import { resolveDataDir, trashMemberSession } from './trash.js'
 
-export const name = 'team-control'
+export const name = 'team-roster'
 
 export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
 
@@ -123,6 +128,8 @@ const RETIRE_VALUE = {
     retired: { type: 'boolean' },
     drained: { type: 'boolean' },
     archived: { type: 'boolean' },
+    trashed: { type: 'boolean' },
+    trash_path: { type: 'string' },
     message: { type: 'string' },
   },
 }
@@ -214,7 +221,7 @@ async function ensureAdopted(ctx, caller, table, leadSessionId) {
  * @param store - promise of the roster table; resolved lazily by each roster tool.
  * @returns a disposer that unwinds every registration in reverse order.
  */
-function install(agent, ctx, store) {
+function install(agent, ctx, store, hooks) {
   const scoped = agent.ctx
   const disposers = []
   const register = (disposer) => {
@@ -419,27 +426,51 @@ function install(agent, ctx, store) {
           // lifecycle fact owned by the record, so it proceeds.
         }
 
+        // Move the persisted artifact out of the live store. This is what makes the member disappear from
+        // the host's own discovery, because session-query drops an artifact that is no longer there.
+        // Failure is reported and never fatal: the record is the lifecycle authority.
+        const trash = await trashMemberSession(ctx, {
+          leadSessionId,
+          memberId: member.childId,
+          dataDir: resolveDataDir(),
+        })
+
         let archived = false
-        const workspace = ctx.get('workspaceRegistry')
-        if (workspace !== undefined) {
-          try {
-            await workspace.archiveSession(member.childId, { stopActivity: true })
-            archived = true
-          } catch (error) {
-            // Archiving is presentation only; it must never block retirement.
+        if (!trash.moved) {
+          // The workspace archive is the fallback that hides a session whose artifact could not be moved.
+          const workspace = ctx.get('workspaceRegistry')
+          if (workspace !== undefined) {
+            try {
+              await workspace.archiveSession(member.childId, { stopActivity: true })
+              archived = true
+            } catch (error) {
+              // Archiving is presentation only; it must never block retirement.
+            }
           }
         }
 
         const retired = { ...member, phase: PHASE.retired, retiredAt: new Date().toISOString() }
         if (typeof args.reason === 'string' && args.reason.length > 0) retired.retireReason = args.reason
+        if (trash.moved && typeof trash.trashPath === 'string') retired.trashPath = trash.trashPath
         await updateRoster(table, leadSessionId, (roster) => withMember(roster, retired))
-        return {
+
+        // Both host effects read tombstones through short caches; refresh now so the member leaves the
+        // projections every client renders and the freed slot is available to the next spawn.
+        hooks.filter.invalidate()
+        void hooks.slots.refresh()
+
+        const value = {
           target: targetOf(member),
           retired: true,
           drained,
           archived,
-          message: 'Member retired: drained, tombstoned, and archived when the workspace service is available.',
+          trashed: trash.moved,
+          message: trash.moved
+            ? 'Member retired: drained, its session moved to the trash directory, and tombstoned.'
+            : `Member retired and tombstoned; the session artifact was not moved (${trash.reason ?? 'unknown'}).`,
         }
+        if (trash.moved && typeof trash.trashPath === 'string') value.trash_path = trash.trashPath
+        return value
       },
     })))
 
@@ -552,11 +583,40 @@ export function apply(ctx) {
   const store = openRosterStore(ctx)
   store.catch(() => undefined)
 
+  const log = (line) => {
+    if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(line)
+  }
+  const readRetired = async () => {
+    const table = await store
+    const ids = new Set()
+    for (const [, roster] of table.entries()) {
+      for (const member of roster.members) if (member.phase === PHASE.retired) ids.add(member.childId)
+    }
+    return ids
+  }
+  const readRetiredByTeam = async () => {
+    const table = await store
+    const byTeam = new Map()
+    for (const [leadSessionId, roster] of table.entries()) {
+      const count = roster.members.filter((member) => member.phase === PHASE.retired).length
+      if (count > 0) byTeam.set(leadSessionId, count)
+    }
+    return byTeam
+  }
+  const filter = installProjectionFilter(ctx, { readRetired, log })
+  const slots = installSlotCredit(ctx, { readRetiredByTeam, log })
+  if (slots.installed) void slots.refresh()
+  const hooks = { filter, slots }
+  ctx.effect(() => () => {
+    filter.dispose()
+    slots.dispose()
+  }, 'team-roster.hostHooks()')
+
   const maybeInstall = (agent) => {
     if (installed.has(agent)) return
     const membership = ctx.agentTeams.tryMembership(agent)
     if (membership === undefined || membership.role !== 'lead') return
-    installed.set(agent, install(agent, ctx, store))
+    installed.set(agent, install(agent, ctx, store, hooks))
   }
 
   for (const agent of ctx.agents.list()) maybeInstall(agent)
@@ -570,5 +630,5 @@ export function apply(ctx) {
   ctx.effect(() => () => {
     for (const dispose of installed.values()) dispose()
     installed.clear()
-  }, 'team-control.scopedTools()')
+  }, 'team-roster.scopedTools()')
 }

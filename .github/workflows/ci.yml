@@ -16,8 +16,17 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Bundle entry parses as ESM
-        run: node --check index.js
+      - name: Bundle modules parse as ESM
+        run: |
+          node --check index.js
+          node --check roster.js
+          node --check trash.js
+          node --check host-hooks.js
+
+      - name: Unit tests
+        # One process: the tests are pure or use temporary directories, and process isolation is the only
+        # thing the default runner adds. It also matches how they are run on Windows.
+        run: node --test --test-isolation=none tests/*.test.mjs
 
       - name: Repository checks
         run: node scripts/check.mjs

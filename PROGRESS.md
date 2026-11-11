@@ -80,3 +80,19 @@
   shipped roster rather than ours, so it would have been wrong for every member this plugin owns.
   Pressure and `compactable` now ride on the `list_members` row, and `compact_member` resolves through
   the owned roster.
+- **The plugin is `dsh-team-roster` from v0.3, and the rename does not orphan an existing roster.** The
+  storage domain moved from `team_control` to `team_roster`; `openRosterStore` copies the legacy domain
+  once, on first open, and leaves the source in place. A rename that silently emptied the roster would
+  have been worse than the old name.
+- **Retirement now moves the session artifact instead of only hiding it, and two host-side effects make it
+  visible.** The session directory goes to `~/.dsh/team-roster/trash/<lead>/<member>-<ms>/`; the host's
+  session-list exits are wrapped so retired ids never reach a client; and the legacy roster's budget is
+  credited back for one spawn. The first two mechanisms were learned from the peer plugin
+  `dsh-team-admin`, which solves the same problem from a human admin panel; ADR 0004 records what was
+  adopted and what was deliberately not (its HTTP surface and its separate tombstone file).
+- **The plugin now has unit tests, and the runner choice is itself a finding.** Twenty-two `node:test`
+  cases cover name generations, adoption, the projection strip, both host hooks (including that they
+  restore on dispose) and the session trash. `node --test tests/` cannot run here: the default runner
+  spawns a process per file and this machine's sandbox refuses that spawn with `EPERM`. Every place that
+  runs the tests uses `--test-isolation=none`, locally and in CI, so a local pass means what a green run
+  means.

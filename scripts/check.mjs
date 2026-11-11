@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Repository checks for dsh-team-control.
+ * Repository checks for dsh-team-roster.
  *
  * Dependency-free on purpose: the bundle itself must import nothing, and CI should not need an
  * install step to check it. What this proves:
@@ -53,8 +53,9 @@ const manifest = readJson('package.json')
 let pluginName
 if (manifest !== undefined) {
   pluginName = manifest.name
-  if (typeof pluginName !== 'string' || !pluginName.startsWith('@local/')) {
-    fail('package.json: name must be an @local/ scoped package')
+  // Either a bare npm name or a scoped one; the bundle id and the patch row must agree with it.
+  if (typeof pluginName !== 'string' || !/^(?:@[a-z0-9-]+\/)?[a-z][a-z0-9-]*$/.test(pluginName)) {
+    fail('package.json: name must be a lowercase npm package name')
   }
   if (manifest.type !== 'module') fail('package.json: type must be "module"')
   const patch = manifest.dsh?.bundle?.patch

@@ -27,6 +27,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么花名册要自建而不是扩展官方？ | `docs/adr/0001-own-roster-on-subagents.md` | 英文 |
 | 为什么 bundle 入口不导入任何东西？ | `docs/adr/0002-zero-import-bundle-entry.md` | 英文 |
 | 花名册存在哪里？ | `docs/adr/0003-roster-storage.md` | 英文 |
+| 为什么退役要移动文件、还要改宿主服务？ | `docs/adr/0004-retire-through-persistence.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 
