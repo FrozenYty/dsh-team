@@ -39,3 +39,12 @@
   the check script: the machine-path rule matched the letter-plus-colon inside an `https` URL, so it
   failed on the README line that links this repository. The rule now requires the drive letter to
   follow a non-word character, and a five-case self-test pins both directions.
+- **P2-01 and P2-02 are ticked on two spike reports, and one of them corrected a wrong assumption.**
+  The roster lives in `ctx.storageDomain` — a domain whose tables read synchronously and whose `put`
+  resolves after the record is on disk — not in a new Session event type, which the Harness would refuse
+  to reopen (ADR 0003). The larger correction: the installed subagent seam is `0.2.2-rc.1` and is **not**
+  the generation in the public source tree. It has no `name` field and no `resolveName`; the public tree
+  has both. So member names are ours to keep, in our own map, exactly as the shipped team does it with a
+  generated `childId`. The state matrix in `docs/architecture-en.md` §4.3 was written against the
+  installed API, including the two expensive cells: retirement during provisioning, and retirement
+  during an active turn.

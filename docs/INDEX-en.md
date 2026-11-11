@@ -27,6 +27,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | How do agents and the roster fit together? | `docs/architecture-en.md` | pair |
 | Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
 | Why does the bundle entry import nothing? | `docs/adr/0002-zero-import-bundle-entry.md` | English |
+| Where does the roster live? | `docs/adr/0003-roster-storage.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

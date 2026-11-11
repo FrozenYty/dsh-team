@@ -54,10 +54,10 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 
 ### P2 — Own roster (v0.2): the lifecycle the shipped team lacks
 
-- [ ] **P2-01** Choose the durable store for the roster and write down the record shape.
+- [x] **P2-01** Choose the durable store for the roster and write down the record shape.
   Done when `docs/architecture-en.md` names the service, the record fields and the key design, backed by
   a spike report rather than a guess.
-- [ ] **P2-02** Write the roster state matrix (phases × events) before implementing transitions.
+- [x] **P2-02** Write the roster state matrix (phases × events) before implementing transitions.
   Done when `docs/architecture-en.md` contains the matrix with every cell decided, including
   retire-versus-spawn races and messages to a retired member.
 - [ ] **P2-03** Roster service: spawn a member with a generation-suffixed name through `ctx.subagents`.

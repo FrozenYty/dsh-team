@@ -47,6 +47,20 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 成员是通过 `ctx.subagents.startActivation(...)` 创建的普通子代理，它已经提供可续聊的子代理、收件箱消息、打断、排空、冷恢复和实时并发上限。插件只拥有 Harness 不提供的部分：花名册、它的生命周期，以及由此产生的模型侧工具。
 
+安装版的 seam 是 `dsh-subagent` **0.2.2-rc.1**，与公开源码树并非同一代。它的激活请求是：
+
+```
+{ provider, label, request: { prompt, parent, cwd?, agentPreset?, agentOptions?, outputSchema?, maxDepth? },
+  signal, delivery, childId? }
+```
+
+没有 `name` 字段，也没有 `resolveName`／`namesOf`。因此名字属于我们：插件生成一个 UUID `childId` 传给 `startActivation`，把 name→childId 的映射放在自己的花名册里——与官方 Team 的做法一致。并发上限是 `maxActiveSubagents`（默认 8），按子代理树、进程内计数；排空一个子代理解放它的名额。
+
+有两个 Harness 事实塑造了退役流程：
+
+- `drainChildren(parent, [childId])` 停掉单个子代理、释放名额与驻留，但子代理的会话与父会话里的 `subagent/catalog` 条目会保留。被排空的子代理会被官方 `list_agents` 永久列出，这正是我们要有自己的列表工具的原因。
+- `ctx.workspaceRegistry.archiveSession` 会把一个会话从所有工作区界面隐藏。它可逆、不删除任何东西，正好适合已退役的成员。
+
 ### 4.2 花名册记录
 
 每个成员一条持久记录，存在插件自己的存储里，以 Lead 会话 id 为键（具体服务在 P2-01 选定，随后补 ADR）。
@@ -64,7 +78,7 @@ briefPath     退役成员写的交接书路径（如果写了）
 predecessor   被本成员替换掉的 memberId（如果它是继任者）
 ```
 
-`name` 只在**当前**成员之间唯一。继任者复用它并把 `generation` 加一——官方花名册做不到这一点，因为它把名字视为永久占用。
+`name` 只在**当前**成员之间唯一。继任者复用它并把 `generation` 加一——官方花名册做不到这一点，因为它把名字视为永久占用。记录存在一个 `storageDomain` 域里，而不是会话日志里（ADR 0003）：每个成员 id 一条记录，另有一条以 Lead 会话 id 为键的索引。
 
 ### 4.3 状态矩阵
 
@@ -91,7 +105,8 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 2. **对账**——Lead 在采信之前，用花名册和工作区核对交接书；与仓库矛盾的交接书是发现，不是计划。
 3. **排空**——通过 `ctx.subagents.drainChildren(lead, [childId])` 排空子代理，释放它的激活名额与驻留。
 4. **立碑**——记录转为 `retired`。该成员不再能被花名册工具寻址，名字可供 `generation + 1` 的继任者使用。
-5. **替换（可选）**——继任者只带交接书的**指针**启动（绝不给前任的完整对话），并在动手编辑前做一次复述门禁。
+5. **隐藏**——用 `ctx.workspaceRegistry.archiveSession` 把已退役的子代理从工作区界面移除。它不删除任何东西，且可逆。
+6. **替换（可选）**——继任者只带交接书的**指针**启动（绝不给前任的完整对话），并在动手编辑前做一次复述门禁。
 
 ### 4.5 模型侧接口
 
@@ -108,11 +123,12 @@ predecessor   被本成员替换掉的 memberId（如果它是继任者）
 | 压缩 | `ctx.get('compaction').compactNow(agent, signal)` |
 | 成员判定 | `ctx.agentTeams.tryMembership(agent)`（仅 v0.1） |
 | 子代理生命周期 | `ctx.subagents.startActivation`、`sendMessage`、`interrupt`、`drainChildren` |
-| 插件自有持久状态 | 存储服务，而不是会话事件（P2-01） |
+| 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
+| 隐藏已退役的子代理 | `ctx.workspaceRegistry.archiveSession`（可逆，不删除） |
 
 ## 6. 风险与边界
 
 - **迁移期两个花名册并存**——在 P2-07 落地前，官方花名册和我们自己的都可能对模型可见。补丁步骤是阶段门禁的一部分，不是事后补丁。
 - **没有真正的抹除**——退役成员的会话仍在磁盘上，官方 catalog 也仍知道它存在过。退役是我们花名册里的生命周期事实，不是文件系统删除。
-- **Harness API 漂移**——本文点到的每个 Service 都来自已安装的 asar，版本会变；一次 Harness 升级就能让本文作废，而本仓库什么都没改。
+- **Harness API 漂移**——本文点到的每个 Service 都来自已安装的 asar，版本会变；一次 Harness 升级就能让本文作废，而本仓库什么都没改。安装版的子代理 seam 与公开源码树不是同一代：公开树有成员 `name` 和 `resolveName`，安装版没有。采信任何公开示例之前，先读安装版的 `lib/index.js`。
 - **压缩是 profile 级的**——启用后端会改变该 profile 内每个会话的行为。这是把官方特性打开，不是自研代码，但它并不只作用于本插件的成员。

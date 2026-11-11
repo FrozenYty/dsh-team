@@ -66,6 +66,27 @@ provides continuable children, inbox messaging, interruption, draining, cold res
 limit. The plugin owns only what the Harness does not: the roster, its lifecycle, and the model-facing
 tools that follow from it.
 
+The installed seam is `dsh-subagent` **0.2.2-rc.1**, and it is not the generation in the public source
+tree. Its activation request is:
+
+```
+{ provider, label, request: { prompt, parent, cwd?, agentPreset?, agentOptions?, outputSchema?, maxDepth? },
+  signal, delivery, childId? }
+```
+
+There is no `name` field, and no `resolveName`/`namesOf`. Names are therefore ours: the plugin generates
+a UUID `childId`, passes it to `startActivation`, and keeps the name→childId mapping in its roster — the
+same arrangement the shipped team uses. Capacity is `maxActiveSubagents` (default 8), counted per
+subagent tree and process-local; draining a child releases its slot.
+
+Two Harness facts shape retirement:
+
+- `drainChildren(parent, [childId])` stops one child, releases its slot and residency, but the child's
+  Session and the parent's `subagent/catalog` entry survive. A drained child stays listed by the stock
+  `list_agents` forever, which is why our own list tool exists.
+- `ctx.workspaceRegistry.archiveSession` hides a Session from every workspace surface. It is reversible
+  and deletes nothing, which makes it exactly right for a retired member.
+
 ### 4.2 Roster record
 
 One durable record per member, kept in a plugin-owned store keyed by the Lead Session id (the exact
@@ -85,7 +106,9 @@ predecessor   memberId this member replaced, when it is a successor
 ```
 
 `name` is unique among **current** members. A successor reuses the name with `generation + 1`, which
-the shipped roster cannot do because it treats a name as permanently taken.
+the shipped roster cannot do because it treats a name as permanently taken. Records live in one
+`storageDomain` domain, not in the Session log (ADR 0003): one record per member id, plus a
+per-Lead index keyed by the Lead Session id.
 
 ### 4.3 State matrix
 
@@ -122,7 +145,9 @@ half-finished:
    activation slot and residency.
 4. **Tombstone.** The record moves to `retired`. The member is no longer addressable by the roster
    tools, and its name becomes available to a successor at `generation + 1`.
-5. **Replace (optional).** A successor is spawned with a pointer to the brief — never with the
+5. **Hide.** `ctx.workspaceRegistry.archiveSession` removes the retired child from the workspace
+   surfaces. It deletes nothing and is reversible.
+6. **Replace (optional).** A successor is spawned with a pointer to the brief — never with the
    predecessor's transcript — and a read-back gate before it edits anything.
 
 ### 4.5 Model-facing surface
@@ -142,7 +167,8 @@ disagree (P2-07). The exact tool schemas land with P2-06.
 | compaction | `ctx.get('compaction').compactNow(agent, signal)` |
 | membership test | `ctx.agentTeams.tryMembership(agent)` (v0.1 only) |
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
-| durable plugin state | a storage service, not session events (P2-01) |
+| durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
+| hide a retired child | `ctx.workspaceRegistry.archiveSession` (reversible, deletes nothing) |
 
 ## 6. Risks and limits
 
@@ -151,7 +177,10 @@ disagree (P2-07). The exact tool schemas land with P2-06.
 - **No true erasure.** A retired member's Session stays on disk and the shipped catalog still knows it
   existed. Retirement is a lifecycle fact in our roster, not a filesystem deletion.
 - **Harness API drift.** Every Service named here is read from an installed asar whose version moves;
-  a Harness upgrade can invalidate this document without any change in this repository.
+  a Harness upgrade can invalidate this document without any change in this repository. The installed
+  subagent seam is a different generation from the public source tree: the public tree has member names
+  and `resolveName`, the installed build does not. Read the installed `lib/index.js` before trusting a
+  public example.
 - **Compaction is profile-wide.** Enabling the backend changes behaviour for every session in the
   profile. It is a shipped feature turned on, not custom code, but it is not scoped to this plugin's
   members.
