@@ -548,10 +548,10 @@
   live end-to-end check — spawn two ephemeral members, let them finish, call `list_members` and see them
   leave and the slots come back — remains the owner's install decision.
 
-## 2026-11-11 — the plugin is renamed dsh-team-relay (v0.10.0)
+## 2026-11-11 — the plugin is renamed dsh-team (v0.10.0)
 
-- **The package, the patch row's `name` and the display title are `dsh-team-relay`, `Team relay` and
-  `团队接力`.** The old name described the state — a roster — while what the plugin delivers is the move:
+- **The package, the patch row's `name` and the display title are `dsh-team`, `Team` and
+  `团队`.** The old name described the state — a roster — while what the plugin delivers is the move:
   retire, replace, take back. The version is `0.10.0`, not a patch bump, because a rename is a new
   identity for a package that a profile links: the lockfile and a reader both need to see it. The locale
   descriptions did not change (`Retire it, replace it, take it back.` /
@@ -565,12 +565,12 @@
   stops matching a profile's `- id: team-roster` override, so the cap would silently fall back to the
   default; and every tombstone records an absolute `trashPath` under `~/.dsh/team-roster` while
   `pruneLeadTrash` lists that same root, so renaming it would leave the recorded paths outside the scanned
-  root. `DSH_TEAM_RELAY_DATA_DIR` is now the documented override and wins when both variables are set;
+  root. `DSH_TEAM_DATA_DIR` is now the documented override and wins when both variables are set;
   `DSH_TEAM_ROSTER_DATA_DIR` still works. Each of the four carries the note where it is declared, and the
   ADR carries the table so a later reader does not finish the rename by accident.
 - **The entry's error prefix followed the package name, and the include string with it.**
-  `resolveTrashLimit` now refuses with `dsh-team-relay: config field "trashLimit" must be an integer >= 1
-  (minimum 1); received 0`, and the provider should report `include:dsh-team-relay` with
+  `resolveTrashLimit` now refuses with `dsh-team: config field "trashLimit" must be an integer >= 1
+  (minimum 1); received 0`, and the provider should report `include:dsh-team` with
   `patchId: team-roster` — the row id does not change, the entry name does. ADR 0012 keeps quoting the old
   prefix in its body; ADR 0014 §4 lists that and the other places where `dsh-team-roster` is now a
   historical record rather than a current name.
@@ -582,6 +582,6 @@
   (append-only `PROGRESS.md` entries, accepted ADR bodies, the v0.3 domain-migration note, the frozen
   directory and variable names, and the historical repository URL).
 - **What stays unverified.** The bundle was not installed and no `plugin_manager` call was made, so the
-  activation with the new `name`, the provider reporting `include:dsh-team-relay`, and a profile's
+  activation with the new `name`, the provider reporting `include:dsh-team`, and a profile's
   existing `- id: team-roster` override still matching are argued from the loader and the patch shape, not
   observed in a running profile. The live check is the owner's install decision.

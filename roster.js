@@ -1,5 +1,5 @@
 /**
- * Durable roster storage and lifecycle helpers for dsh-team-relay.
+ * Durable roster storage and lifecycle helpers for dsh-team.
  *
  * No imports beyond `node:crypto`: a profile-linked bundle cannot resolve `@deepseek-ai/*` or `zod`
  * (ADR 0002). The domain spec below is therefore hand-built. That is safe because the storage facility

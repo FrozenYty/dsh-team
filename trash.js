@@ -28,7 +28,7 @@ import { basename, dirname, join, resolve } from 'node:path'
  * would move a file back from a directory nothing writes to any more. The package name changed; the
  * place durable bytes already live did not.
  */
-const DATA_DIR_ENV = 'DSH_TEAM_RELAY_DATA_DIR'
+const DATA_DIR_ENV = 'DSH_TEAM_DATA_DIR'
 /** The pre-rename name of the same variable; still honoured so an existing profile keeps working. */
 const LEGACY_DATA_DIR_ENV = 'DSH_TEAM_ROSTER_DATA_DIR'
 
@@ -90,7 +90,7 @@ export function resolveTrashLimit(config) {
   if (config === undefined || config === null) return DEFAULT_TRASH_LIMIT
   const field = TRASH_LIMIT_FIELD
   const reject = (value) => new TypeError(
-    `dsh-team-relay: config field "${field}" must be an integer >= ${TRASH_LIMIT_MINIMUM} `
+    `dsh-team: config field "${field}" must be an integer >= ${TRASH_LIMIT_MINIMUM} `
     + `(minimum ${TRASH_LIMIT_MINIMUM}); received ${value}`,
   )
   if (typeof config !== 'object') throw reject(describeValue(config))

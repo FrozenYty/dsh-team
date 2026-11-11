@@ -53,7 +53,7 @@ const call = (ctx, table, extra = {}) => ({
   table,
   leadSessionId: 'lead-1',
   leadAgent: lead,
-  dataDir: '/tmp/team-relay-test',
+  dataDir: '/tmp/dsh-team-test',
   hooks: hooks(),
   ...extra,
 })
@@ -382,7 +382,7 @@ test('the tombstone is written before the workspace-archive branch runs', async 
 })
 
 test('a retirement records archived only for the branch that ran, never beside a trash path', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'team-relay-retire-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-team-retire-'))
   const memberDir = join(root, 'sessions', 'artifact')
   await mkdir(memberDir, { recursive: true })
   await writeFile(join(memberDir, 'session.jsonl'), 'log')
@@ -408,7 +408,7 @@ test('a retirement records archived only for the branch that ran, never beside a
 test('a pending tombstone whose move never happened is reactivated, not refused', async () => {
   // The crash window the tombstone-first ordering creates: the tombstone is committed, the artifact
   // never reached the trash, and the process is gone. Its original path still holds the session.
-  const root = await mkdtemp(join(tmpdir(), 'team-relay-crash-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-team-crash-'))
   const original = join(root, 'sessions', 'artifact')
   await mkdir(original, { recursive: true })
   const planned = planMember({ leadSessionId: 'lead-1', members: [] }, 'reviewer', 'Check the diff')

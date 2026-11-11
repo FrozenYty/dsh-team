@@ -1,5 +1,5 @@
 /**
- * Team Relay — a team roster whose members can be retired, removed and replaced.
+ * dsh-team — a team roster whose members can be retired, removed and replaced.
  *
  * Host half. It owns the roster (`roster.js`), exposes it as Lead-scoped tools, compacts one member's
  * context in place, and applies two host-side effects on retirement (`host-hooks.js`): retired members
@@ -32,7 +32,7 @@
  * CONFIGURATION
  * The one tunable is the per-Lead session-trash cap, carried by the `trashLimit` field of this bundle's
  * patch row (`- id: team-roster`, `config: { trashLimit: <integer> }`). That row id is frozen at
- * `team-roster` while the package is `dsh-team-relay`: it is the override target a profile writes, so
+ * `team-roster` while the package is `dsh-team`: it is the override target a profile writes, so
  * renaming it would silently stop an existing profile's cap from matching (ADR 0014). `apply` resolves it
  * with `resolveTrashLimit` before it registers anything, so an out-of-range value fails the load instead
  * of the first retirement; an absent value takes the documented `DEFAULT_TRASH_LIMIT` (20), which is what
@@ -53,7 +53,7 @@ import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
 import { ASSIGNMENT_MAX, PHASE, findByTarget, openRosterStore, targetOf } from './roster.js'
 import { resolveDataDir, resolveTrashLimit } from './trash.js'
 
-export const name = 'team-roster'
+export const name = 'dsh-team'
 
 export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
 

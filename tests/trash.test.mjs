@@ -17,11 +17,11 @@ import {
   trashMemberSession,
 } from '../trash.js'
 
-const scratch = () => mkdtemp(join(tmpdir(), 'team-relay-test-'))
+const scratch = () => mkdtemp(join(tmpdir(), 'dsh-team-test-'))
 
 test('the data directory is overridable and defaults under the home directory', () => {
-  assert.equal(resolveDataDir({ DSH_TEAM_RELAY_DATA_DIR: '/tmp/custom' }, '/home/x'), '/tmp/custom')
-  assert.equal(resolveDataDir({ DSH_TEAM_RELAY_DATA_DIR: '   ' }, '/home/x'), join('/home/x', '.dsh', 'team-roster'))
+  assert.equal(resolveDataDir({ DSH_TEAM_DATA_DIR: '/tmp/custom' }, '/home/x'), '/tmp/custom')
+  assert.equal(resolveDataDir({ DSH_TEAM_DATA_DIR: '   ' }, '/home/x'), join('/home/x', '.dsh', 'team-roster'))
 })
 
 test('the pre-rename data-directory variable still points at the same directory', () => {
@@ -29,7 +29,7 @@ test('the pre-rename data-directory variable still points at the same directory'
   // keeps finding the trash it already has.
   assert.equal(resolveDataDir({ DSH_TEAM_ROSTER_DATA_DIR: '/tmp/legacy' }, '/home/x'), '/tmp/legacy')
   assert.equal(
-    resolveDataDir({ DSH_TEAM_RELAY_DATA_DIR: '/tmp/new', DSH_TEAM_ROSTER_DATA_DIR: '/tmp/legacy' }, '/home/x'),
+    resolveDataDir({ DSH_TEAM_DATA_DIR: '/tmp/new', DSH_TEAM_ROSTER_DATA_DIR: '/tmp/legacy' }, '/home/x'),
     '/tmp/new',
     'the current variable wins when both are set',
   )

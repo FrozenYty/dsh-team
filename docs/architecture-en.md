@@ -10,7 +10,7 @@ The decisions behind the design live in `docs/adr/`; this file describes the res
 A DeepSeek Harness **profile bundle**. Installing it does two things:
 
 1. selects a shipped plugin row that the profile leaves disabled (`compaction-basic`);
-2. inserts one Host plugin of our own (`dsh-team-relay`).
+2. inserts one Host plugin of our own (`dsh-team`).
 
 There is no build step and no runtime dependency: the installed Harness resolves the shipped row from
 its own installation, and our entry imports nothing (ADR 0002). The bundle is Host-only: it has no
@@ -43,7 +43,7 @@ A short map, not a changelog: each release below names what it added and the sec
 - **v0.9** — ephemeral members: a member can be marked one-shot at spawn, and a lazy sweep in the roster
   operations the model calls anyway retires it once it has run and stopped (§4.3.1, ADR 0013).
 - **v0.10** — the rename: the package, the patch row's `name` and the display title became
-  `dsh-team-relay` / *Team relay*, while the storage domain, the patch row id and the trash directory kept
+  `dsh-team` / *Team*, while the storage domain, the patch row id and the trash directory kept
   their pre-rename names (§1, ADR 0014).
 
 ### 2.1 Compaction is enabled

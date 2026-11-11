@@ -1,14 +1,14 @@
-# dsh-team-relay
+# dsh-team
 
 [English](README.md)
 
 一个 DeepSeek Harness 的 profile bundle，给智能体团队补上官方花名册缺少的生命周期：Lead 可以退役成员、从可恢复的会话回收站恢复成员，也可以用一位带着交接书启动的继任者替换成员。花名册归本插件所有，没有浏览器半区。
 
-[github.com/FrozenYty/dsh-team-relay](https://github.com/FrozenYty/dsh-team-relay)
+[github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
 
 ## 插件是什么
 
-一个 Host 插件加一条 bundle 补丁：补丁插入 `dsh-team-relay`，并启用官方默认关闭的 `compaction-basic` 行；插件不导入任何 Harness 包、不写会话事件，状态存放在以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。名称在 v0.10.0 改过；存储域、补丁行 id 与回收站目录刻意没有跟着改（ADR 0014）。
+一个 Host 插件加一条 bundle 补丁：补丁插入 `dsh-team`，并启用官方默认关闭的 `compaction-basic` 行；插件不导入任何 Harness 包、不写会话事件，状态存放在以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。名称在 v0.10.0 改过；存储域、补丁行 id 与回收站目录刻意没有跟着改（ADR 0014）。
 
 ## 状态
 
@@ -102,7 +102,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 
 ## 配置
 
-插件的数据目录是 `~/.dsh/team-roster`，可用 `DSH_TEAM_RELAY_DATA_DIR` 覆盖（改名前的 `DSH_TEAM_ROSTER_DATA_DIR` 仍然可用，ADR 0014）；其 `trash/` 存退役会话，花名册本身则放在 `storageDomain` 域里（ADR 0003）。
+插件的数据目录是 `~/.dsh/team-roster`，可用 `DSH_TEAM_DATA_DIR` 覆盖（改名前的 `DSH_TEAM_ROSTER_DATA_DIR` 仍然可用，ADR 0014）；其 `trash/` 存退役会话，花名册本身则放在 `storageDomain` 域里（ADR 0003）。
 
 每个 Lead 的回收站最多保留 **20** 份退役会话。这个上限是 bundle 补丁行上的 `trashLimit` 字段，所以改它是改 profile 自己的 `cordis.patch.yml`，按 id 匹配：
 
@@ -112,11 +112,11 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
     trashLimit: 7
 ```
 
-这个 `id` 冻结为 `team-roster`，而包名是 `dsh-team-relay`：profile 正是按它定位这一行，改名会让覆盖静默失配（ADR 0014）。
+这个 `id` 冻结为 `team-roster`，而包名是 `dsh-team`：profile 正是按它定位这一行，改名会让覆盖静默失配（ADR 0014）。
 
-该字段必须是不小于 1 的整数；`0`、负数、小数、数字字符串、`NaN` 以及显式写的 `null` 都会被拒绝，而不是被截断取整，拒绝发生在加载时、任何工具注册之前。报错原文是 `dsh-team-relay: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`。成功移入产物的那次退役按解析出的生效上限执行；省略该字段就保持默认值 20。
+该字段必须是不小于 1 的整数；`0`、负数、小数、数字字符串、`NaN` 以及显式写的 `null` 都会被拒绝，而不是被截断取整，拒绝发生在加载时、任何工具注册之前。报错原文是 `dsh-team: config field "trashLimit" must be an integer >= 1 (minimum 1); received 0`。成功移入产物的那次退役按解析出的生效上限执行；省略该字段就保持默认值 20。
 
-入口仍然不声明 `Config` **schema**，所以提供方把 `include:dsh-team-relay` 报为 `absent`：这是 schema 投影层面的说法，不代表不可配置——字段在 `apply` 里被校验。只有原生 Schemastery schema 才会被投影，而零导入的 bundle（ADR 0002）无法导入它（ADR 0012）。
+入口仍然不声明 `Config` **schema**，所以提供方把 `include:dsh-team` 报为 `absent`：这是 schema 投影层面的说法，不代表不可配置——字段在 `apply` 里被校验。只有原生 Schemastery schema 才会被投影，而零导入的 bundle（ADR 0002）无法导入它（ADR 0012）。
 
 ## 只面向模型
 

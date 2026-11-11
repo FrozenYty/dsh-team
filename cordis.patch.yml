@@ -1,4 +1,4 @@
-# dsh-team-relay bundle patch.
+# dsh-team bundle patch.
 #
 # 1. Enable the shipped compaction backend. The row is present in the composed profile but inactive, so
 #    nothing condenses: an agent grows unchecked toward the window. A shipped package, so this bundle
@@ -15,11 +15,11 @@
 #    `- id: team-roster` + `config: { trashLimit: <integer> }` to change the per-Lead session-trash cap
 #    (ADR 0012). An out-of-range value is refused when the profile loads. Renaming the id would silently
 #    stop every existing profile's override from matching, so the cap would revert to the default with no
-#    error; the package was renamed to `dsh-team-relay` and the id deliberately stayed (ADR 0014).
+#    error; the package was renamed to `dsh-team` and the id deliberately stayed (ADR 0014).
 - id: compaction-basic
   disabled: false
 
 - insert:
     - id: team-roster
-      name: 'dsh-team-relay'
+      name: 'dsh-team'
       config: {}
