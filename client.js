@@ -494,7 +494,8 @@ window.__ModuleLoader__.load({
 
       const body = status === 'loading' && open === undefined && index === undefined
         ? h('p', { className: 'tr-empty' }, t('loading'))
-        : target === undefined || (known.length === 0 && open?.exists !== true)
+        : target === undefined || (known.length === 0 && currentSessionId === undefined)
+          // No current-session signal and no roster anywhere: nothing per-session to name yet.
           ? h('p', { className: 'tr-empty' }, t('emptyProfile'))
           : open === undefined
             ? h('p', { className: 'tr-empty' }, t('loading'))
