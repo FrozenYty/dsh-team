@@ -156,7 +156,12 @@ for (const document of documents) {
   const text = read(document)
   if (text === undefined) continue
   for (const line of text.split(/\r?\n/)) {
-    if (/[A-Za-z]:[\\/]/.test(line)) fail(`${document}: carries an absolute machine path: ${line.trim()}`)
+    // A drive-letter path, not a URL scheme: the character before `X:` must not be a word
+    // character, so `https://host` and `file:///` do not trip the check while `C:\dir` and
+    // `(D:/dir)` do.
+    if (/(?<![\w/])[A-Za-z]:[\\/]/.test(line)) {
+      fail(`${document}: carries an absolute machine path: ${line.trim()}`)
+    }
   }
 }
 
