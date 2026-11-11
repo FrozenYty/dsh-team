@@ -222,3 +222,11 @@
 - **A discrepancy in the change brief, stated rather than patched over.** The brief named an ADR 0007
   and two panel-store modules (`panel-store.js`, `client.panel-store.js`) that do not exist in this
   repository at `dc385bd`. There is nothing to supersede or delete beyond 0005 and 0006; ADR 0008 says so.
+- **Three tools were dead on arrival, and the unit tests could not see it.** `retire_member`,
+  `restore_member` and `stop_member` declared `execute(args)` while their bodies read `exec.agent`, so each
+  threw `exec is not defined` the first time a model called it. Found by calling `retire_member` live on an
+  adopted subagent; `list_members` worked, which is why the gap was not obvious. The cause is the shape of
+  the earlier refactor: extracting the operation bodies into `actions.js` gave the tests a layer to call
+  directly, so the tool wrappers stopped being covered even as coverage numbers rose. Fixed all three, and
+  `scripts/check.mjs` now fails any `execute(` signature that does not declare `exec` — verified by
+  breaking a signature on purpose (exit 1, named the offending `(args)`) and restoring it (exit 0).
