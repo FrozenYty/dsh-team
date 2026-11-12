@@ -10,16 +10,18 @@
  * the switch, and can keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
- * `restore_member`, `compact_member`, `handoff_template`. The operation bodies live in `actions.js`;
- * this file keeps argument validation, the Lead-only authority check, and the tool result schemas, and
- * nothing else. The plugin has no browser half: it is entirely model-facing (ADR 0008).
+ * `restore_member`, `compact_member`, `handoff_template`, `task_board`. The operation bodies live in
+ * `actions.js`; this file keeps argument validation, the Lead-only authority check, and the tool result
+ * schemas, and nothing else. The plugin has no browser half: it is entirely model-facing (ADR 0008).
  *
  * `spawn_member` with `replace` is the whole replacement: it starts the successor from a short handoff
  * brief composed from the assignment recorded on the predecessor's record, then retires the
- * predecessor in the same call (ADR 0009). The work itself stays on the shipped team task board, which
- * this plugin does not own; the brief points the successor at it. A Lead that replaces members
+ * predecessor in the same call (ADR 0009). The work itself is a task on this Lead's own board
+ * (`task_board`, ADR 0017): the retirement half re-addresses the predecessor's open tasks to the
+ * successor in the same write, and the brief names them by id and title. A Lead that replaces members
  * repeatedly can fix the brief's shape once with `handoff_template` (ADR 0015); the built-in shape is
- * what a Lead that never stores one gets.
+ * what a Lead that never stores one gets. The shipped team tool row stays enabled until P2-07: retiring
+ * it is a separate change that needs this board to exist first.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -51,12 +53,14 @@ import {
   restoreMember,
   spawnMember,
   stopMember,
+  taskBoard,
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
 import {
   ASSIGNMENT_MAX,
   HANDOFF_TEMPLATE_MAX,
   PHASE,
+  TASK_TITLE_MAX,
   findByTarget,
   openRosterStore,
   targetOf,
@@ -210,6 +214,75 @@ const MEMBER_ROW = {
   },
 }
 
+/**
+ * One task on this Lead's board, as every `task_board` action that returns a row reports it.
+ *
+ * `problem` is present only on a stored task whose content no longer passes the read rules — a title over
+ * the cap, or one that is not a non-empty string. The row is still served, because the storage facility
+ * validates every record when the domain opens and a content rule enforced there would hide every roster
+ * (ADR 0017).
+ */
+const TASK_ROW = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'title', 'status'],
+  properties: {
+    id: { type: 'string' },
+    title: { type: 'string' },
+    status: { type: 'string', enum: ['open', 'done'] },
+    // The member target that owns this task. Moving a task's owner is how a handover is represented, and
+    // the field is absent when nobody owns the task.
+    owner: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+    problem: { type: 'string' },
+  },
+}
+
+/**
+ * Every shape this one tool answers with.
+ *
+ * The tool carries five actions, and the host validates a result against this object, so the schema is
+ * the union of the answers rather than a branch per action (the subset has no `oneOf` on an object root
+ * here, and a per-action schema is not expressible in a single tool definition). `additionalProperties:
+ * false` still holds, so an action cannot quietly start returning a field this object does not name —
+ * which is the fault this shape exists to catch.
+ */
+const TASK_BOARD_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['action'],
+  properties: {
+    action: { type: 'string', enum: ['list', 'create', 'update', 'release', 'delete'] },
+    // The board, on `list`: every task with its id, title, status, owner and timestamps.
+    tasks: { type: 'array', items: TASK_ROW },
+    // How many tasks are open after the call.
+    open: { type: 'integer' },
+    // How many of those open tasks nobody owns, and which — reported by `list` so orphaned work is
+    // visible without a retirement result to read (P2-09, ADR 0017).
+    unowned: { type: 'integer' },
+    unowned_tasks: { type: 'array', items: { type: 'string' } },
+    // The task after a write: present on create and update, and on release. Absent on list and delete.
+    task: TASK_ROW,
+    // False when the same status and owner were already recorded, so a repeat write is visible as one.
+    changed: { type: 'boolean' },
+    // Present only on delete: the id that was removed.
+    deleted: { type: 'string' },
+    message: { type: 'string' },
+  },
+}
+
+const TASK_LIST_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['tasks', 'open'],
+  properties: {
+    tasks: { type: 'array', items: TASK_ROW },
+    open: { type: 'integer' },
+    message: { type: 'string' },
+  },
+}
+
 const MEMBER_LIST_VALUE = {
   type: 'object',
   additionalProperties: false,
@@ -218,6 +291,10 @@ const MEMBER_LIST_VALUE = {
     members: { type: 'array', items: MEMBER_ROW },
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
+    // On a result whose sweep retired a member that owned open work: how many tasks lost their owner, and
+    // which (P2-09, ADR 0017). Both absent when nothing was swept or the swept members owned nothing.
+    unowned: { type: 'integer' },
+    unowned_tasks: { type: 'array', items: { type: 'string' } },
   },
 }
 
@@ -236,6 +313,13 @@ const RETIRE_VALUE = {
     pruned: { type: 'integer' },
     // Present when another generation of the stale target's name is live now; names that holder.
     current_holder: CURRENT_HOLDER,
+    // What the retirement did to the member's open tasks: `transferred` to the successor a replacement
+    // named, or `unowned` when no successor took them. Both absent when the member owned no open task, so
+    // a retirement on an empty board is the result it always was (P2-09, ADR 0017).
+    transferred: { type: 'integer' },
+    transferred_tasks: { type: 'array', items: { type: 'string' } },
+    unowned: { type: 'integer' },
+    unowned_tasks: { type: 'array', items: { type: 'string' } },
     // `already-retired` on the state matrix's no-op row; absent on the retirements that happened.
     reason: { type: 'string' },
     message: { type: 'string' },
@@ -275,6 +359,10 @@ const RESTORE_VALUE = {
     path: { type: 'string' },
     // Present on a refusal when another generation of the stale target's name is live now.
     current_holder: CURRENT_HOLDER,
+    // The open tasks nobody had taken over when this member retired or returned, and their ids. A
+    // restore changes no owner, so this is what it reports instead of guessing (P2-09, ADR 0017).
+    unowned: { type: 'integer' },
+    unowned_tasks: { type: 'array', items: { type: 'string' } },
     message: { type: 'string' },
   },
 }
@@ -731,6 +819,75 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         }
         const table = await store
         return await handoffTemplate({ table, leadSessionId: leadSessionIdOf(caller), template: args.template })
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'task_board',
+      description: 'This Lead\'s own work board: the tasks a replacement hands over. A task belongs to one Lead, lives on that Lead\'s roster record, and has an id, a title, a status (open or done) and an optional member owner. `create` adds one; `list` reads the whole board; `update` sets status and/or owner; `release` clears the owner; `delete` removes the row. The board is what makes a handover hand over work rather than a description of it: spawn_member with replace moves every open task of the predecessor to the successor and the successor\'s brief names them by id and title, while retire_member without a successor leaves them unowned and reports their ids. A `done` task never moves. There are deliberately no priorities, dependencies, comments, sub-tasks or due dates: this is a handover channel, not a project tracker.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['action'],
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'create', 'update', 'release', 'delete'],
+            description: 'What to do: list reads the board, create adds a task, update changes a task\'s status or owner, release clears its owner, delete removes it.',
+          },
+          title: {
+            type: 'string',
+            description: `create only: the task title, 1-${TASK_TITLE_MAX} characters. Refused past the cap, never truncated.`,
+          },
+          owner: {
+            type: 'string',
+            description: 'create or update: a member target from list_members, such as reviewer-g2. It is the work\'s owner, and ownership is exactly what a handover moves. create refuses an id no member holds; update accepts null to leave the task unowned.',
+          },
+          task_id: {
+            type: 'string',
+            description: 'update, release and delete: the id of the task, as a list row reported it.',
+          },
+          status: {
+            type: 'string',
+            enum: ['open', 'done'],
+            description: 'update only: open is work still owed and therefore still inherited; done is finished work, which no handover moves.',
+          },
+        },
+      },
+      output: { schema: TASK_BOARD_VALUE },
+      async execute(args, exec) {
+        const caller = callingAgent(exec.agent, 'task_board')
+        requireLead(ctx, caller, 'task_board')
+        if (typeof args.action !== 'string' || args.action.length === 0) {
+          throw new Error('task_board: action must be a non-empty string')
+        }
+        const actions = ['list', 'create', 'update', 'release', 'delete']
+        if (!actions.includes(args.action)) {
+          throw new Error(`task_board: action must be one of ${actions.join(', ')}`)
+        }
+        const needsId = ['update', 'release', 'delete'].includes(args.action)
+        if (needsId && (typeof args.task_id !== 'string' || args.task_id.length === 0)) {
+          throw new Error(`task_board: ${args.action} requires task_id`)
+        }
+        if (args.action === 'create' && (typeof args.title !== 'string' || args.title.trim().length === 0)) {
+          throw new Error('task_board: create requires a non-empty title')
+        }
+        if (args.owner !== undefined && args.owner !== null && typeof args.owner !== 'string') {
+          throw new Error('task_board: owner must be a member target or null')
+        }
+        if (args.status !== undefined && !['open', 'done'].includes(args.status)) {
+          throw new Error('task_board: status must be "open" or "done"')
+        }
+        const table = await store
+        return await taskBoard({
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          action: args.action,
+          task_id: args.task_id,
+          title: args.title,
+          owner: args.owner,
+          status: args.status,
+        })
       },
     })))
   } catch (error) {
