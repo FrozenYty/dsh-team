@@ -369,3 +369,26 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   the declared schemas; removing the forwarding makes the main test fail (verified before and after). The
   route on a real child's own `request/header` is the owner's install check.
 
+- [x] **P4-12** A host hook installs when the service it wraps exists, and the plugin reports whether it did (v0.24.0).
+  Done when a profile that publishes `sessionController` after this plugin activates still gets the
+  projection filter, the shipped `list_agents` read drops a retired member, a hook that can never install is
+  reported `absent` in `list_members` while every tool keeps working, a reload does not wrap twice, dispose
+  restores every wrapped method, and a failed tombstone read is reported instead of serving every row.
+  Delivered (ADR 0025): the three host effects are each gated with `ctx.inject([service], callback)` — the
+  Cordis dependency mechanism, not a polling loop — so the projection filter waits for `sessionController`
+  and the shipped roster read plus the slot credit wait for `agentTeams`; the callback's disposer unwinds
+  the patch with this plugin's own fiber, and each installer keeps its reload mark, so a second load reuses
+  the installed wrapper. `host-hooks.js` gains `createRetiredCache` (one tombstone set, with the last good
+  set kept and the failure reported on a read that throws) and `installRosterFilter`, which replaces
+  `agentTeams.listMembers` synchronously — the shipped `list_agents` tool maps the returned array without
+  awaiting it — and drops only the retired ids, keeping `lead` and every live row. `list_members` answers
+  `host_hooks` (`panel_filter`, `roster_filter`, `slot_credit` as `installed`/`absent`, `stripped_ids`,
+  `tombstone_read_failed`, and a `message` naming the absent hook and its service), declared in that tool's
+  output schema. `retire_member` also states on the model-facing surface that a member is a division of
+  labour rather than a task, so a finished piece of work is not a reason to retire anyone and a judgement
+  call asks the person first. `tests/hook-install.test.mjs` drives a fake of the Cordis gate and covers the
+  deferred install, the never-appearing service, the reload, the dispose and both invalidations;
+  `tests/host-hooks.test.mjs` pins the 37-row/5-tombstone strip, the 36-entry catalog frame and the failed
+  read. Removing the deferred install makes the main test fail (verified before and after, with the test
+  file's SHA-256 unchanged). The live install is the owner's install check.
+

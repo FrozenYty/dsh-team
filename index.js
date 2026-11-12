@@ -83,7 +83,7 @@ import {
   WAIT_TIMEOUT_MAX,
   waitMembers,
 } from './actions.js'
-import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
+import { createRetiredCache, installProjectionFilter, installRosterFilter, installSlotCredit } from './host-hooks.js'
 import { DEFINITION_REFUSAL_REASONS } from './definitions.js'
 import {
   ASSIGNMENT_MAX,
@@ -101,6 +101,9 @@ import { resolveDataDir, resolveTrashLimit } from './trash.js'
 export const name = 'dsh-team'
 
 export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
+
+/** The stand-in for a hook that is not installed: calls the same shape, does nothing. */
+const NOOP = () => {}
 
 /** Build a registry-ready definition from canonical JSON Schemas. */
 function defineTool(options) {
@@ -521,12 +524,41 @@ const TASK_LIST_VALUE = {
   },
 }
 
+/**
+ * What the host hooks did, reported by `list_members`.
+ *
+ * A hook that never installs is a silent no-op, and that is what hid a release: the shipped panel kept
+ * a retired row, `list_agents` kept it too, and the model could see only an empty panel with no reason
+ * given. The block names each hook as `installed` or `absent`, and, while any of them is stripping,
+ * counts the tombstoned ids it is removing and says whether the last tombstone read failed (ADR 0025).
+ */
+const HOST_HOOKS_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['panel_filter', 'roster_filter', 'slot_credit'],
+  properties: {
+    // The host session-list filter: the shipped team panel and the subagent picker.
+    panel_filter: { type: 'string', enum: ['installed', 'absent'] },
+    // The shipped roster read: the `list_agents` tool.
+    roster_filter: { type: 'string', enum: ['installed', 'absent'] },
+    // The shipped member budget credit.
+    slot_credit: { type: 'string', enum: ['installed', 'absent'] },
+    // How many tombstoned child ids those filters are removing right now; only while one is installed.
+    stripped_ids: { type: 'integer' },
+    // True when the last tombstone read failed and the last good set is being used; only while installed.
+    tombstone_read_failed: { type: 'boolean' },
+    // Present when a hook is absent or a read failed: which one, and what it means for the two lists.
+    message: { type: 'string' },
+  },
+}
+
 const MEMBER_LIST_VALUE = {
   type: 'object',
   additionalProperties: false,
-  required: ['members'],
+  required: ['members', 'host_hooks'],
   properties: {
     members: { type: 'array', items: MEMBER_ROW },
+    host_hooks: HOST_HOOKS_VALUE,
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
     // On a result whose sweep retired a member that owned open work: how many tasks lost their owner, and
@@ -942,7 +974,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, ephemeral: true on a one-shot member that will retire itself, live state and, while resident, context pressure. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first retires every ephemeral member whose turn has ended — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, ephemeral: true on a one-shot member that will retire itself, live state and, while resident, context pressure. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first retires every ephemeral member whose turn has ended — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -953,7 +985,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         const caller = callingAgent(exec.agent, 'list_members')
         requireLead(ctx, caller, 'list_members')
         const table = await store
-        return await listMembers({
+        const listed = await listMembers({
           ctx,
           table,
           leadSessionId: leadSessionIdOf(caller),
@@ -962,6 +994,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           hooks,
           trashLimit,
         })
+        return { ...listed, host_hooks: await hooks.report() }
       },
     })))
 
@@ -1000,7 +1033,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
+      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A member is a division of labour, not a task: retirement answers "this role is not needed any more", never "this piece of work is finished" — a member that completed one piece of work may be needed again next round, and an idle member between rounds is not a candidate. When that is a judgement call rather than a decision already made, ask the person before retiring. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1302,14 +1335,23 @@ export function apply(ctx, config) {
   const log = (line) => {
     if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(line)
   }
-  const readRetired = async () => {
-    const table = await store
+  // The one tombstone set every host hook strips, and the one read they share. A retired member without a
+  // child id cannot match any row, so it is not in the set — which also keeps `stripped_ids` honest.
+  const retiredChildIds = (table) => {
     const ids = new Set()
     for (const [, roster] of table.entries()) {
-      for (const member of roster.members) if (member.phase === PHASE.retired) ids.add(member.childId)
+      for (const member of roster.members) {
+        if (member.phase !== PHASE.retired) continue
+        if (typeof member.childId === 'string' && member.childId.length > 0) ids.add(member.childId)
+      }
     }
     return ids
   }
+  const readRetired = async () => retiredChildIds(await store)
+  // The shipped roster read is synchronous — its caller maps the array directly — so it reads the same
+  // set straight from the in-memory table. A live read cannot be stale, which is why it is one of the
+  // three hooks that needs no invalidation. `undefined` means the table is not resolved yet.
+  const readRetiredNow = () => (rosterTable === undefined ? undefined : retiredChildIds(rosterTable))
   const readRetiredByTeam = async () => {
     const table = await store
     const byTeam = new Map()
@@ -1323,14 +1365,69 @@ export function apply(ctx, config) {
   // `ctx.subagents`. The same exit that hides a retired id adds this Lead's live members, in the shape
   // the wire schema requires (ADR 0023).
   const readLive = (leadSessionId) => rosterTable === undefined ? [] : livePanelMembers(readRoster(rosterTable, leadSessionId))
-  const filter = installProjectionFilter(ctx, { readRetired, readLive, log })
-  const slots = installSlotCredit(ctx, { readRetiredByTeam, log })
-  if (slots.installed) void slots.refresh()
-  const hooks = { filter, slots }
-  ctx.effect(() => () => {
-    filter.dispose()
-    slots.dispose()
-  }, 'team-roster.hostHooks()')
+  const retired = createRetiredCache({ readRetired, log })
+
+  // A hook must not be lost to load order: the row can activate before `sessionController` exists, and a
+  // skip at that moment used to be permanent and silent. `ctx.inject` is Cordis's own dependency gate —
+  // the callback runs when the named service is published, is unloaded and re-run when that service is
+  // replaced, and its disposer unwinds the patch with this plugin's own fiber. No polling, no listener,
+  // no retry loop of ours (ADR 0025).
+  const hooks = {
+    filter: { installed: false, invalidate: NOOP, dispose: NOOP },
+    roster: { installed: false, dispose: NOOP },
+    slots: { installed: false, refresh: async () => 0, dispose: NOOP },
+  }
+  /** What every installed hook is doing, for the `list_members` answer. */
+  const hostHooksReport = async () => {
+    const value = {
+      panel_filter: hooks.filter.installed ? 'installed' : 'absent',
+      roster_filter: hooks.roster.installed ? 'installed' : 'absent',
+      slot_credit: hooks.slots.installed ? 'installed' : 'absent',
+    }
+    const notes = []
+    if (hooks.filter.installed || hooks.roster.installed) {
+      const reading = await retired.report()
+      value.stripped_ids = reading.ids
+      value.tombstone_read_failed = reading.failed
+      if (reading.failed) {
+        notes.push(`the tombstone read failed, so every installed filter keeps the last set it read (${reading.ids} ids) and a retired member may still be listed`)
+      }
+    }
+    if (!hooks.filter.installed) {
+      notes.push('the panel filter is absent: the host published no sessionController, so the shipped team panel keeps a retired row and never gains a member this plugin owns')
+    }
+    if (!hooks.roster.installed) {
+      notes.push('the shipped roster read is absent: the host published no agentTeams.listMembers, so the shipped list_agents tool keeps a retired member')
+    }
+    if (!hooks.slots.installed) {
+      notes.push('the slot credit is absent: the host published no agentTeams.roster, so a retirement does not free a shipped member slot')
+    }
+    if (notes.length > 0) value.message = `${notes.join('; ')}. This plugin's own tools are unaffected.`
+    return value
+  }
+  hooks.report = hostHooksReport
+
+  ctx.inject(['sessionController'], () => {
+    const filter = installProjectionFilter(ctx, { cache: retired, readLive, log })
+    hooks.filter = filter
+    return () => {
+      filter.dispose()
+      hooks.filter = { installed: false, invalidate: NOOP, dispose: NOOP }
+    }
+  })
+  ctx.inject(['agentTeams'], () => {
+    const roster = installRosterFilter(ctx, { readRetiredNow })
+    const slots = installSlotCredit(ctx, { readRetiredByTeam, log })
+    hooks.roster = roster
+    hooks.slots = slots
+    if (slots.installed) void slots.refresh()
+    return () => {
+      roster.dispose()
+      slots.dispose()
+      hooks.roster = { installed: false, dispose: NOOP }
+      hooks.slots = { installed: false, refresh: async () => 0, dispose: NOOP }
+    }
+  })
 
   const maybeInstall = (agent) => {
     if (installed.has(agent)) return

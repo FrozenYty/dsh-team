@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { installProjectionFilter, installSlotCredit, mergeLiveMembers, stripRetiredMembers } from '../host-hooks.js'
+import { createRetiredCache, installProjectionFilter, installRosterFilter, installSlotCredit, mergeLiveMembers, stripRetiredMembers } from '../host-hooks.js'
 import { livePanelMembers } from '../index.js'
 
 const payload = () => ({
@@ -275,4 +275,99 @@ test('a nested spawn keeps the outer Lead credit after the inner one finishes', 
 test('slot credit is skipped when the roster shape is absent', () => {
   const installed = installSlotCredit({ get: () => ({ roster: {} }) }, { readRetiredByTeam: async () => new Map() })
   assert.equal(installed.installed, false)
+})
+
+// The shapes the owner reported from a live profile: the member panel counted 37 rows and the top
+// subagent picker 36 entries, with retired members mixed in. Five tombstones are the population these
+// tests carry; the exact count in a profile comes from its own roster store.
+const many = (count, prefix, role = 'teammate') => Array.from({ length: count }, (_, index) => ({
+  id: `${prefix}-${index}`,
+  name: `${prefix}-${index}`,
+  role,
+  phase: 'active',
+}))
+
+test('a 37-row panel loses exactly the five tombstoned rows, keeping the lead and every live member', () => {
+  const lead = { id: 'lead-1', name: 'lead', role: 'lead', phase: 'active' }
+  const live = many(31, 'live')
+  const gone = many(5, 'gone')
+  const members = [lead, ...live, ...gone]
+  assert.equal(members.length, 37)
+
+  const value = { values: { agentTeam: { members, tasks: [] } } }
+  stripRetiredMembers(value, new Set(gone.map((row) => row.id)))
+
+  const kept = value.values.agentTeam.members
+  assert.equal(kept.length, 32)
+  assert.deepEqual(kept.map((row) => row.id), [lead, ...live].map((row) => row.id))
+  assert.equal(kept[0], lead, 'the Session that is not a member tombstone is never stripped')
+  for (const row of live) assert.ok(kept.includes(row), `${row.id} stays`)
+})
+
+test('a 36-entry catalog frame loses the same five tombstones and nothing else', () => {
+  const live = many(30, 'live')
+  const gone = many(5, 'gone')
+  const lead = { id: 'lead-1', name: 'lead', role: 'lead', phase: 'active' }
+  const frame = { key: 'subagentCatalog', value: [lead, ...live, ...gone] }
+  assert.equal(frame.value.length, 36)
+
+  stripRetiredMembers(frame, new Set(gone.map((row) => row.id)))
+
+  assert.equal(frame.value.length, 31)
+  assert.equal(frame.value[0].id, 'lead-1')
+  assert.ok(frame.value.every((row) => !row.id.startsWith('gone-')))
+})
+
+test('a failed tombstone read is reported and keeps the last good set in force', async () => {
+  const liked = { sessions: [{ id: 'lead-1', subagentCatalog: [{ id: 'gone' }, { id: 'keep' }] }] }
+  const service = { list: async () => liked }
+  let fail = false
+  const logged = []
+  const cache = createRetiredCache({
+    readRetired: async () => {
+      if (fail) throw new Error('storage domain unavailable')
+      return new Set(['gone'])
+    },
+    log: (line) => logged.push(line),
+    ttlMs: 0,
+  })
+  const installed = installProjectionFilter({ get: () => service }, { cache })
+  assert.equal(installed.installed, true)
+
+  await service.list()
+  assert.equal((await cache.report()).ids, 1)
+  assert.equal((await cache.report()).failed, false)
+
+  // The read fails. The retired member must not come back — the last set stays in force — and the
+  // failure is visible in the report instead of being absorbed by an empty set.
+  fail = true
+  cache.invalidate()
+  const after = await service.list()
+  assert.deepEqual(after.sessions[0].subagentCatalog.map((entry) => entry.id), ['keep'])
+  assert.deepEqual(await cache.report(), { ids: 1, failed: true })
+  assert.ok(logged.some((line) => /could not read tombstones/.test(line)))
+
+  // A later successful read clears the flag, so a transient failure does not linger in the report.
+  fail = false
+  cache.invalidate()
+  await service.list()
+  assert.deepEqual(await cache.report(), { ids: 1, failed: false })
+  // Two reads failed while `fail` was true: the frame read and the forced report read. The recovery
+  // adds no line.
+  assert.equal(logged.length, 2)
+})
+
+test('invalidate forces the next read, which is what a retirement relies on', async () => {
+  let reads = 0
+  const cache = createRetiredCache({
+    readRetired: async () => { reads += 1; return new Set(['gone']) },
+    ttlMs: 60_000,
+  })
+  await cache.ids()
+  assert.equal(reads, 1)
+  await cache.ids()
+  assert.equal(reads, 1, 'inside the window the cached set is used')
+  cache.invalidate()
+  await cache.ids()
+  assert.equal(reads, 2, 'invalidate makes the next frame re-read')
 })

@@ -77,7 +77,21 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
     storageDomain: { open: async () => ({ table: () => table, close: async () => {} }) },
-    get: (name) => (name === 'workingDirectory' && cwd !== undefined ? { ensure: async () => cwd } : undefined),
+    get: (name) => {
+      if (name === 'workingDirectory' && cwd !== undefined) return { ensure: async () => cwd }
+      // The service the plugin already declares as a hard dependency. `sessionController` is
+      // deliberately absent: it is the one a Web profile publishes later, which is the load-order
+      // defect this harness now lets the tests model (ADR 0025).
+      if (name === 'agentTeams') return { tryMembership, listMembers }
+      return undefined
+    },
+    // Cordis's dependency gate: a service present when the plugin loads runs the callback at once, and
+    // one that never appears leaves it pending, which is what `host_hooks` reports as absent. Cordis
+    // activates the real fiber a microtask later; nothing here observes that difference.
+    inject: (names, callback) => {
+      if (names.every((name) => ctx.get(name) !== undefined)) callback()
+      return { then: () => {} }
+    },
     on: () => () => {},
     effect: (install) => {
       const dispose = install()
@@ -110,7 +124,16 @@ test('a Lead whose Team projection cannot be read still receives and can call th
   assert.deepEqual([...childTools.keys()], ['list_my_tasks'], 'a member with a parent Session gets the member read')
 
   const listed = await tools.get('list_members').execute({}, { agent: lead })
-  assert.deepEqual(listed, { members: [] })
+  assert.deepEqual(listed.members, [])
+  // The host-hook report is part of the answer now, and this harness models the load-order defect: no
+  // `sessionController`, so the panel filter is absent and says why (ADR 0025).
+  assert.equal(listed.host_hooks.panel_filter, 'absent')
+  assert.equal(listed.host_hooks.roster_filter, 'installed')
+  assert.equal(listed.host_hooks.slot_credit, 'absent')
+  assert.equal(listed.host_hooks.stripped_ids, 0)
+  assert.equal(listed.host_hooks.tombstone_read_failed, false)
+  assert.match(listed.host_hooks.message, /sessionController/)
+  assert.match(listed.host_hooks.message, /agentTeams\.roster/)
 })
 
 test('a readable membership that says teammate still wins over the root fallback', async () => {

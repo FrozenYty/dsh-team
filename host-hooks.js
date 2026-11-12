@@ -2,7 +2,7 @@
  * Host-side effects that make a retired member actually disappear, make the members this plugin owns
  * appear in the shipped team panel, and keep the shipped roster's member budget usable after retirement.
  *
- * Three mechanisms, all implemented here with a disposer so plugin unload restores the host exactly:
+ * Four mechanisms, all implemented here with a disposer so plugin unload restores the host exactly:
  *
  *   1. **Projection filter, strip** — the host's `sessionController` serves `/api/session/list` and the
  *      `control`/`follow` streams, which carry `subagentCatalog` and `agentTeam.members`. Retired ids are
@@ -11,19 +11,58 @@
  *   2. **Projection filter, merge** — the built-in team panel renders `agentTeam` from the shipped fold,
  *      which never heard of a member started through `ctx.subagents`. The same exit appends this Lead's
  *      live members to the outgoing value, in the four fields the wire schema requires (ADR 0023).
- *   3. **Slot credit** — the shipped legacy roster counts `members.length` against a single
+ *   3. **Shipped roster read** — the shipped `list_agents` tool answers from
+ *      `agentTeams.listMembers(caller)`, which folds the append-only Team journal and therefore keeps a
+ *      retired member forever. That method is patched to drop the same retired ids (ADR 0025).
+ *   4. **Slot credit** — the shipped legacy roster counts `members.length` against a single
  *      `maxMembers`. While a spawn runs, the effective limit is raised by the number of retired members
  *      of *that* Lead, so one retirement buys back one slot without editing the append-only log.
  *
- * Both projection halves only rewrite the copy a client is about to receive; the Session log is never
- * written. Everything is capability-probed and silently skipped when the host shape is absent: a Harness
- * upgrade must degrade the feature, never break the plugin.
+ * The projection halves only rewrite the copy a client is about to receive; the shipped roster read only
+ * drops rows from the array it was about to return; the Session log is never written. Everything is
+ * capability-probed and skipped when the host shape is absent: a Harness upgrade must degrade the
+ * feature, never break the plugin. A tombstone read that fails is not silent either: the last good set
+ * stays in force and the failure is reported through `list_members` (ADR 0025).
  */
 
 /** Marks the wrapped service so a reload cannot wrap it twice. */
 const FILTER_MARK = Symbol.for('dsh.team-roster.projection-filter')
+/** Marks the patched shipped roster read, so a reload cannot wrap it twice. */
+const ROSTER_READ_MARK = Symbol.for('dsh.team-roster.roster-read')
 /** Marks the patched roster, and holds its refresh function for reloads. */
 const SLOT_MARK = Symbol.for('dsh.team-roster.slot-credit')
+
+/**
+ * The one tombstone set every host hook reads, with the one invalidation a retirement or a restore
+ * performs.
+ *
+ * A read that throws is the failure nobody could see before: the hooks used to answer with an empty set,
+ * so both shipped lists came back full and nothing said so. The last good set stays in force instead,
+ * and `report()` says the read failed and how many ids are still being stripped (ADR 0025).
+ * @param {{readRetired: () => Promise<Set<string>>, log?: (line: string) => void, ttlMs?: number}} options
+ * @returns {{ids: () => Promise<Set<string>>, invalidate: () => void, report: () => Promise<{ids: number, failed: boolean}>}}
+ */
+export function createRetiredCache({ readRetired, log = () => {}, ttlMs = 2000 }) {
+  const cache = { at: 0, ids: new Set(), failed: false }
+  const load = async () => {
+    try {
+      const ids = await readRetired()
+      cache.ids = ids instanceof Set ? ids : new Set()
+      cache.failed = false
+    } catch (error) {
+      cache.failed = true
+      log(`team-roster: could not read tombstones, the last set stays in force (${cache.ids.size} ids) (${error instanceof Error ? error.message : String(error)})`)
+    }
+    cache.at = Date.now()
+    return cache.ids
+  }
+  return {
+    ids: async () => (Date.now() - cache.at < ttlMs ? cache.ids : await load()),
+    invalidate: () => { cache.at = 0 },
+    // Forces one read, so the number a caller sees is the number the hooks are using now.
+    report: async () => ({ ids: (await load()).size, failed: cache.failed }),
+  }
+}
 
 /** Session-list methods that return one value. */
 const UNARY_METHODS = ['list', 'projections']
@@ -162,11 +201,12 @@ const NOOP = () => {}
  * Wrap the host session-list exits so retired members are never sent to a client, and the members this
  * plugin owns are.
  * @param {object} ctx - host plugin context.
- * @param {{readRetired: () => Promise<Set<string>>, readLive?: (leadSessionId: string) => Array<{id: string, name: string}>, log?: (line: string) => void, ttlMs?: number}} options
+ * @param {{cache?: object, readRetired?: () => Promise<Set<string>>, readLive?: (leadSessionId: string) => Array<{id: string, name: string}>, log?: (line: string) => void, ttlMs?: number}} options
+ *   `cache` is the shared tombstone set when the caller has one; `readRetired` builds one otherwise.
  * @returns {{installed: boolean, dispose: () => void, invalidate: () => void}}
  */
 export function installProjectionFilter(ctx, options) {
-  const { readRetired, readLive = () => [], log = () => {}, ttlMs = 2000 } = options
+  const { readRetired, readLive = () => [], log = () => {}, ttlMs = 2000, cache = createRetiredCache({ readRetired, log, ttlMs }) } = options
   const service = typeof ctx.get === 'function' ? ctx.get('sessionController') : undefined
   if (service === undefined || service === null) {
     return { installed: false, dispose: NOOP, invalidate: NOOP }
@@ -176,20 +216,8 @@ export function installProjectionFilter(ctx, options) {
     return { installed: true, dispose: NOOP, invalidate: service[FILTER_MARK].invalidate }
   }
 
-  const cache = { at: 0, ids: new Set() }
-  const invalidate = () => { cache.at = 0 }
-  const retiredIds = async () => {
-    if (Date.now() - cache.at < ttlMs) return cache.ids
-    try {
-      cache.at = Date.now()
-      cache.ids = await readRetired()
-    } catch (error) {
-      log(`team-roster: could not read tombstones, serving unfiltered projections (${error instanceof Error ? error.message : String(error)})`)
-      cache.at = Date.now()
-      cache.ids = new Set()
-    }
-    return cache.ids
-  }
+  const invalidate = cache.invalidate
+  const retiredIds = cache.ids
   const strip = async (value, leadSessionId) => {
     const ids = await retiredIds()
     const stripped = ids.size === 0 ? value : stripRetiredMembers(value, ids)
@@ -223,6 +251,57 @@ export function installProjectionFilter(ctx, options) {
     dispose() {
       for (const restore of restores.reverse()) restore()
       delete service[FILTER_MARK]
+    },
+  }
+}
+
+/**
+ * Drop this plugin's retired ids from the shipped roster read the `list_agents` tool answers from.
+ *
+ * The shipped tool calls `agentTeams.listMembers(callingAgent(exec.agent, "list_agents"))` and maps the
+ * returned array directly (`@deepseek-ai/dsh-experimental-tool-agent-team/lib/index.js:321-327`), and
+ * `agentTeams.listMembers` is the append-only Team journal's own view (`dsh-experimental-agent-team`
+ * `lib/index.js:1496`, `lib/types/roster.js:103-134`), so a retired member stays in that list forever.
+ * The method is patched to return the same `TeamMemberView[]` minus those ids; `lead` has its own
+ * Session id, which is never a tombstone, so it always stays.
+ *
+ * The wrapper is deliberately **synchronous**: the shipped caller maps the result without awaiting it,
+ * and an async wrapper would turn the array into a promise and break that `.map`. It therefore reads the
+ * tombstone set synchronously, through `readRetiredNow`, from the in-memory roster table — the same set
+ * the projection filter strips, with no cache to go stale, which is why a retirement needs no
+ * invalidation here. `undefined` means the roster table is not resolved yet, and the rows are returned
+ * unfiltered rather than guessed at.
+ * @param {object} ctx - host plugin context.
+ * @param {{readRetiredNow?: () => Set<string>|undefined}} options
+ * @returns {{installed: boolean, dispose: () => void}}
+ */
+export function installRosterFilter(ctx, options = {}) {
+  const { readRetiredNow = () => undefined } = options
+  const service = typeof ctx.get === 'function' ? ctx.get('agentTeams') : undefined
+  if (service === undefined || service === null || typeof service.listMembers !== 'function') {
+    return { installed: false, dispose: NOOP }
+  }
+  if (service[ROSTER_READ_MARK] !== undefined) {
+    return { installed: true, dispose: NOOP }
+  }
+
+  const original = service.listMembers
+  service.listMembers = function teamRosterFilteredList(...args) {
+    const rows = original.apply(this, args)
+    if (!Array.isArray(rows)) return rows
+    const retired = readRetiredNow()
+    if (!(retired instanceof Set) || retired.size === 0) return rows
+    return rows.filter((row) => row === null
+      || typeof row !== 'object'
+      || typeof row.id !== 'string'
+      || !retired.has(row.id))
+  }
+  service[ROSTER_READ_MARK] = {}
+  return {
+    installed: true,
+    dispose() {
+      service.listMembers = original
+      delete service[ROSTER_READ_MARK]
     },
   }
 }
