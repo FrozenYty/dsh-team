@@ -1924,3 +1924,36 @@
   are unchanged facts, restated — this release moves them, it does not re-measure them.
 - **Version.** `0.25.4`: the README is the first thing a stranger reads, and its install path moved from
   the eighteenth screen to the second; `0.25.3` belongs to the split this one builds on.
+
+## 2026-11-13 — the live sweep and the consent gate, accepted on the running profile
+
+- **What this entry is, and why it exists.** The owner ran the acceptance for the one-shot sweep and the
+  consent gate on 2026-11-13 against `v0.25.0` / `v0.25.1`, and the values below are his to attest. It is
+  recorded here because the claim had no source in this file: the `v0.9.0` entry says the bundle was not
+  installed and lists the two-member sweep as the pending check, and every entry since then listed "a live
+  sweep and consent refusal" as the owner's install check. The claim was true; nothing had written it down.
+  That `v0.9.0` wording stays exactly as it stands — this file is append-only, and what it says was true
+  when it was said.
+- **The sweep, from a spawn.** `spawn_member` with `ephemeral: true` returned `swept: 1` with
+  `swept_targets: ["oneshot-acceptance"]`. The stored record for that target then read `phase: "retired"`,
+  `retiredAt`, `retireReason: "one-shot member: it ran and stopped and owned no open task"` and
+  `trashState: "done"`, and the child's session directory had **moved** into
+  `~/.dsh/team-roster/trash/<lead>/` — the original path no longer existed, so this is a move and not a
+  copy.
+- **A read sweeps too.** `list_members` returned `swept: 1` with `swept_targets: ["read-sweep-probe"]`, and
+  that row was already `phase: "retired"` in the same payload.
+- **The board veto, both halves.** A spawn returned `blocked: 1` with
+  `blocking_tasks: ["6ec387f9-cd26-42a9-8733-2a461725dfbd"]`, `blocking_note` naming the one clearing call,
+  and **no** `swept` field at all. After that row was closed, the next spawn returned `swept: 2` with
+  `swept_targets: ["oneshot-veto", "veto-trigger"]`.
+- **The consent gate, both halves.** A standing member retired in bare words, with no confirmation,
+  answered `retired: false` with `reason: "needs-confirmation"` — and **nothing moved**: the record was
+  still `active` and no trash entry existed. The retry, carrying the person's sentence verbatim, answered
+  `retired: true` and echoed that sentence back into the result.
+- **A fact about the surface that this run corrected.** A refusal emits `owns_tasks` and `assignment` only
+  when the member actually carries them; omitting them is deliberate, because an empty array would read as
+  "checked, and found none". The brief that commissioned the verification demanded they always appear — the
+  code was right and the brief was wrong.
+- **What it does not change.** No code: this is an acceptance run against `v0.25.0` / `v0.25.1`, both
+  already released. It is the evidence behind the README's status list, and its date is what the README now
+  cites instead of describing the run itself.

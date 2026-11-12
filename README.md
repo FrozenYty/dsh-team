@@ -16,11 +16,10 @@ the roster and has no browser half.
 - Current version: v0.25.4.
 - **Exercised in a real profile**: retirement, restore, message, stop, a replacement whose successor
   finished the predecessor's work, the trash cap and its refusal at load, the handoff template, spawn
-  options and the forwarded route, the task board and its transfer, and the three host hooks. The
-  one-shot sweep is the one entry here whose run is recorded in this file rather than in `PROGRESS.md`:
-  two members finished, the next `list_members` answered `swept: 2` with both targets, and both rows came
-  back `retired`. `PROGRESS.md` keeps one entry per release, and each entry records what that release
-  proved live.
+  options and the forwarded route, the task board and its transfer, the three host hooks, and the one-shot
+  sweep with the consent gate — accepted on 2026-11-13, with the results recorded field by field in
+  `PROGRESS.md`'s entry of that date. `PROGRESS.md` keeps one entry per release, and each entry records
+  what that release proved live.
 - **Unit-tested only, never exercised in a profile**: the write-time caps, a retirement during an
   in-flight spawn, overlapping roster writes, the route fallbacks, the definition and team-file layers,
   the member-scope read, and the lifetime sweep and consent gate. `tests/` is the list of what exists.
