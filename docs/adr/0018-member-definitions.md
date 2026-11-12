@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-11-12
 - **Supersedes:** —
+- **Point 4 adjusted by [0019](0019-definition-precedence-on-replace.md)** — on a `replace` the
+  assignment recorded on the predecessor outranks the file's, and the result reports which source won.
+  The rest of this ADR stands: the path, the frontmatter subset and its refusals, the caps, the typed
+  refusal and the one-parameter surface.
 
 ## Context
 

@@ -358,6 +358,22 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.equal(refused.reason, 'definition-not-found')
   assert.equal(defined.table.get('lead-1').members.length, 1, 'a refusal reserves no member')
 
+  // A replacement from a definition: the assignment it answers with is the predecessor's recorded one,
+  // and the field that says where it came from is inside the declared schema (v0.17.0, ADR 0019).
+  await writeFile(
+    join(cwd, 'team', 'auditor.md'),
+    '---\nname: auditor\nlabel: Audit the release\nassignment: Keep the audit log green\n---\nAudit.\n',
+  )
+  await spawnDefined.execute(
+    { name: 'auditor', label: 'Audit the release', prompt: 'Start.', assignment: 'Recheck the curve.' },
+    { agent: defined.lead },
+  )
+  const replacedFromFile = await spawnDefined.execute({ replace: 'auditor', definition: 'auditor' }, { agent: defined.lead })
+  assertMatchesSchema(replacedFromFile, spawnDefined.output.schema, 'spawn_member')
+  assert.equal(replacedFromFile.target, 'auditor-g2')
+  assert.equal(replacedFromFile.assignment, 'Recheck the curve.')
+  assert.equal(replacedFromFile.definition.assignment, 'predecessor')
+
   // A profile without the service: the working-directory refusal is the other branch of the same answer.
   const unserviceable = harness()
   const noService = await unserviceable.tools.get('spawn_member')

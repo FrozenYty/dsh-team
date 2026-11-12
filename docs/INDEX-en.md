@@ -43,7 +43,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the handoff brief a stored template, and why is it one tool? | `docs/adr/0015-handoff-template.md` | English |
 | How does a member start with its own cwd, model or preset, and where does a stale name point now? | `docs/adr/0016-spawn-capabilities.md` | English |
 | Why does the plugin own the work board, and what moves when a member is replaced? | `docs/adr/0017-own-task-board.md` | English |
-| Why is a member a file on disk, and which frontmatter subset is accepted? | `docs/adr/0018-member-definitions.md` | English |
+| Why is a member a file on disk, and which frontmatter subset is accepted? | `docs/adr/0018-member-definitions.md` — point 4 adjusted by 0019 | English |
+| Which assignment does a successor get, and what does a definition mean on a replace? | `docs/adr/0019-definition-precedence-on-replace.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
@@ -71,6 +72,7 @@ Harness disagree, the repository is wrong.
 | a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |
 | the transfer rule — what happens to a member's open tasks on replace, retire or restore | the transfer matrix in `docs/architecture-en.md` §4.3.2, `actions.js`, `README.md` + `README-zh.md`, ADR 0017 |
 | the member-definition format, the accepted frontmatter subset or the `team/` path | `definitions.js`, `docs/architecture-en.md` §4.6, `README.md` + `README-zh.md`, ADR 0018 |
+| which source wins for a definition field on a replace, or what a file's `ephemeral` means for a successor | the definition matrix in `docs/architecture-en.md` §4.3.3, `actions.js`, `index.js`, ADR 0019 |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
 | a document added, renamed or removed | this file and `INDEX-zh.md` |

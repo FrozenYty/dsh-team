@@ -412,6 +412,10 @@ What the cells depend on:
 - **Two tools in one model turn.** Every task mutation is one atomic `update` on the roster table, like
   every member mutation (§4.2), so a `task_board` call and a replacement in the same turn see each other's
   write instead of overwriting it.
+- **A definition-spawned successor is swept like any other one-shot member.** A `replace` whose definition
+  carries `ephemeral: true` starts a successor that retires itself once its turn ends, so the work this
+  matrix just moved to it loses its owner at the next sweep, and the `unowned`/`unowned_tasks` that sweep
+  reports are the same rows it was given here (§4.3.3).
 
 #### 4.3.1 Ephemeral members (P4-01)
 
@@ -461,6 +465,56 @@ What the four events do to an ephemeral member in each phase:
 | `active` | the normal retirement protocol | delivered, and the flag is cleared: it is no longer one-shot | the normal replacement handoff | retires it only when it is not resident; a running member is never swept |
 | `retired` | no-op, `reason: 'already-retired'` | refusal `retired` | the normal replacement, briefed from the tombstone | no-op |
 | `failed` | accepted; there is usually nothing to drain | refusal `failed` | the normal replacement | no-op — it never ran, and the record stays visible |
+
+#### 4.3.3 A definition across spawn, replace and message (v0.17.0)
+
+A definition is read at one moment — the spawn that names it — and every field it carries then lives on a
+record, on a live child, or nowhere. `name`, `label` and `prompt` follow the precedence rule in §4.6; the
+table below is every other accepted field, because each of them can surprise whoever wrote the file and
+did not read the call. One cell per field, and each cell answers the same three questions: what the file
+contributes at that event, what the call may override, and what the effect is. The events are the three
+§4.3 already names: `spawn` (no `replace`), `replace`, and `message` (`message_member`).
+
+**`message_member` never reads the file.** A message acts on a member that already started, so a
+definition contributes nothing there: the two fields a message can still reach are the assignment it
+records and the one-shot flag it clears, and no other field of the file is consulted again until a later
+`spawn_member` reads it for another member.
+
+| Field | `spawn` (no replace) | `replace` | `message` |
+|---|---|---|---|
+| `assignment` | file: supplies the durable assignment; call: an explicit `assignment` on the call overrides it; effect: the record carries it and `list_members` reports it. | file: supplies it **only when the predecessor recorded none**; call: an explicit assignment on the call wins over both, and the predecessor's recorded assignment wins over the file's; effect: the successor is briefed with the work rather than the role's standing sentence, and the result names the winner in `definition.assignment` (`call`, `predecessor` or `file`). | file: read for nothing; call: `message_member.assignment` replaces the recorded assignment once the message is accepted; effect: this member's next successor is briefed with the new text. |
+| `ephemeral` | file: marks the member one-shot; call: `ephemeral: false` overrides it; effect: a lazy sweep retires it once it has run and stopped (§4.3.1). | file: **applies to the successor** — the file describes the role, and a replace starts that role; call: `ephemeral: false` or `ephemeral: true` overrides it; effect: a one-shot successor retires itself at the end of its turn, and the work it just inherited — including the tasks this same call handed over — becomes unowned and is reported through `unowned`/`unowned_tasks` (ADR 0017). | file: contributes nothing; call: any accepted message **clears** the flag; effect: the member is no longer one-shot and a later sweep leaves it alone. |
+| `cwd` | file: supplies the working directory; call: `spawn_options.cwd` overrides it; effect: the child starts there, exactly as written. | file: supplies it; call: `spawn_options.cwd` overrides it; the predecessor's own `cwd` is **not** inherited, because the record does not store it; effect: the successor starts where the file or the call says, which may differ from where the predecessor ran. | file: contributes nothing; effect: fixed for this member's life — a different directory needs a new spawn or replacement. |
+| `provider` | file: supplies it; call: `spawn_options.agent_options.provider` overrides it; effect: the member's model requests are routed there. | same as `spawn`, and the predecessor's route is not inherited — it is not on the record. | contributes nothing; fixed for this member's life. |
+| `model` | file: supplies it; call: `spawn_options.agent_options.model` overrides it; effect: a chosen model is never silent, because `started_with` echoes what was forwarded. | same as `spawn`; the predecessor's model is not inherited. | contributes nothing; fixed for this member's life. |
+| `reasoning_effort` | file: supplies it; call: `spawn_options.agent_options.reasoning_effort` overrides it; effect: an omitted effort after a provider or model change lets the new route resolve its own default. | same as `spawn`. | contributes nothing; fixed for this member's life. |
+| `max_tokens` | file: supplies it, refused unless it is a positive integer; call: `spawn_options.agent_options.max_tokens` overrides it; effect: bounds the member's output tokens. | same as `spawn`. | contributes nothing; fixed for this member's life. |
+| `agent_preset` | file: supplies it; call: `spawn_options.agent_preset` overrides it; effect: it selects the member's preset, persona and tool set, and an id the profile does not declare is a typed refusal. | same as `spawn`. | contributes nothing; fixed for this member's life. |
+
+What the table depends on:
+
+- **Continuity is what a replacement is for, and one field of a file could break it.** The `assignment`
+  rule is the point of v0.17.0: before it, a file that carried an `assignment` briefed every successor
+  with the role's standing sentence instead of what the predecessor was doing, which defeats ADR 0009 and
+  the plugin's claim that the work survives the person. The call is the Lead's explicit statement and
+  still wins; the file is the fallback for a predecessor that recorded nothing. This adjusts point 4 of
+  ADR 0018, which stated the merge for a fresh spawn and did not yet name the predecessor as a source
+  (ADR 0019).
+- **`ephemeral` is the file speaking about the role, and its consequence is stated rather than hidden.** A
+  replaced member that self-retires at the end of its turn is exactly the surprise this matrix exists to
+  prevent: the tasks a replacement just moved to it lose their owner when the next `list_members` or
+  `spawn_member` sweeps it, and the sweep's result names them (§4.3.1, ADR 0017). A Lead that wants the
+  successor to keep the work messages it once — which clears the flag — or passes `ephemeral: false` on
+  the replace call. Ignoring the file's `ephemeral` on a replace was the alternative, and it was rejected:
+  the definition *is* the role, and a role that is one-shot does not stop being one-shot when its first
+  holder is replaced (ADR 0019).
+- **The predecessor's `cwd` and model route are not inherited, and cannot be.** They are start options,
+  not record fields: `started_with` is a receipt on a tool result, not durable state (§4.2), so a
+  successor takes the file's or the call's values and nothing else. A Lead that wants the successor in the
+  predecessor's directory passes it.
+- **The transfer matrix (§4.3.2) is unchanged by any of this.** A replacement still moves the
+  predecessor's open tasks in the same call, whatever the file says; the `ephemeral` row above only
+  decides who loses them next.
 
 ### 4.4 Retire and replace
 
@@ -648,13 +702,17 @@ accepted set. There is no YAML library, because the bundle imports nothing outsi
 this repository's parser is the specification, and what it does not implement is refused rather than
 misread.
 
-**Precedence: the call wins, and the result says so.** Every field passed to `spawn_member` overrides the
-definition's, per field and including inside `agent_options`; the answer's `definition` object names the
-file, the fields taken from it (`from_file`) and the ones the call replaced (`overridden`). `prompt` is the
-one exception: the body is the member's standing prompt and the call's `prompt` is the task, so the call's
-text is appended after the body and `definition.prompt` reports `file` or `file+call`. Nothing from the file
-is dropped silently, because a model that believes it overrode a definition and did not is exactly the
-failure this report exists to prevent.
+**Precedence: the call wins, the record outranks the file on a replace, and the result says so.** Every
+field passed to `spawn_member` overrides the definition's, per field and including inside
+`agent_options`; the answer's `definition` object names the file, the fields taken from it (`from_file`)
+and the ones the call replaced (`overridden`). `prompt` is one exception: the body is the member's
+standing prompt and the call's `prompt` is the task, so the call's text is appended after the body and
+`definition.prompt` reports `file` or `file+call`. The other is `assignment`, which has a third source:
+on a `replace` the assignment recorded on the predecessor outranks the file's standing sentence, because
+a successor inherits the work and not the role (ADR 0009, ADR 0019), and `definition.assignment` reports
+which of `call`, `predecessor` or `file` supplied it — the file applies only when the predecessor
+recorded none. Nothing from the file is dropped silently, because a model that believes it overrode a
+definition and did not is exactly the failure this report exists to prevent.
 
 **One bad file never hides the others.** A scan collects what it can read and reports what it could not:
 `definition.problems` on a successful spawn, `problems` on a refusal, each row `{path, line?, problem}`. A

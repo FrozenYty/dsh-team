@@ -32,8 +32,10 @@
  * A member's *definition* can live on disk instead of in the call: `spawn_member.definition` reads the
  * flat-frontmatter markdown files under `team/` in the Lead's working directory, and every field the
  * call also passes wins over the file's, which the result reports field by field (`definitions.js`,
- * ADR 0018). The plugin reads those files and never writes one — version control and an editor are the
- * better tool — and the roster stays runtime state.
+ * ADR 0018). One field has a third source: on a `replace` the predecessor's recorded assignment
+ * outranks the file's, so a successor is briefed with the work rather than the role's standing sentence
+ * (ADR 0009, ADR 0019). The plugin reads those files and never writes one — version control and an
+ * editor are the better tool — and the roster stays runtime state.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -223,6 +225,11 @@ const DEFINITION_REPORT = {
     // 'file' when the member starts on the definition's body alone, 'file+call' when this call's prompt
     // was appended to it. The body is never replaced, so there is no third value.
     prompt: { type: 'string', enum: ['file', 'file+call'] },
+    // Which assignment the member starts with, and where it came from: the call's, the predecessor's
+    // recorded one on a replace, or the file's standing sentence. Present only when one applies, so a
+    // spawn that resolves no assignment has no winner to name. This is the field that makes the
+    // replacement rule visible instead of an inference (ADR 0019).
+    assignment: { type: 'string', enum: ['call', 'predecessor', 'file'] },
     from_file: { type: 'array', items: { type: 'string' } },
     overridden: { type: 'array', items: { type: 'string' } },
     // Present only when the same scan refused another file: a broken definition beside a usable one.
@@ -655,7 +662,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           assignment: {
             type: 'string',
             maxLength: ASSIGNMENT_MAX,
-            description: `Optional, 1-${ASSIGNMENT_MAX} characters: what this member is responsible for, stated durably. A successor is briefed with it when this member is replaced, and message_member replaces it later.`,
+            description: `Optional, 1-${ASSIGNMENT_MAX} characters: what this member is responsible for, stated durably. A successor is briefed with it when this member is replaced, and message_member replaces it later. Passing it with replace overrides both the predecessor's recorded assignment and any definition's.`,
           },
           replace: {
             type: 'string',
@@ -667,7 +674,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           },
           definition: {
             type: 'string',
-            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under team/ in your working directory, with a flat frontmatter block declaring name and label and optionally assignment, ephemeral, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Write and version them with your own file tools. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
+            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under team/ in your working directory, with a flat frontmatter block declaring name and label and optionally assignment, ephemeral, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Write and version them with your own file tools. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. One field has a third source: on a replace, the assignment recorded on the member being replaced outranks the file\'s, because a successor inherits the work and not the role\'s standing sentence; the file\'s assignment applies only when the predecessor recorded none, and definition.assignment in the result says which won (call, predecessor or file). A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
           },
           spawn_options: {
             type: 'object',

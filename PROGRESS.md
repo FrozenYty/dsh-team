@@ -1079,3 +1079,57 @@
 - **Adjacent correction.** `docs/architecture-en.md`'s release map skipped v0.15.0 — the entry was
   missing, not wrong — so the v0.15 bullet was added beside the new v0.16 one in both languages.
 - **Version.** `0.16.0`: a new published module and a new parameter on the spawn surface are not a patch.
+
+## 2026-11-12 — a definition no longer outranks the record on a replace (v0.17.0)
+
+- **The defect was real, and it was two correct decisions never joined.** `spawnMember` merged a
+  definition into the call's fields, wrote the merged `assignment` back over the model's argument, and
+  then let `planMember` inherit `recorded ?? predecessor?.assignment` — where `recorded` was by now the
+  *file's* sentence. So `spawn_member { definition, replace }` started every successor from the file's
+  standing assignment instead of what the predecessor was doing. ADR 0009 point 4 says a successor
+  inherits the recorded assignment, and the plugin's claim is that only the person changes, not the work:
+  a definition file silently defeated both. The fix was found by reading the code, and the test written
+  before it reproduced the defect as `actual 'Keep the parser green'` against `expected 'Finish the parser
+  unit tests.'`.
+- **The rule on a replace is call → predecessor record → file.** An explicit `assignment` on the call
+  wins; otherwise the predecessor's recorded assignment wins; the file's applies only when there is nothing
+  to inherit. A fresh spawn is unchanged: the call wins and the file fills the rest. The merge now runs
+  after the predecessor is resolved, and only the *reading* of the definition stays before the sweep, so a
+  refused file still changes nothing. The result reports the winner in `definition.assignment`
+  (`call`/`predecessor`/`file`) — the way `definition.prompt` already reports its own source — inside the
+  existing `definition` report, so `spawn_member`'s two-branch result `oneOf` is unchanged in shape
+  (ADR 0019).
+- **The rest of the matrix is written, one cell per field, in both languages.** `docs/architecture-en.md`
+  §4.3.3 and its Chinese pair decide `assignment`, `ephemeral`, `cwd`, `provider`, `model`,
+  `reasoning_effort`, `max_tokens` and `agent_preset` across `spawn`, `replace` and `message`: what the
+  file contributes, what the call overrides, and the effect. Two facts the matrix forced into words: the
+  predecessor's `cwd` and model route are *not* inherited, because start options are not record fields;
+  and `message_member` never reads the file at all.
+- **`ephemeral` applies on a replace, and the matrix states the cost.** The file describes the role, so a
+  replaced one-shot role is still one-shot: the successor retires itself at the end of its turn, and the
+  open tasks the replacement just handed it become unowned, reported by the sweep in
+  `unowned`/`unowned_tasks` (ADR 0017). Ignoring the file's `ephemeral` on a replace was rejected in
+  ADR 0019: special-casing one field on one event makes the file mean different things depending on how a
+  member started. The escape hatch is one explicit field (`ephemeral: false`) or one message, which clears
+  the flag.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits clean; `node scripts/check.mjs` passes after the last edit; `node --test
+  --test-isolation=none tests/*.test.mjs` is 153 tests, 153 passing — the 146 that existed plus 7 in
+  `tests/definitions.test.mjs`, with `tests/entry.test.mjs` extended and no existing test edited. The main
+  test was proved able to fail: the precedence branch in `actions.js` was reverted (the file's branch moved
+  ahead of the record's), the named test failed with `actual 'Keep the parser green'` against
+  `expected 'Finish the parser unit tests.'` at `tests/definitions.test.mjs:423`, the branch was restored,
+  and the test then passed. `tests/definitions.test.mjs` hashed
+  `5FD4A6EB3833ABB8DC68B1B10A0F1DE7ECCFDDA0926EB92D6C41D64E70EA255B` before and after that proof, and
+  `actions.js` returned to `0E523BC99B7FC08F1A502A1074C0BC0D8289E52755D39CBFACCBC9EAE8F5986A`, so the
+  proof edited the operation, not the test. Bilingual parity was measured before and after rather than
+  assumed: the architecture pair went from 6 `##` headings and 287 distinct backtick identifiers against
+  284, with 9 English-only and 6 Chinese-only spans, to 6 and 297 against 294 with the same 9 and 6, so no
+  new set difference; the README pair, touched for the new rule, went from 18 headings and 170 identifiers
+  per side with identical sets to 18 and 176 per side, still identical; the index pair from 5/37 identical
+  to 5/39 identical.
+- **What stays unverified.** No install and no `plugin_manager` call was made, so the one thing only a live
+  profile can show is unproven: that a real `spawn_member { definition, replace }` call composes this merge
+  against the installed Harness. The suite runs the real parser and filesystem against a
+  `workingDirectory` fake; the service and the start are the owner's install check.
+- **Version.** `0.17.0`: which assignment a successor receives is behaviour, not a comment.

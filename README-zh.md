@@ -86,7 +86,7 @@ You review changes. Report only findings that change behaviour, with the file an
 
 两条 `---` 之间是扁平 frontmatter，其下的 markdown 正文就是成员的提示词。`name` 与 `label` 必填，其余可接受字段都是 `spawn_member` 本来就有的：`assignment`、`ephemeral`、`cwd`、`provider`、`model`、`reasoning_effort`、`max_tokens` 与 `agent_preset`。这份清单就是全部子集——嵌套值、锚点、块标量、列表、重复键或未知字段，都会连文件名与行号一起被拒绝，而不是被猜测；带引号的值只去掉引号，不解释任何转义。
 
-**调用侧优先，且返回结果会说明这一点。** 传给 `spawn_member` 的每个字段都会覆盖文件里的同名项，返回结果中的 `definition` 对象会给出文件名、来自文件的部分（`from_file`）以及被你覆盖的部分（`overridden`）。唯一无法被调用覆盖的是 `prompt`：正文是成员的常驻提示词，调用里的 `prompt` 会追加在它之后，`definition.prompt` 会把这个事实报成 `file+call`。
+**调用侧优先，且返回结果会说明这一点。** 传给 `spawn_member` 的每个字段都会覆盖文件里的同名项，返回结果中的 `definition` 对象会给出文件名、来自文件的部分（`from_file`）以及被你覆盖的部分（`overridden`）。有两个字段的来源不是调用。`prompt` 是调用无法覆盖的那个：正文是成员的常驻提示词，调用里的 `prompt` 会追加在它之后，`definition.prompt` 会把这个事实报成 `file+call`。另一个是 `replace` 时的 `assignment`：前任记录在案的 assignment 压过文件里的，因为继任者继承的是工作而不是角色——文件里的只在「前任没有记录」时才生效——而 `definition.assignment` 会报出 `call`、`predecessor` 或 `file` 中哪一个胜出。文件里的 `cwd`、模型路由与 preset 确实会作用于继任者；前任的那几项不会被继承，因为它们是启动选项，不是记录字段（ADR 0019）。
 
 **一个坏文件不会藏起其他文件。** 格式错误的定义会在本来成功的 spawn 结果里，用 `definition.problems` 按路径与行号报出，合法的定义照常可用。同一个名字被两个文件声明时，两边都不可用——因为悄悄挑一个会让另一个文件的修改彻底不可见。上限是拒绝而不是截断：单文件 16 KiB，单次扫描 64 个文件——超过这个数量时整次扫描被拒绝，而不是只服务一个残缺的子集。路径同样绝不猜：profile 若没有挂载 `workingDirectory` 服务，就返回 `started: false` 与 `reason: "working-directory-unavailable"`，并且不预留任何成员。
 
@@ -117,6 +117,8 @@ You review changes. Report only findings that change behaviour, with the file an
 `spawn_member` 带 `ephemeral: true` 会把成员标记为一次性成员，`list_members` 会在该行报告 `ephemeral: true`；缺省为 `false`。插件收不到完成事件，所以负责退役这类成员的清扫只在 `list_members` 与 `spawn_member` 调用开始时运行，并且只退役它有确凿证据表明“跑过且已停下”的成员：从未启动过的不会被清扫，仍在运行的也不会。被清扫的成员走的是普通退役流程，因此墓碑仍然列出，名额也照常返还。触发清扫的那次调用会报告 `swept` 与 `swept_targets`，一个都没退役时不加任何字段。
 
 给一次性成员发消息会清除该标记：再次给它派活，就是声明它不再是一次性的；没有这条规则，清扫就可能吃掉刚刚送达的消息所要保留的工作。
+
+**定义可以让继任者变成一次性的。** 文件里的 `ephemeral: true` 在 `replace` 时同样生效，因为文件描述的是角色，而替换启动的就是这个角色。用之前要知道的后果是：继任者会在本轮结束时自行退役，而替换刚刚交给它的任务会变为无主——清扫会把它们报在 `unowned` 与 `unowned_tasks` 里。给继任者发一次消息即可清除该标记，或者在替换调用上传 `ephemeral: false`（ADR 0019）。
 
 ## 限制与刻意省略
 
