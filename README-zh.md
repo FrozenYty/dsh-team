@@ -2,7 +2,9 @@
 
 [English](README.md)
 
-一个 DeepSeek Harness 的 profile bundle，给智能体团队补上官方花名册缺少的生命周期：Lead 可以退役成员、从可恢复的会话回收站恢复成员，也可以用一位带着交接书启动的继任者替换成员。花名册归本插件所有，没有浏览器半区。
+> 换人不换活。
+
+一个 DeepSeek Harness 的 profile bundle，专补官方智能体花名册做不到的那件事：让成员离场。Lead 可以退役成员、从自己掌控的回收站把它恢复回来，也可以换成一位继任者——继任者接手 assignment、当时正在推进的工作，以及指向共享任务板的指针。花名册归本插件所有，没有浏览器半区。
 
 [github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
 
