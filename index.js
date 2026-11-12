@@ -160,6 +160,11 @@ const COMPACT_VALUE = {
  * annotations. A validation keyword here — `minimum` was the first one — is rejected while the plugin
  * loads, which does not fail this tool: it stops every tool in the plugin from registering. Keep the
  * range in the description instead; `scripts/check.mjs` rejects a keyword outside that subset.
+ *
+ * Two narrower rules, both verified against the installed validator rather than assumed: a node cannot
+ * declare `type` and `oneOf` together, and a result schema **may** be a root `oneOf` — the
+ * object-root requirement applies to subagent and workflow structured outputs, not to a tool result,
+ * which is why `spawn_member` ships one (`lib/types/json-schema.js:340-348`).
  */
 const AGENT_OPTIONS_SCHEMA = {
   type: 'object',
@@ -343,10 +348,11 @@ const TASK_ROW = {
  * Every shape this one tool answers with.
  *
  * The tool carries five actions, and the host validates a result against this object, so the schema is
- * the union of the answers rather than a branch per action (the subset has no `oneOf` on an object root
- * here, and a per-action schema is not expressible in a single tool definition). `additionalProperties:
- * false` still holds, so an action cannot quietly start returning a field this object does not name —
- * which is the fault this shape exists to catch.
+ * the union of the answers rather than a branch per action: the five actions differ in which fields are
+ * present, not in what a field means, so one object with the union of the fields says the same thing as
+ * five `oneOf` branches and is easier to keep honest. `additionalProperties: false` still holds, so an
+ * action cannot quietly start returning a field this object does not name — which is the fault this shape
+ * exists to catch.
  */
 const TASK_BOARD_VALUE = {
   type: 'object',
