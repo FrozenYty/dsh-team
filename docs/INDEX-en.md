@@ -26,6 +26,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | What is this, and how do I install it? | `README.md` | pair |
 | What is left to do, and what does done mean? | `PLAN.md` | English |
 | What changed recently, and why? | `PROGRESS.md` | English |
+| What did each release contain, at release level? | `CHANGELOG.md` | English |
 | How do agents and the roster fit together? | `docs/architecture-en.md` | pair |
 | Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
 | Why does the bundle entry import nothing? | `docs/adr/0002-zero-import-bundle-entry.md` | English |

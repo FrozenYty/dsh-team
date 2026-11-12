@@ -25,6 +25,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 这是什么，怎么装？ | `README.md` | 双语 |
 | 还剩什么没做，“完成”指什么？ | `PLAN.md` | 英文 |
 | 最近改了什么，为什么？ | `PROGRESS.md` | 英文 |
+| 每个版本发布了什么？ | `CHANGELOG.md` | 英文 |
 | 智能体与花名册怎么配合？ | `docs/architecture-zh.md` | 双语 |
 | 为什么花名册要自建而不是扩展官方？ | `docs/adr/0001-own-roster-on-subagents.md` | 英文 |
 | 为什么 bundle 入口不导入任何东西？ | `docs/adr/0002-zero-import-bundle-entry.md` | 英文 |
