@@ -14,13 +14,13 @@
 
 ## 状态
 
-- 当前版本：v0.22.0。
+- 当前版本：v0.25.0。
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`（那是当时的行为，也是 v0.22.0 改掉的那一条：现在这种 spawn 会报出 `started_with.route_source`）；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
 - **本版要回答的成本边界，是在运行中的 profile 上实测出来的。** 切到中转之后，清点 60 份会话日志发现 18 份仍停在 `deepseek-official/deepseek-flash`——其中好几份是活团队的成员，而当时活着的 Lead 会话都在中转上——因为成员的路由在启动时就写进了自己的会话头，没有任何东西会给它改路由。v0.22.0 在 spawn 时转发 Lead 当前的路由、把它记在成员记录上，并标出路由已不再是 Lead 当前路由的成员。真机那一半——启动出的子代理**自己** `request/header` 上的路由——仍是所有者安装后的验证项（ADR 0024）。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
 - **一次真机运行发现了本版要补的缺口。** 一位继任者枚举自己的工具，发现没有任何花名册工具（它们全都是 Lead 专属的），于是直接读取 `~/.dsh/storages/team_roster.json` 来找它继承的任务正文。v0.20.0 在成员作用域注册了一件只读工具 `list_my_tasks`，并修正了 `{task_board}` 指针——原先它指向官方任务板，还让成员去问 Lead。在真实成员里调用一次，仍是所有者安装后的验证项（ADR 0022）。
-- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；路由解析不出来时 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝；团队文件层（v0.19.0）——三来源优先级、写入拒绝、占位符退路与保留文件名；成员作用域（v0.20.0）——owner 过滤、空答案、非成员拒绝、注册到成员 Agent 上，以及一次真实回答的 schema 一致性；以及路由层（v0.22.0）——转发、调用方选项优先、两条兜底路径、`reasoning_effort` 从不额外添加，以及陈旧路由标记的设置、清除与“绝不猜测”。由定义真正启动一个成员、真机读取一次团队文件、由真实成员调用一次 `list_my_tasks`，以及真实子代理自己 `request/header` 上的路由，是所有者安装后的验证项（ADR 0018、ADR 0021、ADR 0022、ADR 0024）。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；路由解析不出来时 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝；团队文件层（v0.19.0）——三来源优先级、写入拒绝、占位符退路与保留文件名；成员作用域（v0.20.0）——owner 过滤、空答案、非成员拒绝、注册到成员 Agent 上，以及一次真实回答的 schema 一致性；以及路由层（v0.22.0）——转发、调用方选项优先、两条兜底路径、`reasoning_effort` 从不额外添加，以及陈旧路由标记的设置、清除与“绝不猜测”；以及生存期层（v0.25.0）——声明的生存期与它的拒绝、清扫的三个条件、工作板的否决与它报出的 id、真实 `retire_member` 工具上两个方向的同意门槛、消息重新打开一次性成员而不改写声明、反复交派的建议，以及那个建议所依据的两个记录字段。由定义真正启动一个成员、真机读取一次团队文件、由真实成员调用一次 `list_my_tasks`、真实子代理自己 `request/header` 上的路由，以及一次真机清扫与一次真机同意拒绝，是所有者安装后的验证项（ADR 0018、ADR 0021、ADR 0022、ADR 0024、ADR 0026）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -34,12 +34,12 @@
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 把成员作为一个可续跑的子代理启动，可用 `definition` 从磁盘上的成员定义启动，也可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。不点名任何模型时，成员跑在**本会话当前的路由**上：插件从会话解析 `provider` 与 `model` 并转发，`started_with.route_source` 说明路由来自调用、由插件解析，还是未解析而继承。 |
-| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、启动时的 `route`、实时状态、`compactable`，驻留时还有上下文压力。路由已不是 Lead 当前路由的成员会被标上 `route_stale: true`，并附一句 `route_note` 点出两条路由以及替换它的那次调用。它还会返回 `host_hooks`：面板过滤器、`list_agents` 过滤器与名额补偿各装没装上、它们正在剔除多少个墓碑 id，以及某个缺席的原因。 |
+| `spawn_member` | 把成员作为一个可续跑的子代理启动，可用 `definition` 从磁盘上的成员定义启动，也可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任。`lifetime` 说明成员能活多久：`standing`（默认）是你预期还会再用的角色，永不自动退役；`one-shot` 为一件工作而建，清扫在它跑过、停下且不拥有任何未完成任务之后退役它——`ephemeral: true` 是 `one-shot` 较早的拼写。生存期只属于这次调用：既不会从前任继承，也不会从定义文件继承。不点名任何模型时，成员跑在**本会话当前的路由**上：插件从会话解析 `provider` 与 `model` 并转发，`started_with.route_source` 说明路由来自调用、由插件解析，还是未解析而继承。 |
+| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、它 spawn 时声明的 `lifetime`（记录上的 `ephemeral` 是同一件事）、被派活两次及以上的一次性成员上的 `retasked: true` 与一句说明、启动时的 `route`、实时状态、`compactable`，驻留时还有上下文压力。路由已不是 Lead 当前路由的成员会被标上 `route_stale: true`，并附一句 `route_note` 点出两条路由以及替换它的那次调用。读取会先清扫“跑过、停下且不拥有任何未完成任务”的一次性成员，并报告 `swept`／`swept_targets`；被工作板否决留下的成员改用 `blocked`、`blocking_tasks` 与 `blocking_note` 报告。它还会返回 `host_hooks`：面板过滤器、`list_agents` 过滤器与名额补偿各装没装上、它们正在剔除多少个墓碑 id，以及某个缺席的原因。 |
 | `wait_members` | 阻塞当前这一轮，直到某个成员的实时状态发生变化或超时到期，并报告是哪个成员、变成了什么。有界：默认 30 秒，最长一小时。没有成员处于 running 或 provisioning 时立刻回答 `no_progress`，绝不唤醒任何人，也不等待任务板写入或消息被处理。 |
-| `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
+| `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。消息永不改变生存期：给一次性成员发消息会重新打开它（完成证据被丢掉，结果回答 `reopened: true` 与未变的 `lifetime`），因此在它再次跑过并停下之前，清扫会放过它。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
-| `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。 |
+| `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。**生存期为 `standing` 的成员不会被一次调用退役**：它回答 `retired: false, reason: "needs-confirmation"`，带回要问本人的问题；退役发生在下一次调用上，那次调用把本人的回答放进 `confirmed`，并原样引用。一次性成员、以及由替换启动的继任者都不需要确认。 |
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
 | `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取生效的那份及其 `source`（`file`、`stored` 或 `builtin`），传入模板即保存，传空串则回到内置版本。Lead 项目里的 `team/team.md` 只要存在就胜出，因此保存或清除都会带着该文件的路径被拒绝，并要求编辑它。 |
@@ -91,7 +91,7 @@ model: a-cheaper-model
 You review changes. Report only findings that change behaviour, with the file and the line.
 ```
 
-两条 `---` 之间是扁平 frontmatter，其下的 markdown 正文就是成员的提示词。`name` 与 `label` 必填，其余可接受字段都是 `spawn_member` 本来就有的：`assignment`、`ephemeral`、`cwd`、`provider`、`model`、`reasoning_effort`、`max_tokens` 与 `agent_preset`。这份清单就是全部子集——嵌套值、锚点、块标量、列表、重复键或未知字段，都会连文件名与行号一起被拒绝，而不是被猜测；带引号的值只去掉引号，不解释任何转义。
+两条 `---` 之间是扁平 frontmatter，其下的 markdown 正文就是成员的提示词。`name` 与 `label` 必填，其余可接受字段都是 `spawn_member` 本来就有的、用来描述角色的那些：`assignment`、`cwd`、`provider`、`model`、`reasoning_effort`、`max_tokens` 与 `agent_preset`。**定义不能声明生存期**：`lifetime` 不是可接受字段，`ephemeral` 在 v0.25.0 被移除，因此文件里带任何一个都会连名字与理由一起被拒绝，并指出该用哪次调用。生存期是关于某一个成员的声明——本人同意它自行离开的凭据——而文件描述的是角色，所以在 `replace` 上继承一个生存期会退役继任者、并让它刚接手的工作变成无主。这份清单就是全部子集——嵌套值、锚点、块标量、列表、重复键或未知字段，都会连文件名与行号一起被拒绝，而不是被猜测；带引号的值只去掉引号，不解释任何转义。
 
 **调用侧优先，且返回结果会说明这一点。** 传给 `spawn_member` 的每个字段都会覆盖文件里的同名项，返回结果中的 `definition` 对象会给出文件名、来自文件的部分（`from_file`）以及被你覆盖的部分（`overridden`）。有两个字段的来源不是调用。`prompt` 是调用无法覆盖的那个：正文是成员的常驻提示词，调用里的 `prompt` 会追加在它之后，`definition.prompt` 会把这个事实报成 `file+call`。另一个是 `replace` 时的 `assignment`：前任记录在案的 assignment 压过文件里的，因为继任者继承的是工作而不是角色——文件里的只在「前任没有记录」时才生效——而 `definition.assignment` 会报出 `call`、`predecessor` 或 `file` 中哪一个胜出。文件里的 `cwd`、模型路由与 preset 确实会作用于继任者；前任的那几项不会被继承，因为它们是启动选项，不是记录字段（ADR 0019）。
 
@@ -125,13 +125,19 @@ You review changes. Report only findings that change behaviour, with the file an
 - **assignment 是持久字段，且有长度上限。** `spawn_member.assignment` 在启动时写入，`message_member.assignment` 在工作变化时替换，两者都限制在 1000 个字符以内，超长直接拒绝而不是截断；`list_members` 会报告它，墓碑也会保留它。
 - **交接书的形状可以放在两个地方，而文件胜出。** 在成员定义旁边提交 `team/team.md`，frontmatter 留空、正文写模板；它是项目的形状，因此同一个项目里的两个 Lead 共用它。或者用 `handoff_template` 把一份模板存在这个 Lead 的花名册记录上。顺序是文件、已存模板、内置形状，读取形式会用 `source` 报出实际生效的是哪一个。两者适用同一套占位符——`{successor}`、`{predecessor}`、`{label}`、`{assignment}` 与 `{task_board}`；没有引用 `{assignment}` 的模板会被拒绝，因为继任者若不知道接手的是什么，就不算完成交接；未知占位符会被按名字拒绝，模板 1000 字符的上限是拒绝而不是截断。文件存在时，`handoff_template` 的保存与清除都会被拒绝，并点名要编辑的文件：文件会遮蔽写入，接受它就成了静默无操作。坏文件会在 `file_problem` 里报告，且不会成为生效模板；接下来是已存模板，最后是内置形状。两者都没有的 Lead 得到的字句与以前完全一样（ADR 0015、ADR 0021）。
 
-## 临时成员
+## 成员生存期
 
-`spawn_member` 带 `ephemeral: true` 会把成员标记为一次性成员，`list_members` 会在该行报告 `ephemeral: true`；缺省为 `false`。插件收不到完成事件，所以负责退役这类成员的清扫只在 `list_members` 与 `spawn_member` 调用开始时运行，并且只退役它有确凿证据表明“跑过且已停下”的成员：从未启动过的不会被清扫，仍在运行的也不会。被清扫的成员走的是普通退役流程，因此墓碑仍然列出，名额也照常返还。触发清扫的那次调用会报告 `swept` 与 `swept_targets`，一个都没退役时不加任何字段。
+成员是一份分工，不是一件任务。因此 `spawn_member` 用一个字段问清楚它能活多久：`lifetime: "standing"`（默认）是你预期还会再用的角色，`lifetime: "one-shot"` 是为一件工作创建的成员。`ephemeral: true` 是 `one-shot` 较早的拼写，仍然有效；两者同时传且相互一致时接受，相互矛盾时拒绝。`list_members` 在每一行报告 `lifetime`。
 
-给一次性成员发消息会清除该标记：再次给它派活，就是声明它不再是一次性的；没有这条规则，清扫就可能吃掉刚刚送达的消息所要保留的工作。
+**standing 成员永不自动退役。** 无论空闲多久它都不进入清扫的候选，`retire_member` 也不会凭模型一句话结束它：第一次调用什么都不退役，回答 `retired: false, reason: "needs-confirmation"`，并带回要问本人的 `question`、它仍持有的未完成任务（`owns_tasks`）与它承担的 assignment。把这个问题问过本人，再调用一次，把 `confirmed` 设成本人回答的**原话引用**——是本人的句子，不是复述，也不是布尔值：本插件没有人类界面（ADR 0008），模型自己设的标志谁也问不到。引用的那句话会原样回显进结果，因此留在记录里。一次性成员豁免，因为声明它为一次性本来就是本人的事先同意；替换启动的继任者也豁免，因为替换是在延续这个角色，而不是结束它。
 
-**定义可以让继任者变成一次性的。** 文件里的 `ephemeral: true` 在 `replace` 时同样生效，因为文件描述的是角色，而替换启动的就是这个角色。用之前要知道的后果是：继任者会在本轮结束时自行退役，而替换刚刚交给它的任务会变为无主——清扫会把它们报在 `unowned` 与 `unowned_tasks` 里。给继任者发一次消息即可清除该标记，或者在替换调用上传 `ephemeral: false`（ADR 0019）。
+**一次性是扇出场景。** 插件收不到完成事件，因此退役这类成员的清扫只在 `list_members` 与 `spawn_member` 调用开始时运行，并且要求三件事同时成立：成员启动过、已不驻留、且不拥有本 Lead 工作板上任何 `open` 任务。从未启动过的不会被清扫，仍在运行的不会被清扫，仍持有工作的也不会——工作板是一道**否决**，而空工作板从不是触发器，因为缺失的一行与成员的 `inactive` 状态都无法把“已完成”与“没人写下来”区分开。被否决的成员仍然列出，读取会说明原因：`blocked` 统计数量，`blocking_tasks` 列出这些行的 id，`blocking_note` 点名清除每一行的那一次 `task_board { action: "update", … }` 调用。关闭这些工作才是让一次性成员可以离开的原因；它从来不是“该成员已完成”的证明。
+
+被清扫的成员走普通退役流程，因此墓碑仍然列出，名额也照常返还。触发清扫的那次调用会报告 `swept` 与 `swept_targets`；既没退役也没否决任何东西时不加任何字段。
+
+**消息只会重新打开一次性成员，而不是改写它的声明。** 再次给它派活会丢掉清扫所依赖的证据，因此在它再次跑过并停下之前不会被清扫，而它的生存期仍是 `one-shot`——结果会回答 `reopened: true`。被派活两次及以上的一次性成员会在该行被标上 `retasked: true`，并附一句说明它多半是个 standing 角色、点名声明它的那次调用。没有任何东西会自动转换它：生存期是本人的同意，插件只报告自己数出来的计数。
+
+**定义不能声明生存期。** `lifetime` 不是可接受的 frontmatter 字段，`ephemeral` 在 v0.25.0 被移除；文件里带任何一个都会被按名字拒绝并给出理由。文件描述的是角色，因此由角色声明的一次性会被每一次替换的继任者继承——而一个在本轮结束就自行退役的继任者，恰好会把替换刚交给它的工作变成无主。改为在 `replace` 调用上声明它（ADR 0026）。
 
 ## 限制与刻意省略
 

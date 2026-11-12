@@ -3,6 +3,12 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** —
+- **Adjusted by [0026](0026-declared-member-lifetime.md) for points 2, 3 and 5** — the sweep's candidate
+  now needs a third condition (it owns no `open` row on the Lead's board), `startedAt` can be re-established
+  after a message, and point 5's "a message clears the flag" is replaced by "a message invalidates the
+  finished-evidence and leaves the declared lifetime alone". The rest stands: there is no durable completion
+  event, the descendant row's `activity` is not an outcome, the sweep is lazy with exactly those two
+  triggers, and retirement is the one existing protocol.
 
 ## Context
 

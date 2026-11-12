@@ -442,6 +442,13 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.deepEqual(mine.tasks.map((row) => row.id), [task.task.id], 'the member reads the work it was given')
   assert.equal(mine.tasks[0].body, task.task.body)
   await answer('list_members', {})
+  // The message result changed shape in v0.25.0 (`lifetime` and `reopened` replaced the cleared flag), so
+  // an accepted message is validated against the schema the tool declares — a field the host does not see
+  // declared is dropped after the delivery already happened (ADR 0026).
+  const sent = await answer('message_member', { target: 'reviewer', message: 'Carry on with the review.' })
+  assert.equal(sent.sent, true)
+  assert.equal(sent.lifetime, 'standing')
+  assert.equal(Object.hasOwn(sent, 'reopened'), false, 'only a one-shot member is re-opened by a message')
   const waited = await answer('wait_members', {})
   assert.equal(waited.no_progress, true, 'no member is live in this harness, so the wait reports it')
 
@@ -563,4 +570,46 @@ test('the wrapper forwards a resolvable route and the read flags the member left
   assert.deepEqual(inherited.started_with, { route_source: 'inherited' })
   assert.deepEqual(inherited.route, { source: 'inherited', select_reason: 'no-session-route' })
   assert.deepEqual(blind.requests[0], { prompt: [{ type: 'text', text: 'Start.' }], parent: blind.lead })
+})
+
+/**
+ * The consent gate on the tool the model actually calls.
+ *
+ * This is the wrapper layer the `actions.js` suites cannot reach: they pass `consentRequired` themselves,
+ * so only a call made here proves the `retire_member` tool sets it. Without this, the gate would exist in
+ * the operation and never fire in a real Session — which is exactly the class of defect ADR 0026 is about.
+ */
+test('the retire_member tool asks the person before ending a standing role', async () => {
+  const { tools, table, lead } = harness()
+  const exec = { agent: lead }
+  const spawn = tools.get('spawn_member')
+  const retire = tools.get('retire_member')
+  assert.ok(retire, 'the retirement tool is registered')
+
+  const born = await spawn.execute({ name: 'keeper', label: 'Hold the line', prompt: 'Stay.', assignment: 'Keep the release green' }, exec)
+  assertMatchesSchema(born, spawn.output.schema, 'spawn_member')
+  assert.equal(born.lifetime, 'standing', 'the default is the lifetime that is never retired automatically')
+  const owned = await tools.get('task_board').execute({ action: 'create', title: 'Watch the release', owner: 'keeper' }, exec)
+
+  const refused = await retire.execute({ target: 'keeper' }, exec)
+  assertMatchesSchema(refused, retire.output.schema, 'retire_member')
+  assert.equal(refused.retired, false)
+  assert.equal(refused.reason, 'needs-confirmation')
+  assert.equal(refused.lifetime, 'standing')
+  assert.match(refused.question, /Retire the standing member "keeper"/)
+  assert.deepEqual(refused.owns_tasks, [owned.task.id])
+  assert.equal(table.get('lead-1').members.find((member) => member.name === 'keeper').phase, 'active', 'nothing was retired')
+
+  // A boolean is not the person's words, and the wrapper refuses it before the operation runs.
+  await assert.rejects(
+    () => retire.execute({ target: 'keeper', confirmed: true }, exec),
+    /confirmed must be a string carrying the person's words/,
+  )
+
+  const done = await retire.execute({ target: 'keeper', confirmed: 'Yes — the release is signed off, retire it.' }, exec)
+  assertMatchesSchema(done, retire.output.schema, 'retire_member')
+  assert.equal(done.retired, true)
+  assert.match(done.message, /quoted back here: "Yes — the release is signed off, retire it\."/)
+  assert.deepEqual(done.unowned_tasks, [owned.task.id], 'the work it owned is named, not silently orphaned')
+  assert.equal(table.get('lead-1').members.find((member) => member.name === 'keeper').phase, 'retired')
 })

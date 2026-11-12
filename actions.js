@@ -11,7 +11,7 @@
  * `session` field.
  *
  * `sweepEphemeral` is the one operation here that is not a tool of its own: it retires finished
- * ephemeral members and runs only at the start of `list_members` and `spawn_member` (ADR 0013).
+ * one-shot members and runs only at the start of `list_members` and `spawn_member` (ADR 0013, ADR 0026).
  *
  * No `@deepseek-ai/*` import: a profile-linked bundle cannot resolve those packages (ADR 0002).
  */
@@ -21,7 +21,9 @@ import { join } from 'node:path'
 import { loadDefinition, loadTeamTemplate } from './definitions.js'
 import {
   HANDOFF_BRIEF_MAX,
+  LIFETIME,
   PHASE,
+  RETASK_MIN,
   ROUTE_SELECT_REASON,
   ROUTE_SOURCE,
   TASK_BODY_MAX,
@@ -33,11 +35,13 @@ import {
   checkHandoffTemplate,
   checkTaskBody,
   currentHolderOf,
+  declaredLifetime,
   findByTarget,
   findAnyTarget,
   findTask,
   handoffTemplateProblem,
   hasLiveTarget,
+  lifetimeOf,
   liveStateOf,
   openTasksOf,
   planMember,
@@ -102,6 +106,25 @@ function staleRouteNote(target, route, leadRoute) {
 }
 
 /**
+ * The sentence `list_members` puts on a one-shot member that has been re-tasked, or undefined.
+ *
+ * A lifetime declaration is the person's prior consent, so the plugin never converts a member by itself:
+ * it reports the evidence — accepted messages and assignment changes written after the spawn — and names
+ * the one call that declares the other lifetime (ADR 0026). A member the Lead nudged once is not
+ * evidence, which is why the threshold is two of either signal.
+ * @param {object} member - one stored member record.
+ * @returns {string|undefined} the note, or undefined when the member is not a re-tasked one-shot.
+ */
+function retaskAdvice(member) {
+  if (member.ephemeral !== true) return undefined
+  const signals = []
+  if ((member.messageCount ?? 0) >= RETASK_MIN) signals.push(`${member.messageCount} messages`)
+  if ((member.assignmentCount ?? 0) >= RETASK_MIN) signals.push(`${member.assignmentCount} assignment changes`)
+  if (signals.length === 0) return undefined
+  return `This member was declared one-shot, but it has been re-tasked since: ${signals.join(' and ')}. A one-shot handed work again and again is evidence of a standing role, so it is probably not one — nothing converts it automatically, and it still retires on the next sweep once it has stopped and owns no open task. To keep it, declare that at the next spawn: spawn_member { replace: "${targetOf(member)}", label, prompt, lifetime: "standing" }.`
+}
+
+/**
  * Project one stored member into the row the model renders.
  *
  * `leadRoute` is what makes a straggler visible: the row is a read, so the comparison runs here rather
@@ -146,8 +169,19 @@ export function memberRow(ctx, member, leadRoute) {
   }
   // What the model recorded about the work, so the Lead can see it before replacing the member.
   if (typeof member.assignment === 'string') row.assignment = member.assignment
-  // A member that will leave on its own once its work is over is worth seeing before relying on it.
+  // The lifetime the spawn call declared, in the vocabulary the call uses (ADR 0026). It is on every row
+  // on purpose: "standing" is the default and the answer to "may this member retire itself?".
+  row.lifetime = lifetimeOf(member)
+  // The record's own field, reported beside `lifetime` because every stored record already carries it and
+  // ADR 0013 named it. A message no longer clears it (ADR 0026).
   if (member.ephemeral === true) row.ephemeral = true
+  // Advice, never a conversion: a one-shot that keeps being handed work is evidence of a standing role,
+  // and the Lead is the one who declares that at the next spawn (ADR 0026).
+  const retasked = retaskAdvice(member)
+  if (retasked !== undefined) {
+    row.retasked = true
+    row.retasked_note = retasked
+  }
   // The route it started on, and whether this Lead is still on it. A member with no recorded route says
   // nothing, which is honest: the plugin does not know what it started on (ADR 0024).
   if (member.route !== undefined) {
@@ -525,27 +559,78 @@ export async function ensureAdopted(ctx, caller, table, leadSessionId) {
 }
 
 /**
- * The lazy sweep: retire every ephemeral member whose work is over, at the start of the two roster
+ * How many blocked rows the sweep's sentence names one call for, and the cap its list keeps.
+ *
+ * The machine list is `blocking_tasks` and is never cut; this bound is on the sentence only, and it
+ * exists for the same reason the brief's task list is bounded: a member holding a whole backlog must not
+ * turn one result into a wall of text. Past the bound the sentence says the same call clears each of the
+ * remaining ids it just named.
+ */
+const BLOCKING_CALL_MAX = 5
+
+/**
+ * The sentence a blocked sweep answers with: which member the veto stopped, what it still owns, and the
+ * one call that clears each row.
+ *
+ * It is part of the result, not a log line, because the alternative is a member that never leaves and
+ * nothing that says why. The ids travel both here and in `blocking_tasks`, so a caller reads the machine
+ * list and the person reads the sentence (ADR 0026).
+ * @param {{target: string, tasks: object[]}[]} blocked - one entry per member the veto stopped.
+ * @param {string[]} ids - the open task ids it owns, flattened.
+ * @returns {string} the note.
+ */
+function blockingNote(blocked, ids) {
+  const names = blocked.map((entry) => `"${entry.target}"`).join(' and ')
+  const many = blocked.length > 1
+  const rows = ids.length === 1 ? 'this open row' : `these ${ids.length} open rows`
+  const calls = ids
+    .slice(0, BLOCKING_CALL_MAX)
+    .map((id) => `task_board { action: "update", task_id: "${id}", status: "done" }`)
+  const rest = ids.length - calls.length
+  const clearing = rest > 0
+    ? `${calls.join('; ')} — and the same call for each of the ${rest} further ids in blocking_tasks`
+    : calls.join('; ')
+  return `${names} ran and stopped, but ${many ? 'they still own' : 'it still owns'} ${rows} on this board, so the sweep left ${many ? 'them' : 'it'} alone: retiring would leave the work unowned. Each row is cleared by one call — ${clearing}. Closing the work is what makes a one-shot member eligible to leave; it is never what proves the member finished.`
+}
+
+/**
+ * The lazy sweep: retire every **one-shot** member whose work is over, at the start of the two roster
  * operations the model calls anyway.
  *
  * The Harness has no completion event — an active child that finishes its turn produces no durable
  * change (§4.3 of `docs/architecture-en.md`) — so the sweep requires evidence this plugin recorded
- * itself: the member is `active` and `ephemeral`, carries `startedAt` (written when its activation
+ * itself: the member is `active` and one-shot, carries `startedAt` (written when its activation
  * resolved, so a reservation that never published has none), and is no longer resident in the local live
  * registry. A member that never started is never swept, and neither is a running one. The installed
  * subagent seam reports a descendant row's `activity` as only `running | inactive`, and `inactive` also
  * describes a child that never started, so the local registry is what decides (ADR 0013).
  *
- * Retirement is the existing protocol, not a second implementation: every candidate goes through
- * `retireMember`, with `retireReason: 'ephemeral member: its turn ended'` on the tombstone.
+ * **A standing member is never swept, and the board is a veto rather than a trigger.** Three conditions,
+ * all required, and the third is ADR 0026's: the member owns no `open` row on this Lead's board. A member
+ * whose turn ended but which still owns work is *not eligible* — a sweep would leave that work unowned —
+ * and an empty board is not by itself proof that anything finished, so it never triggers a retirement
+ * either. When the veto does block a sweep, the result names the rows (`blocking_tasks`) and the one call
+ * that clears each, because a forgotten row must not strand a member invisibly.
  *
- * It calls no model and no clock, and returns no fields at all when nothing was retired, so a profile
- * that never sets the flag sees results exactly as they were before this feature.
+ * **A message re-opens a one-shot member by invalidating the evidence, not by rewriting the
+ * declaration.** `message_member` drops `startedAt`; a later read that observes the child resident again
+ * re-stamps it, so "it ran and stopped" is only ever concluded from an observation made after the last
+ * time the member was handed work (ADR 0026).
+ *
+ * Retirement is the existing protocol, not a second implementation: every candidate goes through
+ * `retireMember`, with `retireReason: 'one-shot member: it ran and stopped and owned no open task'` on
+ * the tombstone. `consentRequired` is left at its default of false here, because a one-shot member's
+ * declaration already was the person's consent to it leaving on its own (ADR 0026).
+ *
+ * It calls no model and no clock, and returns no fields at all when there was nothing to retire or
+ * report, so a profile that never declares a one-shot member sees results exactly as they were before
+ * this feature.
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   trashLimit?: number}} request
- * @returns {Promise<{swept?: number, swept_targets?: string[]}>} the report fields, or `{}`.
+ * @returns {Promise<{swept?: number, swept_targets?: string[], unowned?: number, unowned_tasks?: string[],
+ *   blocked?: number, blocking_tasks?: string[], blocking_note?: string}>} the report fields, or `{}`.
  */
 export async function sweepEphemeral({
   ctx,
@@ -556,11 +641,38 @@ export async function sweepEphemeral({
   hooks,
   trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
-  const finished = readRoster(table, leadSessionId).members.filter((member) => member.phase === PHASE.active
+  const roster = readRoster(table, leadSessionId)
+  const oneShot = roster.members.filter((member) => member.phase === PHASE.active && member.ephemeral === true)
+  if (oneShot.length === 0) return {}
+  // The invalidated evidence: a member messaged while it was unloaded carries no `startedAt`, and the
+  // child being resident now is the positive fact that it has run since. Stamped once, then it is the
+  // same evidence any other one-shot member carries.
+  const revived = oneShot.filter((member) => typeof member.startedAt !== 'string' && liveStateOf(ctx, member).resident === true)
+  let current = roster
+  if (revived.length > 0) {
+    const ids = new Set(revived.map((member) => member.memberId))
+    const at = new Date().toISOString()
+    current = await updateRoster(table, leadSessionId, (latest) => {
+      let next = latest
+      for (const member of latest.members) {
+        if (!ids.has(member.memberId)) continue
+        if (member.phase !== PHASE.active || member.ephemeral !== true || typeof member.startedAt === 'string') continue
+        next = withMember(next, { ...member, startedAt: at })
+      }
+      return next
+    })
+  }
+  const ready = current.members.filter((member) => member.phase === PHASE.active
     && member.ephemeral === true
     && typeof member.startedAt === 'string'
     && liveStateOf(ctx, member).resident === false)
-  if (finished.length === 0) return {}
+  const finished = []
+  const blocked = []
+  for (const member of ready) {
+    const owned = openTasksOf(current, targetOf(member))
+    if (owned.length === 0) finished.push(member)
+    else blocked.push({ target: targetOf(member), tasks: owned })
+  }
   const swept = []
   const unowned = []
   for (const member of finished) {
@@ -572,22 +684,32 @@ export async function sweepEphemeral({
       dataDir,
       hooks,
       target: targetOf(member),
-      reason: 'ephemeral member: its turn ended',
+      reason: 'one-shot member: it ran and stopped and owned no open task',
       trashLimit,
     })
     // A member another caller retired in between answers `already-retired`; it is not this sweep's doing.
     if (outcome.retired === true && outcome.reason !== 'already-retired') {
       swept.push(targetOf(member))
-      // A swept member is a retirement with no successor, so its open work loses its owner. Reporting it
-      // here is what keeps a fan-out from quietly orphaning tasks the model never saw move (ADR 0017).
+      // A swept member is a retirement with no successor, so its open work loses its owner. The veto above
+      // makes this reachable only when a row was created for the member between that read and this
+      // retirement; it is still reported rather than quietly orphaned (ADR 0017).
       if (Array.isArray(outcome.unowned_tasks)) unowned.push(...outcome.unowned_tasks)
     }
   }
-  if (swept.length === 0) return {}
-  const value = { swept: swept.length, swept_targets: swept }
-  if (unowned.length > 0) {
-    value.unowned = unowned.length
-    value.unowned_tasks = unowned
+  const value = {}
+  if (swept.length > 0) {
+    value.swept = swept.length
+    value.swept_targets = swept
+    if (unowned.length > 0) {
+      value.unowned = unowned.length
+      value.unowned_tasks = unowned
+    }
+  }
+  if (blocked.length > 0) {
+    const ids = blocked.flatMap((entry) => entry.tasks.map((task) => task.id))
+    value.blocked = blocked.length
+    value.blocking_tasks = ids
+    value.blocking_note = blockingNote(blocked, ids)
   }
   return value
 }
@@ -595,9 +717,9 @@ export async function sweepEphemeral({
 /**
  * List one Lead's roster.
  *
- * This read is one of the two sweep triggers (ADR 0013): it first retires every ephemeral member whose
- * turn has ended, so the rows it returns already show those members as `retired` and the result reports
- * `swept` and `swept_targets` when the sweep retired anyone.
+ * This read is one of the two sweep triggers (ADR 0013): it first retires every one-shot member whose
+ * turn has ended and which owns no open task, so the rows it returns already show those members as
+ * `retired` and the result reports `swept` and `swept_targets` when the sweep retired anyone.
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   trashLimit?: number}} request
@@ -919,12 +1041,14 @@ function startedWith({ cwd, agentOptions, agentPreset }, route) {
  * merge is visible rather than inferred (ADR 0019).
  *
  * The report is computed here, next to the merge, so the fields it claims cannot drift from the values
- * the request is actually composed with.
+ * the request is actually composed with. What the merge does **not** carry is the member's lifetime: a
+ * definition cannot declare one, because a role file that did would hand it to every successor of a
+ * replacement, and a `replace` would then move the work and self-retire (ADR 0026).
  * @param {object} definition - one parsed definition: `{name, path, prompt, fields}`.
  * @param {object} call - the model's arguments, as `spawnMember` received them.
  * @param {object|undefined} predecessor - the member a `replace` names, when there is one; its recorded
  *   assignment is the only value a successor inherits from it.
- * @returns {{name?: string, label?: string, prompt: string, assignment?: string, ephemeral?: boolean,
+ * @returns {{name?: string, label?: string, prompt: string, assignment?: string,
  *   cwd?: string, agentOptions?: object, agentPreset?: string, report: object}} the values to start
  *   with, and the report the tool returns.
  */
@@ -962,7 +1086,6 @@ function applyDefinition(definition, call, predecessor) {
     assignmentSource = 'file'
     fromFile.push('assignment')
   }
-  const ephemeral = take('ephemeral', call.ephemeral !== undefined, call.ephemeral)
   const cwd = take('cwd', call.cwd !== undefined, call.cwd)
   const agentPreset = take('agent_preset', call.agentPreset !== undefined, call.agentPreset)
   const agentOptions = {}
@@ -987,7 +1110,6 @@ function applyDefinition(definition, call, predecessor) {
     label,
     prompt: call.prompt === undefined ? definition.prompt : `${definition.prompt}\n\n${call.prompt}`,
     assignment,
-    ephemeral,
     cwd,
     agentOptions: Object.keys(agentOptions).length === 0 ? undefined : agentOptions,
     agentPreset,
@@ -1078,17 +1200,21 @@ function spawnRefusal(error, { agentOptions, agentPreset }) {
  * rather than a thrown error (`started: false` and a `reason`): the reservation is already recorded as
  * `failed`, no child exists, and the model can act on the sentence by omitting the field.
  *
- * This is the second sweep trigger (ADR 0013): the call first retires every finished ephemeral member, so
+ * This is the second sweep trigger (ADR 0013): the call first retires every finished one-shot member, so
  * the fan-out that follows sees the slots those members were holding.
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   name?: string, label?: string, prompt?: string, assignment?: string, replace?: string,
- *   ephemeral?: boolean, definition?: string, cwd?: string, agentOptions?: object, agentPreset?: string,
+ *   lifetime?: string, ephemeral?: boolean, definition?: string, cwd?: string, agentOptions?: object,
+ *   agentPreset?: string,
  *   signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the
  *   effective cap from the plugin config; the retirement half of a replacement enforces it, and it
- *   defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none. `ephemeral` records the member as
- *   one-shot (§4.3.1). `cwd`, `agentOptions` and `agentPreset` are the tool's `spawn_options` fields;
+ *   defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none. `lifetime` declares how long the member
+ *   lives — `standing` (the default) or `one-shot` — and `ephemeral: true` is the pre-v0.25 spelling of
+ *   `one-shot` (§4.3.1, ADR 0026). It is never inherited: not from a predecessor on a `replace`, and not
+ *   from a definition file, which cannot declare one at all. `cwd`, `agentOptions` and `agentPreset` are
+ *   the tool's `spawn_options` fields;
  *   each one omitted means the member inherits the Lead's value (ADR 0016). `definition` names a member
  *   definition under `team/` in the Lead's working directory: its fields fill whatever the call omitted,
  *   its `assignment` yields to the predecessor's recorded one on a `replace` (the call's assignment
@@ -1108,6 +1234,7 @@ export async function spawnMember({
   prompt,
   assignment,
   replace,
+  lifetime,
   ephemeral,
   definition,
   cwd,
@@ -1117,6 +1244,10 @@ export async function spawnMember({
   trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
   const caller = requireLiveLead('spawn_member', leadSessionId, leadAgent)
+  // What this call declares about how long the member lives, resolved before anything is read or
+  // reserved: the two spellings are checked against each other here, and the result is the member's
+  // lifetime — never the predecessor's, never the file's (ADR 0026).
+  const declared = declaredLifetime({ lifetime, ephemeral }, 'spawn_member')
   // The definition layer comes first, before the sweep and before any reservation: a call that names a
   // file it cannot read must change nothing, and must not retire a finished member as a side effect of
   // failing. A refusal is the tool's typed answer, not a thrown host error (ADR 0018, ADR 0016). Loading
@@ -1139,14 +1270,13 @@ export async function spawnMember({
   if (loaded !== undefined) {
     const applied = applyDefinition(
       loaded.definition,
-      { name, label, prompt, assignment, ephemeral, cwd, agentOptions, agentPreset },
+      { name, label, prompt, assignment, cwd, agentOptions, agentPreset },
       predecessor,
     )
     name = applied.name
     label = applied.label
     prompt = applied.prompt
     assignment = applied.assignment
-    ephemeral = applied.ephemeral
     cwd = applied.cwd
     agentOptions = applied.agentOptions
     agentPreset = applied.agentPreset
@@ -1164,8 +1294,13 @@ export async function spawnMember({
   // A successor continues the predecessor's work, so it inherits the recorded assignment unless the
   // model records a different one. Without this, a brief would thin out one generation at a time. A
   // definition's own `assignment` has already lost here when the predecessor had one to inherit (ADR
-  // 0019), so this fallback only serves the inline path.
-  const planned = withRoute(planMember(roster, baseName, label, recorded ?? predecessor?.assignment, ephemeral === true), route.recorded)
+  // 0019), so this fallback only serves the inline path. Its lifetime is this call's declaration alone:
+  // a replacement does not hand over one-shot-ness, because the work it just moved would be orphaned by
+  // the next sweep (ADR 0026).
+  const planned = withRoute(
+    planMember(roster, baseName, label, recorded ?? predecessor?.assignment, declared === LIFETIME.oneShot),
+    route.recorded,
+  )
   if (predecessor !== undefined) planned.predecessor = predecessor.memberId
   const successorTarget = targetOf(planned)
   // The work this handover is about: what the predecessor still owns on its own board, plus what an
@@ -1398,8 +1533,13 @@ export async function spawnMember({
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
- *   target: string, reason?: string, trashLimit?: number}} request - `trashLimit` is the effective cap
+ *   target: string, reason?: string, confirmed?: string, consentRequired?: boolean,
+ *   trashLimit?: number}} request - `trashLimit` is the effective cap
  *   from the plugin config; it defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none.
+ *   `consentRequired` is true on the model's own retirement decision — the `retire_member` tool — and
+ *   false on the two internal retirements that are not a decision to end a role: a replacement continues
+ *   the role with a new person, and the sweep only ever acts on a member that has already consented to
+ *   leaving by being declared one-shot. `confirmed` is the person's answer, quoted verbatim (ADR 0026).
  *
  *   There is no `successor` parameter on purpose. A replacement hands its work over itself, through
  *   `handOverTasks`, because it is the only caller that knows the successor and it must be able to do so
@@ -1416,6 +1556,8 @@ export async function retireMember({
   hooks,
   target,
   reason,
+  confirmed,
+  consentRequired = false,
   trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
   if (leadAgent === undefined || leadAgent === null) {
@@ -1430,6 +1572,16 @@ export async function retireMember({
   const member = findAnyTarget(roster, target)
   if (member === undefined) {
     throw new Error(`retire_member: no member named "${target}" in the roster, live or retired`)
+  }
+
+  // The lifetime gate, before the handover write and before anything is drained: a refusal must change
+  // nothing at all. A standing member's retirement is the person's decision, so the model has to carry
+  // their words back; a one-shot member already consented when the Lead declared it one-shot, and an
+  // already-retired tombstone has nothing left to consent to (ADR 0026).
+  const lifespan = lifetimeOf(member)
+  const quoted = typeof confirmed === 'string' ? confirmed.trim() : ''
+  if (consentRequired && lifespan === LIFETIME.standing && member.phase !== PHASE.retired && quoted.length === 0) {
+    return consentRefusal(roster, member)
   }
 
   // The handover, and it is deliberately the first write: the work loses its owner in one mutation, before
@@ -1454,6 +1606,7 @@ export async function retireMember({
       retired: true,
       drained: false,
       pruned: 0,
+      lifetime: lifespan,
       reason: 'already-retired',
       message: `"${target}" is already retired; nothing was drained and no artifact was moved.${notice}`,
       ...fields,
@@ -1574,6 +1727,7 @@ export async function retireMember({
     archived,
     trashed: moved,
     pruned,
+    lifetime: lifespan,
     // What this retirement did to the member's open work: left unowned, with its ids named, so a Lead
     // reading a retirement it did not pair with a replacement sees the work it now owes (P2-09,
     // ADR 0017). A member that owned nothing adds neither field, exactly as before.
@@ -1581,6 +1735,11 @@ export async function retireMember({
     message: moved
       ? 'Member retired: drained, its session moved to the trash directory, and tombstoned.'
       : `Member retired and tombstoned; the session artifact was not moved (${moveReason ?? 'unknown'}).`,
+  }
+  if (quoted.length > 0) {
+    // The consent is the person's sentence, so the answer quotes it back: the transcript then holds the
+    // exact words this retirement was allowed on, which a boolean could never do (ADR 0026).
+    value.message += ` It was retired on the person's words, quoted back here: "${quoted}".`
   }
   if (handover.length > 0) {
     value.message += ` Its ${handover.length} open ${handover.length === 1 ? 'task is' : 'tasks are'} now unowned: nobody will carry ${handover.length === 1 ? 'it' : 'them'} until a successor starts or an owner is assigned.`
@@ -1788,6 +1947,36 @@ function retargetNotice(roster, target) {
   return {
     fields: { current_holder: holder },
     notice: ` The name "${name}" is now held by "${holder.target}" (generation ${holder.generation}); retarget to that member.`,
+  }
+}
+
+/**
+ * The refusal a standing member's retirement answers with: everything needed to ask the person.
+ *
+ * The plugin has no human surface (ADR 0008), so a boolean the model sets about itself would be worth
+ * nothing. The refusal therefore hands back the three things the question needs — who the member is,
+ * what it still carries, and the sentence to put to the person — and the retirement happens on the next
+ * call, which must carry the person's answer quoted. A `confirmed: true` could not be checked; a quoted
+ * sentence can, because it stays in the transcript (ADR 0026).
+ * @param {object} roster - one Lead's roster.
+ * @param {object} member - the standing member whose retirement is refused.
+ * @returns {object} the refusal result.
+ */
+function consentRefusal(roster, member) {
+  const owns = openTasksOf(roster, targetOf(member))
+  const work = owns.length === 0
+    ? 'owns no open task right now'
+    : `still owns ${owns.length} open ${owns.length === 1 ? 'task' : 'tasks'} on this board (${owns.map((task) => `"${task.title}"`).join(', ')})`
+  const recorded = typeof member.assignment === 'string' ? `, and its recorded assignment is "${member.assignment}"` : ''
+  return {
+    target: targetOf(member),
+    retired: false,
+    reason: 'needs-confirmation',
+    lifetime: LIFETIME.standing,
+    question: `Retire the standing member "${targetOf(member)}" (${member.label})? It ${work}${recorded}. Retiring it moves its session to this Lead's trash and leaves any open work it owns unowned.`,
+    ...(owns.length === 0 ? {} : { owns_tasks: owns.map((task) => task.id) }),
+    ...(typeof member.assignment === 'string' ? { assignment: member.assignment } : {}),
+    message: `Nothing was retired. A standing member is a division of labour, so ending it is the person's decision rather than the model's. Ask the person the question above, then call retire_member again with confirmed set to their answer, quoted verbatim — that sentence is what this plugin treats as the consent. A one-shot member needs none of this.`,
   }
 }
 
@@ -2195,9 +2384,14 @@ export async function taskBoard({ table, leadSessionId, action, task_id, title, 
  * member what to do is the moment that statement changes. It is stored only after the message is
  * accepted, so a refused delivery does not silently rewrite the record.
  *
- * Messaging an ephemeral member **clears the flag** in that same write: sending it work again is a
- * declaration that it is not one-shot after all, and this is the one case where a later sweep would
- * otherwise retire work the model intended to keep (§4.3.1, ADR 0013).
+ * **A message re-opens a one-shot member; it does not re-declare it.** The lifetime is the declaration
+ * the Lead made when the member was created and only a spawn can change it, so this write leaves
+ * `ephemeral` alone and instead invalidates the "it ran and stopped" evidence by dropping `startedAt`;
+ * the next read that observes the child alive again re-stamps it, and until then a sweep cannot conclude
+ * anything about a member that was just handed work (§4.3.1, ADR 0026). It also counts what it wrote —
+ * one message, and one assignment change when one was recorded — which is the evidence
+ * `list_members` advises on, and it counts them only on a one-shot member, because they exist for that
+ * advice.
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   target: string, message: string, assignment?: string, signal?: AbortSignal}} request
  * @returns {Promise<object>} the tool's result object, unchanged.
@@ -2225,22 +2419,30 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
   const value = {
     target: targetOf(member),
     sent: true,
+    lifetime: lifetimeOf(member),
     message: 'Message accepted. A running member sees it at its next step; an unloaded one is resumed.',
   }
   if (typeof messageId === 'string') value.message_id = messageId
-  const clearsEphemeral = member.ephemeral === true
-  if (recorded !== undefined || clearsEphemeral) {
+  const oneShot = member.ephemeral === true
+  if (recorded !== undefined || oneShot) {
     // Rebuild from the record on disk, so a concurrent edit to another member survives and a tombstone
     // written while the message was in flight is not overwritten with a stale snapshot.
     await updateRoster(table, leadSessionId, (current) => {
-      const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
-      const next = { ...(existing ?? member) }
+      const base = current.members.find((candidate) => candidate.memberId === member.memberId) ?? member
+      const next = { ...base }
       if (recorded !== undefined) next.assignment = recorded
-      if (clearsEphemeral) delete next.ephemeral
+      if (next.ephemeral === true) {
+        delete next.startedAt
+        next.messageCount = (base.messageCount ?? 0) + 1
+        if (recorded !== undefined) next.assignmentCount = (base.assignmentCount ?? 0) + 1
+      }
       return withMember(current, next)
     })
     if (recorded !== undefined) value.assignment = recorded
-    if (clearsEphemeral) value.ephemeral = false
+  }
+  if (oneShot) {
+    value.reopened = true
+    value.message += ' It is one-shot, and its lifetime is unchanged: the message re-opened it, so the next sweep leaves it alone until it has run and stopped again.'
   }
   return value
 }

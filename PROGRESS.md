@@ -1599,3 +1599,74 @@
   description, and `scripts/check.mjs` still reports the same two keys per language.
 - **Version.** `0.24.0`: a host hook that never installed was a release-level lie; 0.23.0 belongs to another
   branch in flight.
+
+## 2026-11-12 — a member's lifetime is declared, and ending a role asks the person (P4-13, v0.25.0)
+
+- **The rule the owner asked to stop depending on a model remembering it.** A member is a division of
+  labour, not a task: ending it is a decision about the role, and a judgement call asks the person first.
+  v0.24.0 wrote that sentence into `retire_member`'s description and nothing enforced it. Three defects made
+  that worse than an unkept promise: `message_member` deleted the one-shot flag, which silently made a
+  one-shot member permanent; `retire_member` had no gate at all; and the sweep could retire a member that
+  still owned open tasks, reporting them afterwards as `unowned` — a retirement nobody asked for, orphaning
+  work in the same call.
+- **Decision recorded in ADR 0026.** A lifetime is declared on the spawn call and nowhere else —
+  `standing` (the default) or `one-shot`, with `ephemeral: true` kept as the older spelling and a
+  contradiction refused rather than tie-broken. It is never inherited: a `replace` starts its successor as
+  `standing` unless that call says otherwise, and a member definition can no longer carry one. The sweep
+  needs three conditions at once — started, not resident, and owning no `open` row — and the board is a
+  veto, never a trigger. A standing member's `retire_member` refuses until the call carries the person's
+  answer quoted verbatim. A message re-opens a one-shot member instead of re-declaring it. A one-shot member
+  handed work twice is advised on and never converted.
+- **ADR 0013 point 5 is superseded, and ADR 0019 point 3's `ephemeral` row is gone.** The evidence for the
+  veto was read out of the installed packages rather than remembered: `@deepseek-ai/dsh-subagent`
+  `lib/index.js:2435` produces `activity` as `inactive` whenever the child is not resident, and the
+  installed `dsh-experimental-agent-team` README states that `inactive` means "no turn is executing, whether
+  loaded or stored" (README.md:62) — so the field describes residency and never an outcome, and a missing
+  board row cannot stand in for a finished one either. ADR 0019 had accepted a file-declared one-shot
+  successor, whose consequence was that a `replace` handed work over and the successor retired itself; the
+  field left the file instead of the consequence getting another paragraph.
+- **The stored field is deliberately not renamed.** `ephemeral: true` is what every roster this plugin has
+  written already carries, and the storage facility validates every record when it opens the domain, so a
+  rename would need a migration over state that is already correct. `lifetime` is the call's and the row's
+  vocabulary; `lifetimeOf` is the one translation. `messageCount` and `assignmentCount` are new optional
+  counters, written only on a one-shot member, and both are validated on load like every other optional
+  field.
+- **A replace and the sweep are exempt from the consent gate, deliberately.** Both call the same
+  `retireMember` with `consentRequired` false: a replacement continues the role with a new holder rather
+  than ending it, and a one-shot member's declaration already was the person's prior consent. A `failed`
+  record is *not* exempt — the rule is about the member's declared lifetime, not about its phase, and
+  exempting one phase would be a second rule with no reason behind it.
+- **The vocabulary on the tombstone moved with the rest.** A swept member's `retireReason` now reads
+  `one-shot member: it ran and stopped and owned no open task`. It is display text, nothing parses it, and
+  tombstones that already carry the old spelling keep it.
+- **How this change was verified.** `node --check` on the six host modules exits 0; `node scripts/check.mjs`
+  prints `check passed` after the last edit; and `node --test --test-isolation=none tests/*.test.mjs` is 206
+  tests, 206 passing. `tests/ephemeral.test.mjs` became `tests/lifetime.test.mjs` — every case it covered is
+  still covered, with the seven decisions added — and `tests/definitions.test.mjs`, `tests/task-board.test.mjs`
+  and `tests/entry.test.mjs` were updated for the removed field, the veto and the declared schema fields.
+  The consent gate's wiring is proved in `tests/entry.test.mjs`, because the `actions.js` suites pass
+  `consentRequired` themselves and would not notice a tool that forgot to set it.
+- **The main test was proved able to fail.** With the board veto removed from `sweepEphemeral` (its
+  `owned.length === 0` branch widened to `>= 0`, so every eligible member was finished), three tests fail:
+  `the board is a veto: an owned open row blocks the sweep` and `the veto keeps the work a one-shot member
+  still owns` both answer `true !== false` at their first assertion, and
+  `a one-shot successor is held by the work the replacement just handed it` fails the same way. Restored,
+  the suite is green. `tests/lifetime.test.mjs` hashed
+  `C4F425D9C4F56B8E836C32A0DE86AB2CD05205874C1E014361DBF399C8600D95` before and after that proof — the test
+  was never edited.
+- **Documents.** ADR 0026 records the decision and its rejected alternatives; `docs/architecture-en.md` gains
+  rewritten §4.3.1 (declared lifetimes, the three conditions, the veto's asymmetry, the consent gate, the
+  message rule and the advice), a v0.25 delivery line, the record fields, the state and notice matrices, the
+  definition matrix and the tool table; the Chinese pair matches. The README pair gains a *Member lifetime*
+  section in place of *Ephemeral members*, the new parameters and fields on four tool rows, and the
+  install-check line. The index pair registers ADR 0026 and states where a lifetime change belongs;
+  `PLAN.md` gains P4-13, ticked because this PR delivers it.
+- **One pre-existing drift, corrected in passing.** The README pair's *Current version* line still said
+  v0.22.0 while `package.json` had been 0.24.0 since the host-hook release. It now says v0.25.0. Nothing
+  else in either README was unrelated to this change.
+- **What stays unverified.** No install and no `plugin_manager` call was made, and `scripts/check.mjs` never
+  loads the Harness. The live sweep — a real one-shot member finishing and leaving while a standing one stays
+  — and a real consent refusal from a real Session are the owner's install check. The four frozen names in
+  ADR 0014 and the three `cordis.patch.yml` entries were not touched, and the locale pair is unchanged
+  because neither file holds a tool description.
+- **Version.** `0.25.0`: a declared lifetime and a consent gate are behaviour, not a comment.

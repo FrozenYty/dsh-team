@@ -70,13 +70,13 @@ const tasksNow = (table) => tasksOf(readRoster(table, 'lead-1'))
 const taskById = (table, id) => tasksNow(table).find((task) => task.id === id)
 
 /** A member with an open task and a done task, owned by that member. */
-async function memberWithWork(ctx, table, { name = 'reviewer', ephemeral = false } = {}) {
+async function memberWithWork(ctx, table, { name = 'reviewer', lifetime = 'standing' } = {}) {
   await spawnMember(call(ctx, table, {
     name,
     label: 'Check the diff',
     prompt: 'Start on the parser.',
     assignment: 'Finish the parser unit tests.',
-    ephemeral,
+    lifetime,
   }))
   const open = (await board(table, { action: 'create', title: 'Finish the parser tests', owner: name })).task
   const done = (await board(table, { action: 'create', title: 'Read the cache design', owner: name })).task
@@ -396,25 +396,36 @@ test('a restore changes no owner and reports the work still waiting for one', as
   assert.equal(taskById(table, done.id).owner, 'reviewer')
 })
 
-test('the ephemeral sweep reports the work its member left unowned', async () => {
+test('the veto keeps the work a one-shot member still owns, and closing the row releases it', async () => {
   const table = memoryTable()
   let residentId
   const ctx = fakeCtx({ live: (id) => id === residentId })
-  await memberWithWork(ctx, table, { name: 'probe', ephemeral: true })
+  await memberWithWork(ctx, table, { name: 'probe', lifetime: 'one-shot' })
   const open = tasksNow(table).find((task) => task.status === TASK_STATUS.open)
   const member = readRoster(table, 'lead-1').members.find((candidate) => candidate.name === 'probe')
   assert.equal(member.phase, PHASE.active)
   assert.equal(typeof member.startedAt, 'string', 'the sweep needs the plugin\'s own start evidence')
-  // The member ran and then stopped: the live registry no longer holds its child.
+  // The member ran and then stopped: the live registry no longer holds its child. Everything the old
+  // sweep needed holds — and it still must not act, because the member owns an open row (ADR 0026).
   residentId = undefined
 
   const listed = await listMembers(call(ctx, table))
-  assert.equal(listed.swept, 1)
-  assert.deepEqual(listed.swept_targets, ['probe'])
-  assert.equal(listed.unowned, 1)
-  assert.deepEqual(listed.unowned_tasks, [open.id])
-  assert.equal(listed.members.find((row) => row.target === 'probe').phase, PHASE.retired)
-  assert.equal(taskById(table, open.id).owner, undefined)
+  assert.equal(Object.hasOwn(listed, 'swept'), false, 'an owned open row vetoes the retirement')
+  assert.equal(listed.blocked, 1)
+  assert.deepEqual(listed.blocking_tasks, [open.id])
+  assert.equal(listed.members.find((row) => row.target === 'probe').phase, PHASE.active)
+  assert.equal(taskById(table, open.id).owner, 'probe', 'the work keeps its owner')
+  assert.equal(taskById(table, open.id).status, TASK_STATUS.open, 'and it is still work, not a closed row')
+
+  // The Lead closes the row, which is the one thing that makes the member eligible — and the sweep then
+  // retires it with nothing left to orphan, so it reports no unowned work at all.
+  await board(table, { action: 'update', task_id: open.id, status: 'done' })
+  const after = await listMembers(call(ctx, table))
+  assert.equal(after.swept, 1)
+  assert.deepEqual(after.swept_targets, ['probe'])
+  assert.equal(after.unowned, undefined, 'the veto is what keeps a sweep from orphaning work')
+  assert.equal(readRoster(table, 'lead-1').members.find((candidate) => candidate.name === 'probe').phase, PHASE.retired)
+  assert.equal(taskById(table, open.id).owner, 'probe', 'a done row stays with the member that did it')
 })
 
 test('work follows the target, so a reused base name starts a different generation of owner', async () => {

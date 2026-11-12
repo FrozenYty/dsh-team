@@ -7,6 +7,11 @@
   recorded assignment as a source on a `replace`, and the file's assignment applies only when there is
   nothing to inherit. The rest of 0018 stands: the `team/` path, the flat frontmatter subset and its
   refusals, the caps, the typed refusal and the one-parameter surface.
+- **Adjusted by [0026](0026-declared-member-lifetime.md) for point 3's `ephemeral` row** — a definition can
+  no longer declare a lifetime: `ephemeral` left the accepted frontmatter, a file that carries `ephemeral`
+  or `lifetime` is refused by name, and a `replace` declares it on the call instead. The consequence point 3
+  accepted — a one-shot successor retiring itself and orphaning the work the replacement just moved — is
+  exactly why. The assignment precedence in points 1 and 2 and the rest of the definition matrix stand.
 
 ## Context
 

@@ -351,7 +351,7 @@ const DEFINITION_REFUSAL = {
 const MEMBER_ROW = {
   type: 'object',
   additionalProperties: false,
-  required: ['target', 'child_id', 'phase', 'generation', 'label', 'status', 'resident'],
+  required: ['target', 'child_id', 'phase', 'generation', 'label', 'status', 'resident', 'lifetime'],
   properties: {
     target: { type: 'string' },
     child_id: { type: 'string' },
@@ -368,8 +368,18 @@ const MEMBER_ROW = {
     note: { type: 'string' },
     replaced: { type: 'string' },
     predecessor_retired: { type: 'boolean' },
-    // True on a one-shot member that will retire itself once its turn ends (P4-01, ADR 0013).
+    // The lifetime the spawn call declared: `standing` (a role, never retired automatically, and a
+    // judgement call the person answers) or `one-shot` (created for one piece of work, retired by the
+    // lazy sweep once it has run, stopped and owns nothing). Every row carries it, because "may this
+    // member retire itself?" must be answerable from the read that shows the member (ADR 0026).
+    lifetime: { type: 'string', enum: ['standing', 'one-shot'] },
+    // The record's own field, reported beside `lifetime`: every stored record already carries it and
+    // ADR 0013 named it. A message no longer clears it (ADR 0026).
     ephemeral: { type: 'boolean' },
+    // Advice, never a conversion: a one-shot member handed work again and again is evidence of a standing
+    // role, and only the Lead declares the new lifetime, at the next spawn (ADR 0026).
+    retasked: { type: 'boolean' },
+    retasked_note: { type: 'string' },
     // The route this member was started on, and where that route came from (ADR 0024). Absent only on a
     // record written before v0.22.0 or on one whose resolution produced nothing to record, which is a
     // member the plugin inherited the route for without ever knowing it.
@@ -380,9 +390,15 @@ const MEMBER_ROW = {
     // the one call that fixes it.
     route_stale: { type: 'boolean' },
     route_note: { type: 'string' },
-    // Present on a result whose sweep retired finished ephemeral members; absent otherwise.
+    // Present on a result whose sweep retired finished one-shot members; absent otherwise.
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
+    // Present when the sweep wanted to retire a one-shot member that still owns open work: the board is a
+    // veto, so the member stayed and the rows that stopped it are named, with the one call that clears
+    // each (ADR 0026). `blocked` counts members, `blocking_tasks` lists the row ids.
+    blocked: { type: 'integer' },
+    blocking_tasks: { type: 'array', items: { type: 'string' } },
+    blocking_note: { type: 'string' },
     // What a `replace` did to the predecessor's open tasks, and what a spawn-time sweep left unowned.
     // They are declared here because `spawn_member` answers with this row: a property the operation
     // returns but this schema does not declare is rejected by the host when the tool returns, which
@@ -565,6 +581,12 @@ const MEMBER_LIST_VALUE = {
     // which (P2-09, ADR 0017). Both absent when nothing was swept or the swept members owned nothing.
     unowned: { type: 'integer' },
     unowned_tasks: { type: 'array', items: { type: 'string' } },
+    // On a read whose sweep was stopped by the board veto: how many one-shot members stayed because they
+    // still own open work, the row ids that blocked them, and the sentence naming the call that clears
+    // each (ADR 0026). All three absent when the veto blocked nothing.
+    blocked: { type: 'integer' },
+    blocking_tasks: { type: 'array', items: { type: 'string' } },
+    blocking_note: { type: 'string' },
   },
 }
 
@@ -604,6 +626,15 @@ const RETIRE_VALUE = {
     trash_path: { type: 'string' },
     // How many older artifacts the per-Lead trash cap removed in this same call; 0 in every other case.
     pruned: { type: 'integer' },
+    // The lifetime the member had. A retirement that happened answers it, and the consent refusal repeats
+    // `standing` so the caller can see which rule stopped it (ADR 0026).
+    lifetime: { type: 'string', enum: ['standing', 'one-shot'] },
+    // Present only on the refusal a standing member's retirement answers with: the sentence to put to the
+    // person, the open rows it still owns, and the assignment it carries — everything the question needs,
+    // and nothing was retired when it is returned (ADR 0026).
+    question: { type: 'string' },
+    owns_tasks: { type: 'array', items: { type: 'string' } },
+    assignment: { type: 'string' },
     // Present when another generation of the stale target's name is live now; names that holder.
     current_holder: CURRENT_HOLDER,
     // What the retirement did to the member's open tasks: `transferred` to the successor a replacement
@@ -613,7 +644,8 @@ const RETIRE_VALUE = {
     transferred_tasks: { type: 'array', items: { type: 'string' } },
     unowned: { type: 'integer' },
     unowned_tasks: { type: 'array', items: { type: 'string' } },
-    // `already-retired` on the state matrix's no-op row; absent on the retirements that happened.
+    // `already-retired` on the state matrix's no-op row, `needs-confirmation` on the standing-member
+    // refusal; absent on the retirements that happened.
     reason: { type: 'string' },
     message: { type: 'string' },
   },
@@ -631,8 +663,12 @@ const MESSAGE_VALUE = {
     reason: { type: 'string', enum: ['retired', 'failed', 'missing'] },
     message_id: { type: 'string' },
     assignment: { type: 'string' },
-    // false when this message cleared an ephemeral member's one-shot flag (P4-01).
-    ephemeral: { type: 'boolean' },
+    // The lifetime the member still has. A message re-opens a one-shot member instead of re-declaring it,
+    // so this field never changes because of a message (ADR 0026).
+    lifetime: { type: 'string', enum: ['standing', 'one-shot'] },
+    // True when the message re-opened a one-shot member: its finished-evidence was dropped, so the next
+    // sweep leaves it alone until it has run and stopped again.
+    reopened: { type: 'boolean' },
     // Present when another generation of the stale target's name is live now; names that holder.
     current_holder: CURRENT_HOLDER,
     message: { type: 'string' },
@@ -833,7 +869,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'spawn_member',
-      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass definition to start it from a member definition committed with the project instead of describing it here. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over. Pass ephemeral: true for one-shot work: the member retires itself through the normal retirement path once it has run and stopped, so a parallel fan-out leaves the roster without one retire_member call per member. This call first sweeps members already in that state and reports the count.',
+      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass definition to start it from a member definition committed with the project instead of describing it here. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over. Declare how long the member lives with lifetime: the default, standing, is a role you expect to use again and which is never retired automatically; one-shot is a member created for one piece of work, which the lazy sweep retires by itself once it has run, stopped and owns no open task. The declaration is made on this call only — never inherited from a predecessor or a definition file — and it is what stands in for the person\'s consent when a one-shot member leaves on its own, so declare one-shot deliberately. This call first sweeps members already in that state and reports the count.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -851,13 +887,18 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
             type: 'string',
             description: 'Target of an existing member to retire in the same call, such as reviewer. The successor starts first and the predecessor is retired second, so a failed start leaves the predecessor untouched; a failed retirement is reported as predecessor_retired: false. An already-retired target is accepted, and its tombstone supplies the brief.',
           },
+          lifetime: {
+            type: 'string',
+            enum: ['standing', 'one-shot'],
+            description: 'How long this member lives, declared once and only on this call. standing (the default) is a division of labour you expect to use again: it is never retired automatically, and retiring it needs the person\'s answer. one-shot is a member created for one piece of work in a parallel fan-out: a lazy sweep at the start of list_members or spawn_member retires it through the normal retirement path once it has run, stopped and owns no open task, with no retire_member call. A member that never started, one still running, and one that still owns an open task are never swept — the last is reported as blocked with the blocking row ids. The declaration is never inherited: a replace starts its successor as standing unless that call declares otherwise, and a definition file cannot declare a lifetime at all.',
+          },
           ephemeral: {
             type: 'boolean',
-            description: 'Default false. True marks this member as one-shot: a lazy sweep at the start of list_members or spawn_member retires it through the normal retirement path once it has run and stopped, without a retire_member call. A member that never started, and one still running, are never swept. Message it again and the flag is cleared, because that message is a declaration it is not one-shot. list_members reports ephemeral: true on such a member.',
+            description: 'Default false. The pre-v0.25 spelling of lifetime, kept working: true means one-shot and false means standing, so pass ephemeral: true exactly when you would pass lifetime: "one-shot". Passing both is accepted when they agree and refused when they do not. A message no longer clears it: message_member re-opens a one-shot member without changing its lifetime.',
           },
           definition: {
             type: 'string',
-            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under team/ in your working directory, with a flat frontmatter block declaring name and label and optionally assignment, ephemeral, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Write and version them with your own file tools. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. One field has a third source: on a replace, the assignment recorded on the member being replaced outranks the file\'s, because a successor inherits the work and not the role\'s standing sentence; the file\'s assignment applies only when the predecessor recorded none, and definition.assignment in the result says which won (call, predecessor or file). A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
+            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under team/ in your working directory, with a flat frontmatter block declaring name and label and optionally assignment, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Write and version them with your own file tools. Those are exactly the accepted fields: a definition cannot declare a lifetime, because a file describes the role and a successor must not inherit one — a frontmatter \'lifetime\' or \'ephemeral\' is refused by name with the reason. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. One field has a third source: on a replace, the assignment recorded on the member being replaced outranks the file\'s, because a successor inherits the work and not the role\'s standing sentence; the file\'s assignment applies only when the predecessor recorded none, and definition.assignment in the result says which won (call, predecessor or file). A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
           },
           spawn_options: {
             type: 'object',
@@ -912,6 +953,9 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.ephemeral !== undefined && typeof args.ephemeral !== 'boolean') {
           throw new Error('spawn_member: ephemeral must be a boolean')
         }
+        if (args.lifetime !== undefined && args.lifetime !== 'standing' && args.lifetime !== 'one-shot') {
+          throw new Error('spawn_member: lifetime must be "standing" or "one-shot"')
+        }
         const options = args.spawn_options
         if (options !== undefined) {
           if (options === null || typeof options !== 'object' || Array.isArray(options)) {
@@ -961,6 +1005,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           prompt: args.prompt,
           assignment: args.assignment,
           replace: args.replace,
+          lifetime: args.lifetime,
           ephemeral: args.ephemeral,
           definition: args.definition,
           cwd: options?.cwd,
@@ -974,7 +1019,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, ephemeral: true on a one-shot member that will retire itself, live state and, while resident, context pressure. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first retires every ephemeral member whose turn has ended — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1033,7 +1078,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A member is a division of labour, not a task: retirement answers "this role is not needed any more", never "this piece of work is finished" — a member that completed one piece of work may be needed again next round, and an idle member between rounds is not a candidate. When that is a judgement call rather than a decision already made, ask the person before retiring. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
+      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A member is a division of labour, not a task: retirement answers "this role is not needed any more", never "this piece of work is finished" — a member that completed one piece of work may be needed again next round, and an idle member between rounds is not a candidate. A member whose lifetime is standing is therefore not retired by this call alone: ending a role is the person's decision, so the first call retires nothing and answers retired: false with reason "needs-confirmation", a question to put to the person, and the open rows the member still owns. Put that question to them, then call again with confirmed set to their answer, quoted verbatim — their sentence, not your summary and not a boolean, because the plugin has no surface of its own and the quoted words are the only consent it can check. A one-shot member already had that consent when you declared it one-shot, so it retires in one call; so does a successor started by spawn_member with replace, because a replacement continues the role rather than ending it. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1041,6 +1086,10 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         properties: {
           target: { type: 'string', description: 'Member target from list_members, such as reviewer or reviewer-g2.' },
           reason: { type: 'string', description: 'Optional short reason, stored on the record.' },
+          confirmed: {
+            type: 'string',
+            description: 'The person\'s answer, quoted verbatim, required to retire a member whose lifetime is standing. Set it to the sentence they actually said, not to "yes" and not to a paraphrase: it is echoed back in the result and is what this plugin treats as the consent for ending a role. Omit it on the first call — that call answers reason "needs-confirmation" with the question to ask — and omit it entirely for a one-shot member.',
+          },
         },
       },
       output: { schema: RETIRE_VALUE },
@@ -1049,6 +1098,9 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         requireLead(ctx, caller, 'retire_member')
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('retire_member: target must be a non-empty string')
+        }
+        if (args.confirmed !== undefined && typeof args.confirmed !== 'string') {
+          throw new Error('retire_member: confirmed must be a string carrying the person\'s words')
         }
         const table = await store
         return await retireMember({
@@ -1060,6 +1112,11 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           hooks,
           target: args.target,
           reason: args.reason,
+          confirmed: args.confirmed,
+          // This is the model's own decision to end a role, which is the one retirement the person has not
+          // already consented to. A replacement continues the role and the sweep acts on a member declared
+          // one-shot, so both leave this false (ADR 0026).
+          consentRequired: true,
           trashLimit,
         })
       },
@@ -1096,7 +1153,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'message_member',
-      description: 'Send one message to a live member or adopted subagent from list_members, and optionally replace the assignment recorded for it. A running child receives the message at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. Messaging an ephemeral member clears its one-shot flag, so it will not be swept — use that when the work is not over after all. Success means the inbox accepted the message, not that the member has processed it.',
+      description: 'Send one message to a live member or adopted subagent from list_members, and optionally replace the assignment recorded for it. A running child receives the message at its next step; an unloaded continuable child is resumed from its own Session, while a one-shot subagent cannot be resumed. A retired member cannot be messaged. A message never changes the lifetime a spawn declared: messaging a one-shot member re-opens it — the evidence the sweep relies on is dropped, so the next sweep leaves it alone until it has run and stopped again — and the member stays one-shot. A one-shot member messaged at least twice is reported on its list_members row as probably standing, but nothing converts it: only the next spawn can declare another lifetime. Success means the inbox accepted the message, not that the member has processed it.',
       parameters: {
         type: 'object',
         additionalProperties: false,

@@ -60,6 +60,37 @@ export const TASK_STATUS = {
 }
 
 /**
+ * How long a member lives, as the spawn call declares it (ADR 0026).
+ *
+ * A member is a division of labour, not a task, and the two lifetimes are the two answers a Lead can
+ * give to "is this a role or one piece of work?":
+ *
+ *   - `standing` — a role the Lead expects to use again. It is never retired automatically, and
+ *     `retire_member` on it asks the person first;
+ *   - `one-shot` — the parallel fan-out: a member created for one piece of work, which a lazy sweep
+ *     retires by itself once it has run, stopped and still owns nothing.
+ *
+ * The declaration is the person's prior consent, so it is made once, on the spawn call, and is never
+ * inherited: not from a predecessor on a `replace`, and not from a definition file — a file that
+ * declared it would make every successor of a replacement inherit it, and a `replace` would then hand
+ * over work and self-retire, orphaning exactly what it had just received (ADR 0026).
+ */
+export const LIFETIME = {
+  standing: 'standing',
+  oneShot: 'one-shot',
+}
+
+/**
+ * How many re-tasks of a one-shot member are evidence that it is really a standing role.
+ *
+ * The advice is never a conversion: the plugin only reports it, and the Lead declares the new lifetime
+ * at the next spawn (ADR 0026). Two is the smallest number that is not the single follow-up message any
+ * member may get, so it is the threshold for both signals the record can prove — accepted messages and
+ * assignment changes written after the spawn.
+ */
+export const RETASK_MIN = 2
+
+/**
  * Where the provider and model a member carries came from (ADR 0024).
  *
  * `caller` — the spawn call named the route (directly, or through a member definition), so the plugin
@@ -489,6 +520,15 @@ function parseRoster(value) {
     if (member.startedAt !== undefined && (typeof member.startedAt !== 'string' || member.startedAt === '')) {
       throw new Error('roster member startedAt must be a non-empty string')
     }
+    // The v0.25.0 pair, on a one-shot member only: how many messages it was sent and how many
+    // assignments were written for it after the spawn. They are the evidence `list_members` advises on,
+    // and they are counted rather than inferred, because the assignment field itself keeps only the last
+    // value. Optional, so every earlier record loads unchanged.
+    for (const field of ['messageCount', 'assignmentCount']) {
+      if (member[field] !== undefined && (!Number.isSafeInteger(member[field]) || member[field] < 0)) {
+        throw new Error(`roster member ${field} must be a non-negative integer`)
+      }
+    }
     // The v0.22.0 field, checked on load like `ephemeral`: optional, so every record written before it
     // exists loads unchanged, but a record that carries one must carry the shape the read reasons about.
     // Only the structure is checked here — a `provider` or `model` an older profile wrote as something
@@ -661,6 +701,48 @@ export function currentHolderOf(roster, target) {
 }
 
 /**
+ * The lifetime one stored member has.
+ *
+ * `ephemeral: true` is the durable spelling and the whole fact: a record with no flag is standing, which
+ * is what every member written before either word existed is. The field is not renamed on the record,
+ * because it is already in every roster and in ADR 0013 — the vocabulary changed, not the bytes
+ * (ADR 0014, ADR 0026).
+ * @param {object|undefined} member - one stored member record.
+ * @returns {string} `standing` or `one-shot`.
+ */
+export function lifetimeOf(member) {
+  return member?.ephemeral === true ? LIFETIME.oneShot : LIFETIME.standing
+}
+
+/**
+ * What a spawn call declared its member's lifetime to be, from either spelling.
+ *
+ * `lifetime` is the vocabulary; `ephemeral: true` is the pre-v0.25 spelling of the same declaration and
+ * keeps working, because ADR 0013 named it and every stored record carries it. A call that passes both
+ * consistently is accepted; one that passes them inconsistently is refused rather than resolved, because
+ * a tie-break would make one of the two fields a silent lie.
+ *
+ * Nothing else is consulted. A `replace` does not inherit the predecessor's lifetime, and a definition
+ * file cannot declare one, so an omitted declaration is `standing` — the safe side, because only a
+ * one-shot is ever retired without asking (ADR 0026).
+ * @param {{lifetime?: string, ephemeral?: boolean}} call - the spawn call's two fields.
+ * @param {string} source - operation name, so a refusal names what refused.
+ * @returns {string} `standing` or `one-shot`.
+ */
+export function declaredLifetime({ lifetime, ephemeral }, source = 'spawn_member') {
+  if (lifetime !== undefined && lifetime !== LIFETIME.standing && lifetime !== LIFETIME.oneShot) {
+    throw new Error(`${source}: lifetime must be "${LIFETIME.standing}" or "${LIFETIME.oneShot}"`)
+  }
+  const fromFlag = ephemeral === undefined ? undefined : ephemeral === true ? LIFETIME.oneShot : LIFETIME.standing
+  if (lifetime !== undefined && fromFlag !== undefined && lifetime !== fromFlag) {
+    throw new Error(
+      `${source}: lifetime "${lifetime}" and ephemeral: ${ephemeral} declare different lifetimes; pass one of them, or make them agree`,
+    )
+  }
+  return lifetime ?? fromFlag ?? LIFETIME.standing
+}
+
+/**
  * Reserve the next generation of a base name and return the provisioning record.
  * The caller persists this record before starting the child, so a crash leaves a visible reservation
  * rather than an invisible child.
@@ -669,11 +751,11 @@ export function currentHolderOf(roster, target) {
  * @param label - responsibility text shown to the model.
  * @param assignment - optional already-validated assignment; it is the durable statement of the work a
  *   successor is briefed with (see `checkAssignment`).
- * @param ephemeral - true to record the member as one-shot: a lazy sweep retires it once it has run and
- *   stopped (ADR 0013). Only `true` is stored, so a record for a normal member is byte-identical to one
- *   written before this flag existed.
+ * @param oneShot - true to record the member as one-shot: a lazy sweep retires it once it has run,
+ *   stopped and still owns no open task (ADR 0013, ADR 0026). Only `true` is stored, so a record for a
+ *   standing member is byte-identical to one written before this flag existed.
  */
-export function planMember(roster, baseName, label, assignment, ephemeral = false) {
+export function planMember(roster, baseName, label, assignment, oneShot = false) {
   checkMemberName(baseName, 'planMember')
   const trimmedLabel = checkLabel(label, 'planMember')
   const used = roster.members.filter((member) => member.name === baseName)
@@ -688,7 +770,7 @@ export function planMember(roster, baseName, label, assignment, ephemeral = fals
     createdAt: new Date().toISOString(),
   }
   if (typeof assignment === 'string' && assignment.length > 0) planned.assignment = checkAssignment(assignment, 'planMember')
-  if (ephemeral === true) planned.ephemeral = true
+  if (oneShot === true) planned.ephemeral = true
   const target = targetOf(planned)
   const live = roster.members.find((member) => targetOf(member) === target && ADDRESSABLE.has(member.phase))
   if (live !== undefined) throw new Error(`a live member already uses the target "${target}"`)
