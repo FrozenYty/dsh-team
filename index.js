@@ -34,8 +34,11 @@
  * call also passes wins over the file's, which the result reports field by field (`definitions.js`,
  * ADR 0018). One field has a third source: on a `replace` the predecessor's recorded assignment
  * outranks the file's, so a successor is briefed with the work rather than the role's standing sentence
- * (ADR 0009, ADR 0019). The plugin reads those files and never writes one — version control and an
- * editor are the better tool — and the roster stays runtime state.
+ * (ADR 0009, ADR 0019). The *team* scope has a file too: `team/team.md`, whose body is the handoff
+ * template. It wins over the template stored with `handoff_template` and over the built-in shape, the
+ * read form reports which source is in effect, and a store or clear is refused while the file exists
+ * (ADR 0021). The plugin reads those files and never writes one — version control and an editor are the
+ * better tool — and the roster stays runtime state.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -532,12 +535,19 @@ const STOP_VALUE = {
 const HANDOFF_TEMPLATE_VALUE = {
   type: 'object',
   additionalProperties: false,
-  required: ['template', 'stored', 'valid', 'message'],
+  required: ['template', 'stored', 'valid', 'source', 'message'],
   properties: {
-    // The stored template, or '' when this Lead has none.
+    // The effective template: the team file's body, the stored one, or '' when neither exists.
     template: { type: 'string' },
     stored: { type: 'boolean' },
     valid: { type: 'boolean' },
+    // Which of the three sources is in effect: the team file, the stored template, or the built-in.
+    source: { type: 'string', enum: ['file', 'stored', 'builtin'] },
+    // The team file's path, present whenever one exists — usable or not — so a refusal a write answers
+    // with names the file to edit.
+    file: { type: 'string' },
+    // Present only when a team file exists and is not a usable template: what is wrong, and its line.
+    file_problem: { type: 'string' },
     // Present only on a stored template that fails validation: what is wrong, and which token.
     problem: { type: 'string' },
     message: { type: 'string' },
@@ -990,7 +1000,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'handoff_template',
-      description: 'Read, store or clear this Lead\'s handoff-brief template: the shape spawn_member with replace uses to brief a successor. Omit template to read back what is stored; pass a template to validate and store it; pass an empty string to clear it and return to the built-in brief. The template belongs to this Lead\'s own roster record, so it does not affect another Lead, and a Lead that never stores one keeps the built-in brief.',
+      description: 'Read, store or clear this Lead\'s handoff-brief template: the shape spawn_member with replace uses to brief a successor. Omit template to read back the effective template and its source; pass a template to validate and store it; pass an empty string to clear it and return to the built-in brief. Three sources are tried in order: the team file team/team.md in the Lead\'s working directory, the template stored on this Lead\'s roster record, and the built-in brief. The file wins while it exists, so a store or clear call is refused with the file\'s path and the instruction to edit it; delete the file to use this tool again. A Lead that has neither gets the built-in brief.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1010,7 +1020,14 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           throw new Error('handoff_template: template must be a string')
         }
         const table = await store
-        return await handoffTemplate({ table, leadSessionId: leadSessionIdOf(caller), template: args.template })
+        return await handoffTemplate({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          leadAgent: caller,
+          signal: exec.signal,
+          template: args.template,
+        })
       },
     })))
 

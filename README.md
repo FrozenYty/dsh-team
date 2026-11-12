@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.16.0.
+- Current version: v0.19.0.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -57,9 +57,10 @@ directory did not, on purpose (ADR 0014).
   not reach; the task body's 2000-character cap, the handover injected between a board call's read and its
   write — an interleaving a live run cannot be made to produce, so the test drives the table's own
   serialized `update` hook — and the rule that a board write cannot undo a handover; `wait_members`' event
-  wiring, timeout, cancellation and no-progress paths; and the whole definition layer (v0.16.0) — reading
-  a file, the precedence report, and every refusal. A live start from a definition is the owner's install
-  check (ADR 0018).
+  wiring, timeout, cancellation and no-progress paths; the whole definition layer (v0.16.0) — reading
+  a file, the precedence report, and every refusal; and the team-file layer (v0.19.0) — the three-source
+  precedence, the store-write refusal, the placeholder fallback and the reserved filename. A live start
+  from a definition or a live team-file read is the owner's install check (ADR 0018, ADR 0021).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -89,7 +90,7 @@ that is a move rather than a deletion.
 | `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. |
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
-| `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the stored one, pass a template to store it, pass an empty string to return to the built-in. |
+| `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to store it, pass an empty string to return to the built-in. A `team/team.md` in the Lead's project wins while it exists, so a store or clear is refused with that file's path and the instruction to edit it. |
 | `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, a bounded body (what "done" means and where the work stopped), `open` or `done`, and an optional member `owner`; the open ones move with a replacement, body included. |
 
 **A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
@@ -183,6 +184,10 @@ scan — a directory past that refuses the whole scan instead of serving a parti
 guessed either: a profile that mounts no `workingDirectory` service answers `started: false` with
 `reason: "working-directory-unavailable"` and reserves no member.
 
+`team/team.md` is reserved for the team scope, not a member definition: a member may still declare
+`name: team` in another file, but the filename itself is skipped by the definition scan. That is what
+keeps one file from being reported as a broken definition on every spawn (ADR 0021).
+
 ## The lifecycle
 
 | Step | Behaviour |
@@ -229,13 +234,19 @@ what you asked (ADR 0020).
 - **The assignment is durable and capped.** `spawn_member.assignment` sets it, `message_member.assignment`
   replaces it, both capped at 1000 characters (refused, never truncated); `list_members` reports it and the
   tombstone keeps it.
-- **The brief's shape can be fixed once per Lead.** `handoff_template` stores a template that interpolates
-  `{successor}`, `{predecessor}`, `{label}`, `{assignment}` and `{task_board}`. A template that does not
-  reference `{assignment}` is refused when it is stored, because a successor that never learns what it
-  inherited has not been handed anything; an unknown placeholder is refused there too, rather than written
-  literally into a child's prompt. The built-in brief *is* the default template, rendered by the same code,
-  so a Lead that stores nothing gets exactly the words it got before, and clearing the template returns to
-  it (ADR 0015).
+- **The brief's shape can be fixed in two places, and the file wins.** Commit `team/team.md` beside the
+  member definitions, with an empty frontmatter block and the template in the body; it is the project's
+  shape, so two Leads working in one project share it. Or use `handoff_template` to store one on this
+  Lead's roster record. The order is file, then stored template, then built-in, and the read form reports
+  which one is in effect in `source`. The same placeholders apply to both — `{successor}`,
+  `{predecessor}`, `{label}`, `{assignment}` and `{task_board}` — and a template that does not reference
+  `{assignment}` is refused, because a successor that never learns what it inherited has not been handed
+  anything; an unknown placeholder is refused by name, and the 1000-character template cap refuses rather
+  than truncates. While the file exists, `handoff_template` refuses a store or clear and names the file
+  to edit: the file would shadow the write, so accepting it would be a silent no-op. A bad file is
+  reported in `file_problem` and does not become the effective template; the stored template is next,
+  and the built-in shape is last. A Lead with neither gets exactly the words it got before (ADR 0015,
+  ADR 0021).
 
 ## Ephemeral members
 
@@ -419,7 +430,7 @@ whole local gate.
 | `index.js` | Host plugin entry: tool definitions, argument validation, Lead-only authority check |
 | `actions.js` | The roster operations behind the tools |
 | `roster.js`, `trash.js` | Durable roster (phases, name generations, adoption, migration) and the session trash with its restore and retention cap |
-| `definitions.js` | Member definitions: the flat-frontmatter parser, the `team/` scan and its caps, and the working directory they are resolved from |
+| `definitions.js` | The `team/` layer: the flat-frontmatter parser, the member-definition scan and its caps, the team file's handoff template, and the working directory both are resolved from |
 | `host-hooks.js` | Projection filter and roster slot credit |
 | `tests/`, `scripts/check.mjs` | Unit tests, and the repository checks CI runs |
 | `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `.github/` | The bundle, its CI workflow and templates |

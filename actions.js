@@ -18,7 +18,7 @@
 
 import { join } from 'node:path'
 
-import { loadDefinition } from './definitions.js'
+import { loadDefinition, loadTeamTemplate } from './definitions.js'
 import {
   HANDOFF_BRIEF_MAX,
   PHASE,
@@ -245,43 +245,115 @@ export function handoffPrompt({ successor, predecessor, prompt, template, tasks 
   return `${body}\nYour task: ${prompt}`
 }
 
-/** Project one stored handoff template into the tool's result. */
-function describeHandoffTemplate(stored) {
+/** The file problem as one sentence for the read answer, with its line when the parser had one. */
+function fileProblemText(file) {
+  if (file?.problem === undefined) return undefined
+  const { problem: text, line } = file.problem
+  return line === undefined ? text : `line ${line}: ${text}`
+}
+
+/**
+ * Why a store write is refused while the team file exists.
+ *
+ * The file wins over the stored template, so a write would be accepted and then have no effect — the
+ * failure this refusal exists to prevent. The sentence names the file and the edit that does change the
+ * brief, and it is the same for setting and clearing.
+ * @param {{path: string}} file - the team file that exists.
+ * @returns {string} the refusal message.
+ */
+function teamFileWriteRefusal(file) {
+  return `handoff_template: the team file ${JSON.stringify(file.path)} is in effect, so a stored template would be shadowed and this write would change nothing. Edit that file to change the brief, or remove it to use handoff_template again.`
+}
+
+/**
+ * Resolve the template a replacement will actually compose from: the team file, then the stored
+ * template, then the built-in shape.
+ *
+ * The file is read through the definition layer's directory resolution, so there is one path story for
+ * `team/` and one parser for its frontmatter. An unreadable or invalid file is reported by the read
+ * form, but it cannot be the effective template: its replacement is the stored template when that one
+ * is usable, and the built-in shape otherwise. That is the same fallback a stored value that no longer
+ * validates already gets, and it is what keeps a typo in a file from reaching a child as literal text.
+ * @param {{ctx?: object, leadAgent?: object, stored?: unknown, signal?: AbortSignal}} request
+ * @returns {Promise<{source: 'file'|'stored'|'builtin', template?: string, file: object, stored: unknown}>}
+ */
+async function resolveHandoffTemplate({ ctx, leadAgent, stored, signal }) {
+  const file = ctx === undefined
+    ? { found: false }
+    : await loadTeamTemplate({ ctx, agent: leadAgent, signal })
+  if (file.found === true && typeof file.template === 'string') {
+    return { source: 'file', template: file.template, file, stored }
+  }
+  const usable = usableHandoffTemplate(stored)
+  if (usable !== undefined) return { source: 'stored', template: usable, file, stored }
+  return { source: 'builtin', template: undefined, file, stored }
+}
+
+/** Project one resolved handoff template into the tool's result. */
+function describeHandoffTemplate({ source, template, file, stored }) {
   const problem = handoffTemplateProblem(stored)
+  const fileProblem = fileProblemText(file)
   const value = {
-    template: typeof stored === 'string' ? stored : '',
+    // The effective template: the file's body, the stored one, or the built-in shape's empty answer.
+    template: typeof template === 'string' ? template : (typeof stored === 'string' ? stored : ''),
+    // `stored` and `valid` keep their old meaning: a value on this Lead's roster record, and whether
+    // that value passes the content rules. `source` says which of the three sources is in effect.
     stored: typeof stored === 'string',
     valid: stored === undefined || problem === undefined,
+    source,
   }
   if (!value.valid) value.problem = problem
-  value.message = !value.stored
-    ? 'No handoff template is stored; spawn_member with replace composes the built-in brief.'
-    : value.valid
-      ? 'This Lead\'s replacements compose their brief from the stored template.'
-      : 'The stored template does not pass validation, so replacements use the built-in brief. Store a corrected template, or pass an empty string to clear it.'
+  if (file?.found === true) {
+    value.file = file.path
+    if (fileProblem !== undefined) value.file_problem = fileProblem
+  }
+  value.message = source === 'file'
+    ? `The team file ${JSON.stringify(file.path)} is in effect: replacements compose the brief from its body, and the stored template is shadowed. handoff_template refuses a write while this file exists; edit it instead.`
+    : source === 'stored'
+      ? fileProblem === undefined
+        ? 'This Lead\'s replacements compose their brief from the stored template.'
+        : `This Lead's replacements compose their brief from the stored template. The team file ${JSON.stringify(file.path)} is not usable (${fileProblem}), so it does not shadow the stored template; edit it or remove it to make it the source.`
+      : fileProblem === undefined
+        ? !value.stored
+          ? 'No handoff template is stored; spawn_member with replace composes the built-in brief.'
+          : 'The stored template does not pass validation, so replacements use the built-in brief. Store a corrected template, or pass an empty string to clear it.'
+        : `No usable handoff template is in effect: replacements compose the built-in brief. The team file ${JSON.stringify(file.path)} is not usable (${fileProblem}). Edit that file to change the brief.`
   return value
 }
 
 /**
  * Read, store or clear one Lead's handoff-brief template.
  *
- * The template is a per-Lead preference, so this is the one operation here that needs no live Lead
- * Agent: it reads and writes one field of that Lead's roster record. Called with no `template` it
- * reports what is stored; with an empty (or whitespace-only) string it clears the field, which returns
- * that Lead to the built-in composition; with a template it validates and stores it, so two Leads never
- * share one.
+ * The effective template has three sources, in this order: the team-scope file `team/team.md` in the
+ * Lead's project, the stored template on this Lead's roster record, and the built-in brief. The read
+ * form reports the source it used. A store write is refused while the file exists — a silent no-op is
+ * the failure to prevent, because the model would believe the brief had changed while the file still
+ * won — and clearing follows the same rule.
  *
  * The stored value is re-checked on read. The storage facility validates every record when a domain
  * opens, so only its type can be checked there without risking the whole roster; the content rules are
  * reported here (`valid`, `problem`) instead of being thrown away, and the composition falls back to the
- * built-in rather than writing the offending token into a child's prompt.
+ * built-in rather than writing the offending token into a child's prompt. The file's content goes
+ * through the same `handoffTemplateProblem` check where it is parsed.
  *
- * @param {{table: object, leadSessionId: string, template?: string}} request
+ * @param {{ctx?: object, table: object, leadSessionId: string, leadAgent?: object, signal?: AbortSignal, template?: string}} request
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
-export async function handoffTemplate({ table, leadSessionId, template }) {
-  if (template === undefined) return describeHandoffTemplate(readRoster(table, leadSessionId).handoffTemplate)
+export async function handoffTemplate({ ctx, table, leadSessionId, leadAgent, signal, template }) {
+  const roster = readRoster(table, leadSessionId)
+  if (template === undefined) {
+    return describeHandoffTemplate(await resolveHandoffTemplate({
+      ctx,
+      leadAgent,
+      stored: roster.handoffTemplate,
+      signal,
+    }))
+  }
   if (typeof template !== 'string') throw new Error('handoff_template: template must be a string')
+  const file = ctx === undefined
+    ? { found: false }
+    : await loadTeamTemplate({ ctx, agent: leadAgent, signal })
+  if (file.found === true) throw new Error(teamFileWriteRefusal(file))
   if (template.trim().length === 0) {
     await updateRoster(table, leadSessionId, (current) => {
       const next = { ...current }
@@ -289,14 +361,14 @@ export async function handoffTemplate({ table, leadSessionId, template }) {
       return next
     })
     return {
-      ...describeHandoffTemplate(undefined),
+      ...describeHandoffTemplate({ source: 'builtin', template: undefined, file, stored: undefined }),
       message: 'The handoff template was cleared; replacements use the built-in brief again.',
     }
   }
   const checked = checkHandoffTemplate(template, 'handoff_template')
   await updateRoster(table, leadSessionId, (current) => ({ ...current, handoffTemplate: checked }))
   return {
-    ...describeHandoffTemplate(checked),
+    ...describeHandoffTemplate({ source: 'stored', template: checked, file, stored: checked }),
     message: 'Handoff template stored. spawn_member with replace composes the successor brief from it; read it back by omitting template, and clear it with an empty string.',
   }
 }
@@ -929,13 +1001,18 @@ export async function spawnMember({
   const inherited = predecessor === undefined
     ? []
     : [...openTasksOf(roster, replace), ...unownedOpenTasks(roster)]
+  // The team file wins over the stored template, and both go through the same renderer. The file is read
+  // before the reservation and before the start, so a refusal it produces changes nothing.
+  const handoff = predecessor === undefined
+    ? undefined
+    : await resolveHandoffTemplate({ ctx, leadAgent: caller, stored: roster.handoffTemplate, signal })
   const text = predecessor === undefined
     ? prompt
     : handoffPrompt({
       successor: successorTarget,
       predecessor,
       prompt,
-      template: usableHandoffTemplate(roster.handoffTemplate),
+      template: handoff?.template,
       // The board travels as ids and titles, bounded: an owned board is what makes the brief carry the
       // work instead of a pointer to someone else's (P2-09, ADR 0017).
       tasks: inherited,

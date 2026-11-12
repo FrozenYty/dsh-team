@@ -210,6 +210,29 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   injects the handover through the table's serialized `update` hook for all three actions; the live
   `task_board` call is the owner's install check.
 
+- [x] **P4-08** Team-scope settings in a versioned file (v0.19.0).
+  Done when a Lead's handoff template can come from one optional file beside the member definitions,
+  that file wins over the stored template and the built-in, the read form reports which of the three is
+  in effect, a store or clear through the tool is refused while the file exists with the file named,
+  the file's body is held to the placeholder rules, the reserved filename cannot be mistaken for a
+  member definition, and a profile with no file renders the built-in brief byte for byte.
+  Delivered (ADR 0021): the file is `<Lead working directory>/team/team.md`, resolved through the same
+  `workingDirectory` service and `team/` join as a member definition, and parsed by the same frontmatter
+  reader with no accepted field. Its body is the template, so the placeholder vocabulary, the required
+  `{assignment}`, the unknown-token refusal and the 1000-character cap are the ones `handoff_template`
+  already enforces; a file that fails them is reported in `file_problem` and falls through to the
+  stored template, then the built-in. `team.md` is skipped by the definition scan, so a member may
+  declare `name: team` in another file but the reserved filename is never a definition. The read answer
+  keeps `template`, `stored`, `valid` and `problem`, adds `source` (`file`, `stored` or `builtin`),
+  `file` and `file_problem`, and stays inside its declared schema. A set or clear while the file exists
+  answers `handoff_template: the team file "<path>" is in effect, so a stored template would be
+  shadowed and this write would change nothing. Edit that file to change the brief, or remove it to use
+  handoff_template again.` Tasks remain on the Lead's roster record: they are lifecycle state written
+  with a tombstone, unlike a template, which is a shape preference the project can version. The suite
+  pins the file-over-store precedence, the refusal for both forms, the placeholder fallback, the
+  reserved name, the no-file built-in brief and the unresolved-directory path; the live read/write stays
+  the owner's install check.
+
 ### P3 — Settings panel (cancelled in v0.4)
 
 > **Cancelled by [ADR 0008](docs/adr/0008-model-only-surface.md).** The panel and its HTTP bridge were
