@@ -326,7 +326,10 @@ still owns (`owns_tasks`) and the assignment it carries. Put that question to th
 because this plugin has no human surface of its own (ADR 0008), so a flag the model sets about itself asks
 nobody. The quoted sentence is echoed back into the result, where it stays in the transcript. A one-shot
 member is exempt, because declaring it one-shot was the person's prior consent, and so is a successor a
-replacement installs, because a replacement continues the role rather than ending it.
+replacement installs, because a replacement continues the role rather than ending it. A record that never
+became a role is exempt too: one in `failed` never started, and one already `retired` has no life left to
+end, so removing it is cleanup rather than a question. A member that actually ran stays `active`, so
+retiring it still needs the quoted words.
 
 **One-shot is the fan-out case.** The plugin receives no completion event, so the sweep that retires such a
 member runs at the start of `list_members` and `spawn_member`, and it requires three things at once: the

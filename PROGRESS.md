@@ -1670,3 +1670,29 @@
   ADR 0014 and the three `cordis.patch.yml` entries were not touched, and the locale pair is unchanged
   because neither file holds a tool description.
 - **Version.** `0.25.0`: a declared lifetime and a consent gate are behaviour, not a comment.
+
+## 2026-11-12 — a record that never became a role needs no consent (v0.25.0, review follow-up)
+
+- **The owner overruled the first reading, and the record above is what it said at the time.** The v0.25.0
+  entry argues that a `failed` record is *not* exempt, on the grounds that the rule is about the declared
+  lifetime and not about the phase. That reading charges a question for removing a reservation that never
+  held a role, so it is now the narrower one: a record in `failed` never started, and one already `retired`
+  has no life left to end, so neither goes through the gate at all.
+- **What did not change.** A `standing` member that actually ran is `active` while it lives, so retiring it
+  still needs the person's words quoted; a one-shot member and a `replace` successor are untouched; and a
+  reserved record whose child published is reconciled to `active` by the read, so it is asked about rather
+  than assumed. The gate is one condition on two phases, not a second rule.
+- **Documents.** ADR 0026 point 6 states the decision and says why the broader reading was rejected;
+  `docs/architecture-en.md` §4.3.1 and §4.5 and the Chinese pair match, as do the README pair's exemption
+  sentences, the `retire_member` description in `index.js`, and P4-13 in `PLAN.md`.
+- **How it was verified.** `tests/lifetime.test.mjs` gains the case: a `standing` + `failed` record retires
+  in one call while a `standing` + `active` record still refuses and a reserved record whose child published
+  still refuses. The test was proved able to fail — with the `failed` half of the exemption removed, it fails
+  at `a failed record is removed without a question` (`false !== true`); restored, green, and the file hashed
+  `1899565E2AE8F03DA130ABD05EDDD48A19151545BAE0AE54834CD06755C96830` before and after. `tests/entry.test.mjs`
+  adds the required-field proof: an adopted member and a stored record written before v0.25.0 both answer
+  `lifetime: "standing"` through the real `list_members` and against its declared schema.
+- **The required-field question, answered.** `lifetime` stays required because `memberRow` sets it
+  unconditionally from `lifetimeOf`, which answers `standing` for any record without `ephemeral: true` — so
+  the two paths that could have omitted it (an adopted member, a record older than v0.25.0) are exactly the
+  two the new entry test covers, through the real tool rather than the operation.

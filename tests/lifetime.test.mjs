@@ -40,6 +40,10 @@ function fakeCtx() {
     finish(childId) {
       liveIds.delete(childId)
     },
+    /** A reserved or messaged child that is now resident, which is what the reconciliation reads. */
+    wake(childId) {
+      liveIds.add(childId)
+    },
     started,
     drained,
     sent,
@@ -397,15 +401,49 @@ test('a one-shot member, a replacement and a tombstone need no confirmation', as
   assert.equal(replaced.predecessor_retired, true)
   assert.equal(memberNamed(table, 'keeper').phase, PHASE.retired)
   assert.equal(memberNamed(table, 'keeper', 2).phase, PHASE.active)
+})
 
-  // The rule is about the member, not the phase: a failed standing record is still a role that ends on
-  // the person's words rather than on a tidy-up nobody agreed to.
-  const failed = { ...planMember({ leadSessionId: 'lead-1', members: readRoster(table, 'lead-1').members }, 'broken', 'Broken', undefined), phase: PHASE.failed }
-  await updateRoster(table, 'lead-1', (current) => ({ ...current, members: [...current.members, failed] }))
-  const refused = await retireMember(asTool(ctx, table, { target: 'broken' }))
+test('a record that never became a role needs no confirmation, and one that did still does', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+
+  // A failed standing record never started: there is no role to ask about, so cleanup is one call.
+  const failed = {
+    ...planMember({ leadSessionId: 'lead-1', members: [] }, 'broken', 'Broken', undefined),
+    phase: PHASE.failed,
+  }
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [failed] }))
+  const cleaned = await retireMember(asTool(ctx, table, { target: 'broken' }))
+  assert.equal(cleaned.retired, true, 'a failed record is removed without a question')
+  assert.equal(cleaned.lifetime, LIFETIME.standing, 'the exemption is about the phase, not about one-shot')
+  assert.equal(Object.hasOwn(cleaned, 'question'), false)
+  assert.equal(memberNamed(table, 'broken').phase, PHASE.retired)
+
+  // A standing member that actually ran is `active` while it lives, so the quoted words are still required
+  // — the narrow exemption must not leak into the case consent exists for.
+  await spawnMember(call(ctx, table, { name: 'keeper', label: 'Hold the line', prompt: 'Stay.' }))
+  const refused = await retireMember(asTool(ctx, table, { target: 'keeper' }))
+  assert.equal(refused.retired, false)
   assert.equal(refused.reason, 'needs-confirmation')
-  const cleaned = await retireMember(asTool(ctx, table, { target: 'broken', confirmed: 'Yes, drop the failed one.' }))
-  assert.equal(cleaned.retired, true)
+  const answered = await retireMember(asTool(ctx, table, { target: 'keeper', confirmed: 'The release is signed off.' }))
+  assert.equal(answered.retired, true)
+
+  // The boundary the exemption must not cross, and the reconciliation that decides which side a
+  // reservation falls on. A reserved record whose child published is reconciled to `active` — it is a role
+  // now, so it is asked about; one whose child never published is reconciled to `failed`, which is the
+  // case above and needs no words.
+  const published = planMember({ leadSessionId: 'lead-1', members: readRoster(table, 'lead-1').members }, 'pending', 'Pending', undefined)
+  await updateRoster(table, 'lead-1', (current) => ({ ...current, members: [...current.members, published] }))
+  ctx.wake(published.childId)
+  const provisioned = await retireMember(asTool(ctx, table, { target: 'pending' }))
+  assert.equal(provisioned.reason, 'needs-confirmation', 'a reservation whose child published became a role')
+  assert.equal(memberNamed(table, 'pending').phase, PHASE.active, 'the read reconciled it, and it is still live')
+
+  const stranded = planMember({ leadSessionId: 'lead-1', members: readRoster(table, 'lead-1').members }, 'stranded', 'Stranded', undefined)
+  await updateRoster(table, 'lead-1', (current) => ({ ...current, members: [...current.members, stranded] }))
+  const tidied = await retireMember(asTool(ctx, table, { target: 'stranded' }))
+  assert.equal(tidied.retired, true, 'a reservation that never published a child is `failed`, so it is cleanup')
+  assert.equal(Object.hasOwn(tidied, 'question'), false)
 })
 
 // ---------------------------------------------------------------------------------------------

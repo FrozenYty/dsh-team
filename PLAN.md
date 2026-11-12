@@ -410,7 +410,9 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   `blocked`/`blocking_tasks`/`blocking_note`, `reopened`, and the refusal's `question`/`owns_tasks`/
   `assignment` — because a field the host does not see declared is dropped after the side effect. A `replace`
   and the sweep call the same retirement with `consentRequired` false: a replacement continues the role, and
-  a one-shot member's declaration already was the person's consent. The stored field is deliberately not
+  a one-shot member's declaration already was the person's consent. The gate also skips a record that never
+  became a role — `failed` never started and an already-`retired` tombstone has no life left to end — so
+  removing a reservation that never held a role stays cleanup. The stored field is deliberately not
   renamed, so every existing roster loads unchanged. `tests/lifetime.test.mjs` (replacing
   `tests/ephemeral.test.mjs`) covers the seven decisions, `tests/entry.test.mjs` proves the consent gate
   fires through the real `retire_member` tool, and `tests/definitions.test.mjs` and

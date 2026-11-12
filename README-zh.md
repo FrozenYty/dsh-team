@@ -39,7 +39,7 @@
 | `wait_members` | 阻塞当前这一轮，直到某个成员的实时状态发生变化或超时到期，并报告是哪个成员、变成了什么。有界：默认 30 秒，最长一小时。没有成员处于 running 或 provisioning 时立刻回答 `no_progress`，绝不唤醒任何人，也不等待任务板写入或消息被处理。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。消息永不改变生存期：给一次性成员发消息会重新打开它（完成证据被丢掉，结果回答 `reopened: true` 与未变的 `lifetime`），因此在它再次跑过并停下之前，清扫会放过它。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
-| `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。**生存期为 `standing` 的成员不会被一次调用退役**：它回答 `retired: false, reason: "needs-confirmation"`，带回要问本人的问题；退役发生在下一次调用上，那次调用把本人的回答放进 `confirmed`，并原样引用。一次性成员、以及由替换启动的继任者都不需要确认。 |
+| `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。**生存期为 `standing` 的成员不会被一次调用退役**：它回答 `retired: false, reason: "needs-confirmation"`，带回要问本人的问题；退役发生在下一次调用上，那次调用把本人的回答放进 `confirmed`，并原样引用。一次性成员、由替换启动的继任者、以及处于 `failed` 或已 `retired` 的记录都不需要确认。 |
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
 | `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取生效的那份及其 `source`（`file`、`stored` 或 `builtin`），传入模板即保存，传空串则回到内置版本。Lead 项目里的 `team/team.md` 只要存在就胜出，因此保存或清除都会带着该文件的路径被拒绝，并要求编辑它。 |
@@ -129,7 +129,7 @@ You review changes. Report only findings that change behaviour, with the file an
 
 成员是一份分工，不是一件任务。因此 `spawn_member` 用一个字段问清楚它能活多久：`lifetime: "standing"`（默认）是你预期还会再用的角色，`lifetime: "one-shot"` 是为一件工作创建的成员。`ephemeral: true` 是 `one-shot` 较早的拼写，仍然有效；两者同时传且相互一致时接受，相互矛盾时拒绝。`list_members` 在每一行报告 `lifetime`。
 
-**standing 成员永不自动退役。** 无论空闲多久它都不进入清扫的候选，`retire_member` 也不会凭模型一句话结束它：第一次调用什么都不退役，回答 `retired: false, reason: "needs-confirmation"`，并带回要问本人的 `question`、它仍持有的未完成任务（`owns_tasks`）与它承担的 assignment。把这个问题问过本人，再调用一次，把 `confirmed` 设成本人回答的**原话引用**——是本人的句子，不是复述，也不是布尔值：本插件没有人类界面（ADR 0008），模型自己设的标志谁也问不到。引用的那句话会原样回显进结果，因此留在记录里。一次性成员豁免，因为声明它为一次性本来就是本人的事先同意；替换启动的继任者也豁免，因为替换是在延续这个角色，而不是结束它。
+**standing 成员永不自动退役。** 无论空闲多久它都不进入清扫的候选，`retire_member` 也不会凭模型一句话结束它：第一次调用什么都不退役，回答 `retired: false, reason: "needs-confirmation"`，并带回要问本人的 `question`、它仍持有的未完成任务（`owns_tasks`）与它承担的 assignment。把这个问题问过本人，再调用一次，把 `confirmed` 设成本人回答的**原话引用**——是本人的句子，不是复述，也不是布尔值：本插件没有人类界面（ADR 0008），模型自己设的标志谁也问不到。引用的那句话会原样回显进结果，因此留在记录里。一次性成员豁免，因为声明它为一次性本来就是本人的事先同意；替换启动的继任者也豁免，因为替换是在延续这个角色，而不是结束它。从未成为角色的记录同样豁免：`failed` 的从未启动，已 `retired` 的已经没有生命可以结束，因此移除它们是清理而不是提问。真正运行过的成员相态是 `active`，退役它仍然需要本人的原话。
 
 **一次性是扇出场景。** 插件收不到完成事件，因此退役这类成员的清扫只在 `list_members` 与 `spawn_member` 调用开始时运行，并且要求三件事同时成立：成员启动过、已不驻留、且不拥有本 Lead 工作板上任何 `open` 任务。从未启动过的不会被清扫，仍在运行的不会被清扫，仍持有工作的也不会——工作板是一道**否决**，而空工作板从不是触发器，因为缺失的一行与成员的 `inactive` 状态都无法把“已完成”与“没人写下来”区分开。被否决的成员仍然列出，读取会说明原因：`blocked` 统计数量，`blocking_tasks` 列出这些行的 id，`blocking_note` 点名清除每一行的那一次 `task_board { action: "update", … }` 调用。关闭这些工作才是让一次性成员可以离开的原因；它从来不是“该成员已完成”的证明。
 

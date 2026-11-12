@@ -530,6 +530,46 @@ test('every answer conforms to the output schema its own tool declares', async (
 })
 
 /**
+ * `lifetime` is **required** on a member row, so every row a real read can produce must carry it. Two
+ * paths are the ones that could quietly not: a member adopted from the shipped roster, which this plugin
+ * never spawned, and a stored record written before v0.25.0, which has no lifetime field at all. A required
+ * field that one path omits is a result the host refuses *after* the side effect, which is the failure class
+ * v0.13.0 already paid for.
+ */
+test('every row a read can produce carries a lifetime, adopted and legacy records included', async () => {
+  const shipped = [{ role: 'teammate', id: 'child-legacy', name: 'Legacy One', description: 'Shipped before v0.25', status: 'active' }]
+  const { tools, table, lead } = harness({ listMembers: () => shipped })
+  const list = tools.get('list_members')
+
+  // A record as an older release wrote it: no `ephemeral`, no counters, no `lifetime` — and no way to gain
+  // one, because only a spawn writes the declaration.
+  await table.put('lead-1', {
+    leadSessionId: 'lead-1',
+    members: [{
+      memberId: 'm-legacy',
+      childId: 'child-legacy-stored',
+      name: 'older',
+      generation: 1,
+      phase: 'active',
+      label: 'Written before v0.25.0',
+      createdAt: '2026-11-01T00:00:00.000Z',
+    }],
+  })
+
+  const listed = await list.execute({}, { agent: lead })
+  assertMatchesSchema(listed, list.output.schema, 'list_members')
+
+  const adopted = listed.members.find((row) => row.target === 'legacy-one')
+  const stored = listed.members.find((row) => row.target === 'older')
+  assert.ok(adopted, 'the shipped member is adopted on the first read')
+  assert.ok(stored, 'the legacy record is served')
+  assert.equal(adopted.lifetime, 'standing', 'a member this plugin never spawned reads as standing')
+  assert.equal(Object.hasOwn(adopted, 'ephemeral'), false, 'and carries no one-shot flag to report')
+  assert.equal(stored.lifetime, 'standing', 'a record with no lifetime field reads as standing')
+  assert.equal(Object.hasOwn(stored, 'ephemeral'), false)
+})
+
+/**
  * The router path through the wrapper, which `actions.js` tests cannot reach: a Lead whose Session
  * exposes a current route gets a member started on that route, a result that says where the route came
  * from, and a read that flags the one member still on another API. Every answer goes through the

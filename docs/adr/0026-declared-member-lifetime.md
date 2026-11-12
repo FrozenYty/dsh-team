@@ -96,7 +96,15 @@ retirement needs the person's words, quoted. The board can only veto, never trig
    in the transcript. A one-shot member is exempt, because declaring it one-shot *was* the person's prior
    consent, and so is a `replace`, which continues the role with a new holder rather than ending it — both
    are the same `retireMember` with `consentRequired` false, so there is one retirement protocol and one
-   gate. An already-retired tombstone needs no consent: there is nothing left to end.
+   gate. **A record that never became a role is also exempt, whatever lifetime it carries**: `retired` has
+   no life left to end, and `failed` never started. Consent exists because ending a *role* is the person's
+   decision, and a record whose spawn or start did not succeed never became one, so there is nothing to ask
+   about and asking would turn cleanup into ceremony. This ADR first read the rule the other way — consent
+   for every non-retired standing record, `failed` included, on the grounds that the rule is about the
+   declared lifetime and not about the phase. That reading is the broader one and it is defensible, but it
+   charges a question for removing a reservation that never held a role, and the narrower reading above is
+   the one the owner chose. A `standing` member that actually ran is unaffected: its record is `active`
+   while it lives, so retiring it still needs the quoted words.
 7. **A message re-opens a one-shot member instead of re-declaring it.** `message_member` leaves `ephemeral`
    alone and invalidates the finished-evidence by deleting `startedAt`; a later read that observes the
    child resident again re-stamps it, so "it ran and stopped" is only ever concluded from an observation

@@ -1539,7 +1539,9 @@ export async function spawnMember({
  *   `consentRequired` is true on the model's own retirement decision — the `retire_member` tool — and
  *   false on the two internal retirements that are not a decision to end a role: a replacement continues
  *   the role with a new person, and the sweep only ever acts on a member that has already consented to
- *   leaving by being declared one-shot. `confirmed` is the person's answer, quoted verbatim (ADR 0026).
+ *   leaving by being declared one-shot. With it set, the gate still asks nobody for a one-shot member or
+ *   for a record in `retired` or `failed`, because none of the three is a role being ended. `confirmed` is
+ *   the person's answer, quoted verbatim (ADR 0026).
  *
  *   There is no `successor` parameter on purpose. A replacement hands its work over itself, through
  *   `handOverTasks`, because it is the only caller that knows the successor and it must be able to do so
@@ -1578,12 +1580,14 @@ export async function retireMember({
   // leaves this retirement's own state untouched — the record, its open work and its artifact — so the
   // question can be answered and the call simply retried. (The adoption read above it is the reconciliation
   // every roster operation performs, not part of this retirement.) A standing member's retirement is the
-  // person's decision, so the model has to carry their words back; a one-shot member already consented when
-  // the Lead declared it one-shot, and an already-retired tombstone has nothing left to consent to
-  // (ADR 0026).
+  // person's decision, so the model has to carry their words back. Three cases ask nobody: a one-shot
+  // member, whose declaration was already the person's consent; and the two phases that never became a
+  // role — `retired` has no life left to end, and `failed` never started, so there is nothing to ask about
+  // and asking would turn cleanup into ceremony (ADR 0026).
   const lifespan = lifetimeOf(member)
   const quoted = typeof confirmed === 'string' ? confirmed.trim() : ''
-  if (consentRequired && lifespan === LIFETIME.standing && member.phase !== PHASE.retired && quoted.length === 0) {
+  const becameARole = member.phase !== PHASE.retired && member.phase !== PHASE.failed
+  if (consentRequired && becameARole && lifespan === LIFETIME.standing && quoted.length === 0) {
     return consentRefusal(roster, member)
   }
 
