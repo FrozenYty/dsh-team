@@ -6,32 +6,48 @@
 
 A DeepSeek Harness profile bundle for the one thing the shipped agent-team roster cannot do: let a member
 go. A Lead can retire one, restore it from a trash it controls, or replace it with a successor that inherits
-the assignment, what was already in flight, and a pointer to the shared task board. It owns the roster and
-has no browser half.
+the assignment, what was already in flight, and a pointer to the Lead's own task board. It owns the roster
+and has no browser half.
 
 [github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
 
 ## What it is
 
-One Host plugin plus one bundle patch: the patch inserts `dsh-team` and enables the shipped
-`compaction-basic` row, and the plugin imports no Harness package, writes no session events, and keeps its
-state in a `storageDomain` domain keyed by Lead Session id (ADR 0003). The name changed in v0.10.0; the
-storage domain, the patch row id and the trash directory did not, on purpose (ADR 0014).
+One Host plugin plus one bundle patch: the patch inserts `dsh-team`, enables the shipped
+`compaction-basic` row and disables the shipped `tool-agent-team` row, and the plugin imports no Harness
+package, writes no session events, and keeps its state in a `storageDomain` domain keyed by Lead Session
+id (ADR 0003). The shipped team *service* row (`agent-team`) stays mounted, because adoption and the
+projection filter read it. The name changed in v0.10.0; the storage domain, the patch row id and the trash
+directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.13.1.
-- Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
-  predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
-  refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
-  `list_members` answered `swept: 2` with both targets, and both rows came back `retired`.
-- Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn,
-  the lost-update protection when two roster operations overlap, that a member still running is never
-  swept, the spawn options — the exact request a plain spawn sends, each forwarded field, the typed
-  refusal a Host capability gate produces, and the live holder a stale target's refusal names
-  (v0.12.0) — and the task board: its write-time caps, the transfer at every event of the matrix in
-  [docs/architecture-en.md](docs/architecture-en.md) §4.3.2, and that a member with no tasks still starts
-  from the brief it always got (v0.13.0).
+- Current version: v0.14.0.
+- **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
+  stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
+  (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
+  two ephemeral members finished, the next `list_members` answered `swept: 2` with both targets, and both
+  rows came back `retired`; the handoff template (v0.11.0) — a stored template carrying a unique marker,
+  echoed whole by the successor with its fields substituted, an unknown placeholder refused by name, a
+  template without `{assignment}` refused with the reason, and clearing it returning the built-in brief;
+  `spawn_options` (v0.12.0) — a member started in the forwarded `cwd` and reporting that exact directory,
+  a valid `agent_preset` running, an unknown preset id answering `started: false` with
+  `reason: preset-not-found` and the declared ids, an alternate model id running and replying, and a spawn
+  with no options carrying no `started_with`; the task board (v0.13.2) — a task created and owned by a
+  member, `spawn_member` with `replace` answering `transferred: 1` with the task id and the predecessor
+  retired, the successor's brief naming that id and title, and `retire_member` with no successor answering
+  `unowned: 1` with the id.
+- **Two failures only a live install could show**, each one line, each fixed inside the release that had
+  it and each now covered: v0.12.0's bundle installed and did not activate until a schema keyword was
+  removed (same version; `scripts/check.mjs` now refuses that keyword), and v0.13.0's replacement answered
+  with a result the host refused until v0.13.2 declared the fields (`tests/entry.test.mjs` now validates
+  every answer against its own tool's declared output schema).
+- **Unit-tested only**, with no live profile having exercised them: the write-time `label` and
+  `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
+  operations overlap; that a member still running is never swept; the exact request a spawn with no
+  `spawn_options` composes; the task board's write-time caps and the transfer-matrix cells a live run did
+  not reach; and, since v0.14.0, the changed tool surface itself — that the shipped roster tools are
+  absent from a Lead's list and these nine replace them, which needs the owner's install and `listTools`.
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -185,6 +201,8 @@ tree — there is no build step. Verification after installing is live calls, no
   and the successor's brief names them;
 - `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed, or
   `started: false` with a `reason` when the profile's provider or preset registry refuses it;
+- a Lead's tool list contains this plugin's tools and none of `spawn_teammate`, `send_message`,
+  `list_agents`, `interrupt_agent`, `wait_agent` or the shipped `team_task_*` tools;
 - `include:compaction-basic` reports status `schema`, not `inactive`.
 
 ## Configuration
@@ -220,6 +238,15 @@ No browser half, no HTTP bridge, no client bundle; the v0.3 Settings panel was n
 work in use, so it was removed rather than repaired (ADR 0008). `list_members` is the control surface: it
 covers the shipped roster's members and every child spawned with the shipped `subagent` tools, and the
 other six tools address any row it returns.
+
+The shipped team tool row is disabled by the patch (P2-07), so a Lead's tool list is this plugin's own
+nine tools: `spawn_teammate`, `send_message`, `list_agents`, `interrupt_agent`, `wait_agent` and the
+shipped `team_task_*` tools are gone. Each has an equivalent here — `spawn_member`, `message_member`,
+`list_members`, `stop_member` and `task_board` — except `wait_agent`: there is no blocking wait, so a Lead
+re-reads `list_members` for live state and uses `message_member` to wake a member it needs, and reads
+`inactive` as "no turn is executing", never as "finished". The shipped roster's *service* stays mounted
+(the `agent-team` row), which is why `list_members` still reports the members it created; only its tools
+are gone.
 
 ## Development
 

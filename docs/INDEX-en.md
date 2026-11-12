@@ -43,6 +43,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the handoff brief a stored template, and why is it one tool? | `docs/adr/0015-handoff-template.md` | English |
 | How does a member start with its own cwd, model or preset, and where does a stale name point now? | `docs/adr/0016-spawn-capabilities.md` | English |
 | Why does the plugin own the work board, and what moves when a member is replaced? | `docs/adr/0017-own-task-board.md` | English |
+| What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

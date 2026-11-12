@@ -5,9 +5,9 @@
  * context in place, and applies two host-side effects on retirement (`host-hooks.js`): retired members
  * are stripped from the session-list projections every client renders, and their budget is credited back
  * to the shipped roster. The member's persisted session is moved to a recoverable trash directory
- * (`trash.js`) rather than deleted. The shipped team tool row stays enabled because it owns the shared
- * task board; the roster *service* stays mounted so this plugin can adopt the members it created before
- * the switch, and can keep using its Lead membership test.
+ * (`trash.js`) rather than deleted. The bundle patch disables the shipped team tool row, whose tools
+ * this plugin replaces; the roster *service* stays mounted so this plugin can adopt the members it
+ * created and keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
  * `restore_member`, `compact_member`, `handoff_template`, `task_board`. The operation bodies live in
@@ -20,8 +20,8 @@
  * (`task_board`, ADR 0017): the retirement half re-addresses the predecessor's open tasks to the
  * successor in the same write, and the brief names them by id and title. A Lead that replaces members
  * repeatedly can fix the brief's shape once with `handoff_template` (ADR 0015); the built-in shape is
- * what a Lead that never stores one gets. The shipped team tool row stays enabled until P2-07: retiring
- * it is a separate change that needs this board to exist first.
+ * what a Lead that never stores one gets. The shipped team tool row is disabled by the bundle patch
+ * (P2-07), so these tools are the whole model-facing surface.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as

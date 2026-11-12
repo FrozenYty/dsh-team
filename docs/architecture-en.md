@@ -7,14 +7,19 @@ The decisions behind the design live in `docs/adr/`; this file describes the res
 
 ## 1. What the plugin is
 
-A DeepSeek Harness **profile bundle**. Installing it does two things:
+A DeepSeek Harness **profile bundle**. Installing it does three things:
 
 1. selects a shipped plugin row that the profile leaves disabled (`compaction-basic`);
-2. inserts one Host plugin of our own (`dsh-team`).
+2. inserts one Host plugin of our own (`dsh-team`);
+3. disables the shipped model-facing team tool row (`tool-agent-team`), whose tools this plugin replaces
+   (P2-07, §2.3, §4.5).
 
 There is no build step and no runtime dependency: the installed Harness resolves the shipped row from
 its own installation, and our entry imports nothing (ADR 0002). The bundle is Host-only: it has no
 browser half (ADR 0008).
+
+The shipped team *service* row (`agent-team`) is deliberately not touched: adoption (§4.5.1) and the
+projection filter (§2.4) read it.
 
 The plugin was renamed from `dsh-team-roster` in v0.10.0 while its storage domain (`team_roster`), its
 patch row id (`team-roster`) and its trash directory (`~/.dsh/team-roster`) kept the old spelling on
@@ -53,6 +58,8 @@ A short map, not a changelog: each release below names what it added and the sec
 - **v0.13** — the plugin owns the work, not only the member: a task board on the Lead's roster record,
   a replacement that hands the predecessor's open tasks to the successor, and a retirement without a
   successor that leaves them unowned and names them (§4.2, §4.3.2, §4.4, §4.5, ADR 0017).
+- **v0.14** — the two model-facing surfaces stop coexisting: the bundle patch disables the shipped
+  `tool-agent-team` row, so this plugin's own tools are the whole surface a Lead has (§1, §2.3, §4.5, §6).
 
 ### 2.1 Compaction is enabled
 
@@ -98,16 +105,17 @@ generation 1 is the bare base name; generation 2 and later is `<base>-g<N>`, so 
 collides with a retired name. Spawning the same base name after a retirement is the replace operation:
 `probe-a` retired, `probe-a-g2` started, both recorded.
 
-The shipped team roster and this roster coexist until P2-07 disables the shipped tool row. `list_agents`
-is the shipped tool and reports the shipped roster; `list_members` reports that roster's members **plus**
-every adopted descendant and every member this plugin spawned, so it is a superset of `list_agents`, not a
-disjoint set.
+The shipped team roster and this roster no longer present two surfaces: since v0.14.0 the patch disables
+the shipped `tool-agent-team` row (P2-07), so `list_agents` and that row's other tools are absent from a
+Lead's tool list, and `list_members` is the only list. The shipped roster's *service* is still mounted,
+which is why `list_members` still reports the members it created — as well as every adopted descendant and
+every member this plugin spawned.
 
-The **work** does not coexist: since v0.13.0 the tasks a replacement hands over are rows on this Lead's own
+The **work** never coexisted: since v0.13.0 the tasks a replacement hands over are rows on this Lead's own
 board (`task_board`), stored beside the roster record, and the plugin's handover no longer reads or points
 at the shipped board (§4.3.2). The shipped board's existing rows are not migrated and not readable by this
-plugin — a Lead that wants them on the owned board creates them again, which is why P2-07 can only disable
-the shipped row after this one exists.
+plugin — and since v0.14.0 the tools that could reach them are gone, so a Lead that wants them back
+re-creates them on the owned board (ADR 0017).
 
 ### 2.4 Host-side effects
 
@@ -201,8 +209,8 @@ that service optional and experimental enough that this plugin does not create o
 Two Harness facts shape retirement:
 
 - `drainChildren(parent, [childId])` stops one child, releases its slot and residency, but the child's
-  Session and the parent's `subagent/catalog` entry survive. A drained child stays listed by the stock
-  `list_agents` forever, which is why our own list tool exists.
+  Session and the parent's `subagent/catalog` entry survive. A drained child stays in the shipped
+  roster's own listing forever, which is why our own list tool exists.
 - `ctx.workspaceRegistry.archiveSession` hides a Session from every workspace surface. It is reversible
   and deletes nothing, which makes it the fallback for a retired member whose artifact could not be
   moved.
@@ -568,10 +576,12 @@ stored preference must not change as a side effect of creating a member (ADR 001
 tool rather than five for the same reason in reverse: five names would triple the surface for one row shape
 (ADR 0017), and its two jobs — the board and the handover — reach the model as one vocabulary.
 
-The shipped roster tools stay enabled, and they are now the *only* thing that keeps the shipped task board
-in the model's view: this plugin's board is the source of truth for its own members' work (§4.3.2), while
-the shipped board's rows are not readable by this plugin and are not migrated. Retiring the shipped tool
-row is P2-07, a separate change, and it needs this board to exist first.
+The shipped roster tools are disabled by the bundle patch (P2-07, v0.14.0), and this plugin's tools are
+the whole model-facing surface; the patch entry itself states what it removes and what it costs
+(`cordis.patch.yml`). Every shipped tool has an equivalent here except `wait_agent`, which has none: there
+is no blocking wait, so a Lead re-reads `list_members` and wakes a member with `message_member`, reading
+`inactive` as "no turn is executing". The `agent-team` service row stays mounted, because adoption and the
+projection filter read it.
 
 #### 4.5.1 Adoption is the control surface
 
@@ -615,12 +625,13 @@ and still retirable.
 - **No in-app view.** The roster is visible to the model through `list_members` only; there is no
   Settings page. The host's own subagent pickers still render what they always did, minus retired ids
   (ADR 0008).
-- **Two rosters during migration.** Until P2-07 lands, the shipped roster and ours can both be visible
-  to the model. The patch step is part of the phase gate, not an afterthought.
-- **Two boards, and only one of them is ours.** A Lead's work lives on the owned board (§4.3.2); rows on the
-  shipped board are not readable from this plugin, so a retirement neither transfers nor un-owns them. The
-  shipped row is what P2-07 removes once this board is proven, and until then a Lead has to know which board
-  it wrote a task to.
+- **The shipped roster is still the source of the members it created.** Its tools are disabled (P2-07),
+  but its service is not, because adoption and the projection filter need it: `list_members` reports those
+  members, and this plugin keeps their tombstones.
+- **The shipped task board is out of reach.** A Lead's work lives on the owned board (§4.3.2); rows on the
+  shipped board are not readable from this plugin, and the tools that could read them were disabled in
+  v0.14.0. A retirement neither transfers nor un-owns them: a Lead that wants them re-creates them on
+  `task_board` (ADR 0017).
 - **Bounded recovery, and no true erasure of the platform's record.** A retired member's Session is
   recoverable until this Lead's trash passes its cap; a pruned artifact's bytes are gone for good, and
   the record says `pruned` instead of pretending otherwise. The shipped catalog still knows the member

@@ -8,7 +8,8 @@
 #    this profile also leaves unmounted, so enabling the row alone leaves it `absent`.
 #
 # 2. Insert this bundle's own Host plugin. It owns the roster, the host-side projection filter and the
-#    roster slot credit; the shipped team tool row stays enabled because it owns the shared task board.
+#    roster slot credit; the shipped team *service* row (`agent-team`) stays mounted because adoption and
+#    the projection filter read it, while the shipped team *tool* row is disabled by entry 3 below.
 #
 #    The row id is FROZEN at `team-roster` and must never be renamed with the package. It is the override
 #    target a profile writes: that profile's own cordis.patch.yml replaces this `config` wholesale with
@@ -23,3 +24,21 @@
     - id: team-roster
       name: 'dsh-team'
       config: {}
+
+# 3. Retire the shipped team tool row (P2-07). The row publishes `spawn_teammate`, `send_message`,
+#    `list_agents`, `interrupt_agent`, `wait_agent` and the shipped `team_task_*` tools, all model-facing;
+#    this plugin serves the same Lead with `spawn_member`, `message_member`, `list_members`,
+#    `stop_member` and `task_board`. Every one of those has an equivalent here EXCEPT `wait_agent`: this
+#    plugin has no blocking wait, so a model that used to wait instead re-reads `list_members` to see who
+#    is live and calls `message_member` to wake a member it needs, and reads `inactive` as "no turn is
+#    executing", never as "finished". The cost is the row's two other products: it also owns the shipped
+#    shared task board, whose existing rows this plugin neither reads nor migrates (ADR 0017) — a Lead
+#    that wrote tasks there loses sight of them when this row goes off unless it re-creates them on
+#    `task_board` — and it publishes the shipped team-policy and Lead-identity system-prompt sections,
+#    which go with it (which is also what keeps the prompt from naming tools the Lead no longer has).
+#
+#    The `agent-team` service row is deliberately NOT touched: adoption (`list_members` reporting the
+#    members the shipped roster created) and the projection filter read that service, and disabling it
+#    would take both away as well as this plugin's own membership test.
+- id: tool-agent-team
+  disabled: true

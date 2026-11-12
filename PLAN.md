@@ -76,14 +76,20 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   live end-to-end check.
 - [x] **P2-06** The model-facing surface: `list_members`, `message_member`, `stop_member`.
   Done when every roster tool refuses a retired member with a typed reason.
-- [ ] **P2-07** (re-scoped) Retire the shipped team tool row, after an own task board exists (P2-09).
+- [x] **P2-07** (re-scoped) Retire the shipped team tool row, after an own task board exists (P2-09).
   Adoption made the shipped row unnecessary for removal, and disabling it today would remove the shared
   task board. Done when the shipped roster tools are absent from a Lead's tool list, the plugin's own
   task tools replace them, and nothing else regressed.
   **P2-09 landed in v0.13.0, so this blocker is cleared.** The plugin's own board (`task_board`) now holds
   a member's work and a replacement hands it over (§4.3.2, ADR 0017), so the shipped row is no longer the
-  only board. What remains for P2-07 is the row itself: the two rosters and the two boards coexist today
-  (§4.5), and disabling the shipped row is the change that ends the coexistence.
+  only board.
+  Delivered (v0.14.0, bundle patch): the patch overrides `tool-agent-team` with `disabled: true`, so
+  `spawn_teammate`, `send_message`, `list_agents`, `interrupt_agent`, `wait_agent` and the shipped
+  `team_task_*` tools are no longer registered; this plugin's own tools serve the same Lead. The
+  `agent-team` service row is deliberately untouched, because adoption and the projection filter read it.
+  `wait_agent` is the one tool with no equivalent here: a Lead re-reads `list_members` and wakes a member
+  with `message_member` instead of blocking. The one live check this task cannot run here is the shape of
+  a real Lead's tool list (`listTools` after an install), which is the owner's call.
 - [x] **P2-08** Live end-to-end verification of a replaced member finishing its predecessor's task.
   Done when, in one session, a member is retired, a successor starts from a handoff brief, and the
   successor completes the predecessor's task without redoing it.
@@ -201,9 +207,14 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   built-in brief is the default template rendered by the same code, so a profile that stores none is
   byte-identical, and `list_members` rows are unchanged — the read form of the tool answers. The live
   tool call and the rendered brief still need the owner's install check.
-- [ ] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
+- [x] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
   P4-03 until v0.8.0; that ID belongs to the retention task, and two tasks sharing one ID made the
   reference ambiguous.)
+  Delivered (v0.14.0): `docs/upstream-lifecycle-gap.md` states the gap — the closed phases and the
+  permanent projection failure, the absent Session-deletion API, the frozen stored names — with every
+  claim cited by file and line to this repository's own evidence, plus one short section of suggestions.
+  It is registered in both indexes. The document is the paste-ready issue text; opening the issue against
+  the experimental packages is the owner's action, not something this repository can do.
 - [x] **P4-05** Spawn capabilities: forward `cwd`, model options and an agent preset, and make a refusal
   say where a name went (v0.12.0).
   Done when `spawn_member` can start a member in its own working directory, on a chosen provider/model
