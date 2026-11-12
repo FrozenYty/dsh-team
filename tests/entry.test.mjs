@@ -96,7 +96,8 @@ test('a Lead whose Team projection cannot be read still receives and can call th
   const { tools, childTools, lead } = harness({ tryMembership: () => undefined })
   assert.ok(tools.has('list_members'), 'a live root agent is treated as the Lead')
   assert.ok(tools.has('retire_member'))
-  assert.equal(childTools.size, 0, 'a member with a parent Session is not a root')
+  assert.equal(tools.has('list_my_tasks'), false, 'the member read is not a Lead tool')
+  assert.deepEqual([...childTools.keys()], ['list_my_tasks'], 'a member with a parent Session gets the member read')
 
   const listed = await tools.get('list_members').execute({}, { agent: lead })
   assert.deepEqual(listed, { members: [] })
@@ -105,7 +106,7 @@ test('a Lead whose Team projection cannot be read still receives and can call th
 test('a readable membership that says teammate still wins over the root fallback', async () => {
   const { tools, childTools } = harness({ tryMembership: (agent) => ({ role: agent.id === 'child-1' ? 'teammate' : 'lead' }) })
   assert.ok(tools.has('list_members'))
-  assert.equal(childTools.size, 0)
+  assert.deepEqual([...childTools.keys()], ['list_my_tasks'])
 })
 
 test('spawn_member refuses a blank label, prompt or name', async () => {
@@ -225,6 +226,58 @@ test('task_board validates its action surface and forwards it to the operation',
   assert.equal(table.get('lead-1').tasks.length, 0)
 })
 
+test('a member reads only its own rows, and the member read cannot show the whole board', async () => {
+  const { tools, childTools, table, lead, child } = harness()
+  const now = new Date().toISOString()
+  await table.put('lead-1', {
+    leadSessionId: 'lead-1',
+    members: [
+      { memberId: 'child-1', name: 'reviewer', generation: 1, childId: 'child-1', phase: 'active', label: 'Reviewer', createdAt: now },
+      { memberId: 'child-2', name: 'auditor', generation: 1, childId: 'child-2', phase: 'active', label: 'Auditor', createdAt: now },
+      { memberId: 'child-3', name: 'scribe', generation: 1, childId: 'child-3', phase: 'active', label: 'Scribe', createdAt: now },
+    ],
+    tasks: [
+      { id: 'mine-open', title: 'Mine, still owed', body: 'Done when the parser suite is green.', status: 'open', owner: 'reviewer', created_at: now },
+      { id: 'mine-done', title: 'Mine, finished', status: 'done', owner: 'reviewer', created_at: now },
+      { id: 'theirs', title: 'Another member\'s work', status: 'open', owner: 'auditor', created_at: now },
+      { id: 'nobody', title: 'Unowned work', status: 'open', created_at: now },
+    ],
+  })
+
+  assert.equal(tools.has('list_my_tasks'), false, 'the Lead\'s tool set did not gain the member read')
+  const myTasks = childTools.get('list_my_tasks')
+  assert.ok(myTasks, 'the member read is registered on the member context')
+
+  const answer = await myTasks.execute({}, { agent: child })
+  assertMatchesSchema(answer, myTasks.output.schema, 'list_my_tasks')
+  assert.equal(answer.target, 'reviewer')
+  assert.deepEqual(answer.tasks.map((task) => task.id), ['mine-open', 'mine-done'])
+  assert.equal(answer.open, 1)
+  assert.equal(answer.tasks[0].body, 'Done when the parser suite is green.', 'the body the brief omits is readable here')
+  assert.ok(!answer.tasks.some((task) => task.owner !== 'reviewer'), 'no other member\'s row and no unowned row')
+
+  // The Lead still sees the whole board through its own tool, unchanged and complete.
+  const board = await tools.get('task_board').execute({ action: 'list' }, { agent: lead })
+  assert.equal(board.tasks.length, 4)
+
+  // A member that owns nothing gets an empty list and a sentence, not an error.
+  const idle = await myTasks.execute({}, { agent: { session: { id: 'child-3' } } })
+  assertMatchesSchema(idle, myTasks.output.schema, 'list_my_tasks empty')
+  assert.equal(idle.target, 'scribe')
+  assert.deepEqual(idle.tasks, [])
+  assert.equal(idle.open, 0)
+
+  // A caller the roster cannot place is refused, and the Lead is told which tool it has instead.
+  await assert.rejects(
+    () => myTasks.execute({}, { agent: { session: { id: 'stranger' } } }),
+    /available to a Team member only/,
+  )
+  await assert.rejects(
+    () => myTasks.execute({}, { agent: lead }),
+    /available to a Team member only[\s\S]*task_board/,
+  )
+})
+
 test('wait_members validates its timeout and refuses a non-Lead caller', async () => {
   const { tools, child, lead } = harness()
   const wait = tools.get('wait_members')
@@ -321,7 +374,7 @@ function assertMatchesSchema(value, schema, at = 'value') {
 }
 
 test('every answer conforms to the output schema its own tool declares', async () => {
-  const { tools, lead } = harness()
+  const { tools, childTools, table, lead, child } = harness()
   const exec = { agent: lead }
   const answer = async (name, args) => {
     const definition = tools.get(name)
@@ -340,6 +393,19 @@ test('every answer conforms to the output schema its own tool declares', async (
     body: 'Done when the curve is rechecked against the shipped build. Stopped at the fixture.',
   })
   assert.equal(task.task.body, 'Done when the curve is rechecked against the shipped build. Stopped at the fixture.')
+  // The member-scoped read is a second declared shape: point the spawned row's child id at the harness's
+  // member Agent, so a real answer goes through the wrapper and its own output schema (ADR 0022).
+  const spawned = table.get('lead-1')
+  await table.put('lead-1', {
+    ...spawned,
+    members: spawned.members.map((member) => (member.name === 'reviewer' ? { ...member, childId: 'child-1' } : member)),
+  })
+  const myTasks = childTools.get('list_my_tasks')
+  assert.ok(myTasks, 'the member read is registered on the member context')
+  const mine = await myTasks.execute({}, { agent: child })
+  assertMatchesSchema(mine, myTasks.output.schema, 'list_my_tasks')
+  assert.deepEqual(mine.tasks.map((row) => row.id), [task.task.id], 'the member reads the work it was given')
+  assert.equal(mine.tasks[0].body, task.task.body)
   await answer('list_members', {})
   const waited = await answer('wait_members', {})
   assert.equal(waited.no_progress, true, 'no member is live in this harness, so the wait reports it')
