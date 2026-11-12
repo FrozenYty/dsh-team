@@ -897,3 +897,50 @@
   also new to a real composition: a profile that does not mount the experimental team bundle has no
   `tool-agent-team` row, where the Loader is expected to warn about the target and skip the entry.
 - **Version.** `0.14.0`: the model's tool surface changes, so this is not a documentation-only patch.
+
+## 2026-11-12 — the tool surface is measured: the spawn, wait and task tools are gone, three agent-service tools remain (v0.14.1)
+
+- **The claim was measured, and three of the six names were wrong.** The owner called the `Tool` provider's
+  `listTools` in a live Lead session immediately before and immediately after installing v0.14.0, and
+  compared the two answers. Gone from the second: `spawn_teammate`, `wait_agent` and the `team_task_*`
+  tools — calling `spawn_teammate` now answers `unknown tool`. Still present: `list_agents`, `send_message`
+  and `interrupt_agent`. This plugin's `spawn_member` and `task_board` are present on both sides, and
+  `plugin_manager install_bundle` answered `application: applied` with no warnings, so the patch row
+  resolved and the plugin is active.
+- **Why the three remain, and why no bundle patch can remove them.** They are published by the
+  `agent-team` *service* row, which this bundle deliberately keeps mounted because adoption, the
+  membership test and the projection filter read that service. The patch disables the `tool-agent-team`
+  *tool* row; disabling the service row would take those three consumers with it. The true statement is
+  therefore narrower than the documents made it: the shipped spawn, wait and task tools are retired, and
+  three agent-service tools remain.
+- **Corrected to that statement.** The README pair's "Model-facing only" paragraph and its
+  install-verification bullet; the v0.14 release bullet, §2.3, §4.5 and §6 of both
+  `docs/architecture-en.md` and `docs/architecture-zh.md`; `cordis.patch.yml`'s entry-3 comment, which now
+  says the kept service also publishes `list_agents`, `send_message` and `interrupt_agent`; and P2-07 in
+  `PLAN.md`, which is current-state prose. The README pair's Status block moves the tool surface from
+  "unit-tested only" to "verified live" with the result, and `wait_agent`'s absence stays as the cost:
+  there is no equivalent here, so a Lead re-reads `list_members`, wakes a member with `message_member`, and
+  reads `inactive` as "no turn is executing", never as "finished".
+- **This entry does not rewrite the v0.14.0 entry above.** That one recorded what was known before the
+  measurement and is history. P2-07 stays ticked: its done-when was the shipped roster tools, and those are
+  gone.
+- **Two present-tense claims still overclaim, and were reported rather than edited.** `index.js`'s header
+  comment says the plugin's tools "are the whole model-facing surface" (the change brief's file list did
+  not include it), ADR 0001's decision paragraph says `list_members` reports "a superset of `list_agents`
+  instead of replacing it" (an accepted ADR is closed), and `docs/upstream-lifecycle-gap.md`'s closing
+  paragraph says the two rosters could both be visible "until the shipped tool row was retired" — with
+  `list_agents` still registered, both listings remain.
+- **How this change was verified.** `node scripts/check.mjs` passes after the last edit;
+  `node --test --test-isolation=none tests/*.test.mjs` is 130 tests, 130 passing, with no test edited. The
+  bilingual pairs were measured before and after rather than assumed: the README pair went from 14 `##`
+  headings and 129 distinct backtick identifiers per side with identical sets to 14 and 130 per side, sets
+  still identical; the index pair is unchanged at 5 headings and 34 identifiers per side with identical
+  sets; and the architecture pair moved from 6/238 against 6/235 — 8 English-only and 5 Chinese-only spans,
+  the pre-existing localised code spans — to 6/242 against 6/239 with exactly the same 8 and 5, no new set
+  difference.
+- **What stays unverified.** Nothing was installed in this change — the measurement was the owner's
+  v0.14.0 install — so the three service tools' own behaviour was not exercised here, and no plugin tool
+  was called. The patch is also still new to a profile that does not mount the experimental team bundle,
+  where the Loader is expected to warn about the missing `tool-agent-team` target and skip the entry.
+- **Version.** `0.14.1`: a documentation and comment correction, but the published bundle's version moves
+  so the corrected claim can be told apart from the one it replaces.

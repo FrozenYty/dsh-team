@@ -84,12 +84,15 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   a member's work and a replacement hands it over (§4.3.2, ADR 0017), so the shipped row is no longer the
   only board.
   Delivered (v0.14.0, bundle patch): the patch overrides `tool-agent-team` with `disabled: true`, so
-  `spawn_teammate`, `send_message`, `list_agents`, `interrupt_agent`, `wait_agent` and the shipped
-  `team_task_*` tools are no longer registered; this plugin's own tools serve the same Lead. The
-  `agent-team` service row is deliberately untouched, because adoption and the projection filter read it.
-  `wait_agent` is the one tool with no equivalent here: a Lead re-reads `list_members` and wakes a member
-  with `message_member` instead of blocking. The one live check this task cannot run here is the shape of
-  a real Lead's tool list (`listTools` after an install), which is the owner's call.
+  `spawn_teammate`, `wait_agent` and the shipped `team_task_*` tools are no longer registered; this
+  plugin's own roster and task tools serve the same Lead. The `agent-team` service row is deliberately
+  untouched, because adoption and the projection filter read it — and that row publishes three
+  model-facing tools of its own (`list_agents`, `send_message`, `interrupt_agent`), which therefore
+  remain in a Lead's list. `wait_agent` is the one tool with no equivalent here: a Lead re-reads
+  `list_members` and wakes a member with `message_member` instead of blocking. The live check this task
+  could not run locally — the shape of a real Lead's tool list — was measured in v0.14.1 (`listTools`
+  before and after the install): the row's spawn, wait and task tools are gone, and the three service
+  tools remain.
 - [x] **P2-08** Live end-to-end verification of a replaced member finishing its predecessor's task.
   Done when, in one session, a member is retired, a successor starts from a handoff brief, and the
   successor completes the predecessor's task without redoing it.

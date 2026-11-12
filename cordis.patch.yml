@@ -39,6 +39,9 @@
 #
 #    The `agent-team` service row is deliberately NOT touched: adoption (`list_members` reporting the
 #    members the shipped roster created) and the projection filter read that service, and disabling it
-#    would take both away as well as this plugin's own membership test.
+#    would take both away as well as this plugin's own membership test. That service is itself
+#    model-facing: it publishes `list_agents`, `send_message` and `interrupt_agent`, so those three stay in
+#    a Lead's tool list after this entry applies. Read the result as "the shipped spawn, wait and task
+#    tools are gone", not as "one tool set is left".
 - id: tool-agent-team
   disabled: true
