@@ -21,6 +21,15 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.25.1] - 2026-11-12
+
+- A standing member is asked about only when it carries something.
+
+## [0.25.0] - 2026-11-12
+
+- A member's lifetime is declared, and ending a role asks the person (P4-13).
+- A record that never became a role needs no consent.
+
 ## [0.24.0] - 2026-11-12
 
 - A host hook installs when its service exists, and says whether it did (P4-12).
