@@ -33,6 +33,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 工作板做什么，替换时未完成的工作去哪里？ | `docs/task-board-zh.md` | 双语 |
 | 继任者如何被交接，哪个模板生效？ | `docs/handoff-zh.md` | 双语 |
 | 存了什么，回收站如何被约束？ | `docs/roster-storage-zh.md` | 双语 |
+| 成员跑在哪个模型上，什么在计费？ | `docs/routes-zh.md` | 双语 |
+| 从旧版本升级要改什么？ | `docs/upgrading-zh.md` | 双语 |
 | 为什么花名册要自建而不是扩展官方？ | `docs/adr/0001-own-roster-on-subagents.md` | 英文 |
 | 为什么 bundle 入口不导入任何东西？ | `docs/adr/0002-zero-import-bundle-entry.md` | 英文 |
 | 花名册存在哪里？ | `docs/adr/0003-roster-storage.md` | 英文 |
@@ -93,7 +95,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
 | 持久记录结构 | `docs/roster-storage-zh.md` §1、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
 | 投影出口、官方团队面板或官方 `list_agents` 读取显示什么，或宿主钩子装没装上 | `host-hooks.js`、`index.js`、`docs/architecture-zh.md` §2.4、`README.md` + `README-zh.md`、ADR 0023、ADR 0025 |
-| 成员启动时用哪条路由、哪个来源优先，或掉队成员是否被标出 | `actions.js`、`roster.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §2.5 与 §4、`docs/roster-storage-zh.md` §1 与 `docs/architecture-zh.md` §5、`README.md` + `README-zh.md`、ADR 0024 |
+| 成员启动时用哪条路由、哪个来源优先，或掉队成员是否被标出 | `actions.js`、`roster.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §2.5 与 §4、`docs/roster-storage-zh.md` §1、`docs/routes-zh.md` 与 `docs/architecture-zh.md` §5、`README.md` + `README-zh.md`、ADR 0024 |
+| 某个已发布版本移除或改名了工具、配置键或已存标识符 | `docs/upgrading-zh.md`、`README.md` + `README-zh.md`、`CHANGELOG.md`；若该标识符已冻结，另写一份新 ADR |
 | 保留上限，或被剪除的墓碑保留什么 | `docs/roster-storage-zh.md` §3、`trash.js`、`roster.js`、ADR 0011、ADR 0012 |
 | 新增、改名或删除文档 | 本文件与 `INDEX-zh.md` |
 | 插件名称或显示标题，或补丁行的 `name` | `package.json`、`cordis.patch.yml`、`AGENTS.md`、`README.md` + `README-zh.md`、`docs/architecture-en.md` + `docs/architecture-zh.md`、一份新 ADR |

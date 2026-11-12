@@ -36,6 +36,8 @@ A design subject is its own document rather than a section of `architecture-`: a
 | What does the work board do, and where does open work go on a replace? | `docs/task-board-en.md` | pair |
 | How is a successor briefed, and which template wins? | `docs/handoff-en.md` | pair |
 | What is stored, and how is the trash bounded? | `docs/roster-storage-en.md` | pair |
+| Which model does a member run on, and what bills what? | `docs/routes-en.md` | pair |
+| What has to change when upgrading from an older version? | `docs/upgrading-en.md` | pair |
 | Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
 | Why does the bundle entry import nothing? | `docs/adr/0002-zero-import-bundle-entry.md` | English |
 | Where does the roster live? | `docs/adr/0003-roster-storage.md` | English |
@@ -97,7 +99,8 @@ Harness disagree, the repository is wrong.
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/roster-storage-en.md` §1, a new ADR, and a migration note in `PROGRESS.md` |
 | the projection exits, what the shipped team panel or the shipped `list_agents` read shows, or whether a host hook installs | `host-hooks.js`, `index.js`, `docs/architecture-en.md` §2.4, `README.md` + `README-zh.md`, ADR 0023, ADR 0025 |
-| what route a member starts on, which source wins, or whether a straggler is flagged | `actions.js`, `roster.js`, the tool schemas in `index.js`, `docs/architecture-en.md` §2.5 and §4, `docs/roster-storage-en.md` §1 and `docs/architecture-en.md` §5, `README.md` + `README-zh.md`, ADR 0024 |
+| what route a member starts on, which source wins, or whether a straggler is flagged | `actions.js`, `roster.js`, the tool schemas in `index.js`, `docs/architecture-en.md` §2.5 and §4, `docs/roster-storage-en.md` §1, `docs/routes-en.md` and `docs/architecture-en.md` §5, `README.md` + `README-zh.md`, ADR 0024 |
+| a released version that removes or renames a tool, a config key or a stored identifier | `docs/upgrading-en.md`, `README.md` + `README-zh.md`, `CHANGELOG.md`, a new ADR if the identifier is frozen |
 | the retention cap, or what a pruned tombstone keeps | `docs/roster-storage-en.md` §3, `trash.js`, `roster.js`, ADR 0011, ADR 0012 |
 | a document added, renamed or removed | this file and `INDEX-zh.md` |
 | the plugin's name or display title, or a patch row's `name` | `package.json`, `cordis.patch.yml`, `AGENTS.md`, `README.md` + `README-zh.md`, `docs/architecture-en.md` + `docs/architecture-zh.md`, a new ADR |

@@ -1872,3 +1872,55 @@
 - **Version.** `0.25.3`: a reader asking six months from now which release split the architecture document
   should find the answer in the changelog, and PR 47 set the precedent that a documents-and-manifest
   change still ships a version.
+
+## 2026-11-13 — the README is a first-use document, and the routes subject moves out of it (v0.25.4)
+
+- **The defect was not length, it was order.** `README.md` was 651 lines (559 non-blank) across 23
+  sections, and `Install and verify` was the eighteenth, at line 526: a stranger had to scroll past four
+  hundred lines to learn how to install the thing. The owner's verdict was that it had become too long,
+  and the length was a symptom — depth had migrated out of the README while the README kept its copy.
+- **One criterion was applied to every section, not a table taken on trust.** *Delete the section: can the
+  reader still find it from README's pointer table?* Eight sections passed it and were deleted or cut
+  down, one failed it and had to grow a home first, and one was kept because it is not depth: `Limits and
+  deliberate omissions` is why the project is trustworthy, so it stayed verbatim. The measurements were
+  taken again rather than reused — the owner's reading of the section table was accurate to within four
+  lines, but it is a reading and the counts here are from the file.
+- **Four subjects left for the documents that already owned them.** The tool table became eleven one-line
+  rows pointing at `docs/architecture-en.md` §5, which is the authoritative version; `Defining a member`,
+  `Member lifetime`, `Replacing a member` and `The lifecycle` became the smallest example or the two-line
+  judgement plus a pointer to `member-lifecycle`, `handoff`, `task-board` and `roster-storage`. That is
+  what the split in `0.25.3` was for: a subject with a document of its own does not need a second,
+  shorter copy in the README, because the two drift.
+- **Two subjects got a home, because they had none.** `Costs and model routes` is 75 lines of measured
+  billing behaviour that answered a real confusion, and the upgrade table is reference material for the
+  moment someone upgrades; neither belongs in a first-use document, and neither had a document. They are
+  now `docs/routes-{en,zh}.md` and `docs/upgrading-{en,zh}.md`. Both are **pairs** rather than the
+  `-en-zh.md` two-column shape: that shape is for a term table where the two languages sit side by side
+  line for line, while these carry prose, citations by file and line, and code spans, which a two-column
+  document would mangle. The routes document keeps the measurement that caused it — 18 of 60 session logs
+  still on the old route — because that is the fact that makes the section worth reading.
+- **`Status` was a changelog in disguise.** 66 lines of per-release verification prose became 14: what has
+  been exercised in a profile, what is unit-tested only, what nothing here can prove, and where the two
+  lists live. The prose itself was not lost: `PROGRESS.md` keeps one entry per release and every entry
+  records what that release proved live, so the claim now points at the evidence instead of restating it.
+- **What stayed is deliberate.** `Limits and deliberate omissions` (34 lines) is the section that tells a
+  reader what the bundle will not do and why each of those was decided, which is a different kind of
+  statement from depth; `Configuration`, `Requirements and compatibility`, `Development`, `Repository
+  layout` and `Model-facing only` are first-use or first-debug material and stayed, in that order, after
+  the install path.
+- **The Chinese side is Chinese prose, not a translation.** Both sides are 13 headings and the same six
+  table shapes, but the Chinese text was written to be read as Chinese and says the same facts in its own
+  sentences — a word-for-word rendering of English sentence structure is what made the old pair tiring to
+  read in either language.
+- **How this was verified.** `node scripts/check.mjs` prints `check passed`, which now also classifies the
+  two new pairs by the `docs/` rule, and `node --test --test-isolation=none tests/*.test.mjs` is 212 tests,
+  212 passing (no test file was touched). Parity per pair, heading sets per side: `README` 23/23 before and
+  13/13 after, `INDEX` unchanged at 6/6, the five design pairs unchanged, and the two new pairs 4/4 and
+  3/3 — every pair matches, 0 divergent. Reachability was checked by search rather than by eye: for each
+  section the README dropped, the PR body carries the grep that finds its subject in the document the
+  pointer names.
+- **What stays unverified.** Nothing about the plugin: no JS, locale, patch or config file was touched, so
+  no install was needed and `check.mjs` still cannot prove the plugin activates. The README's own claims
+  are unchanged facts, restated — this release moves them, it does not re-measure them.
+- **Version.** `0.25.4`: the README is the first thing a stranger reads, and its install path moved from
+  the eighteenth screen to the second; `0.25.3` belongs to the split this one builds on.
