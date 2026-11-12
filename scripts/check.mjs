@@ -9,7 +9,7 @@
  *   2. no Host module imports an @deepseek-ai package (ADR 0002);
  *   3. locale/en.json and locale/zh.json carry the same keys;
  *   4. the bundle patch declares the rows the README promises;
- *   5. bilingual document pairs exist;
+ *   5. every document under docs/ is classified by the bilingual-pair rule, and no pair is half-written;
  *   6. no shared document carries an absolute machine path.
  *
  * What it cannot prove: that the plugin activates, or that any tool behaves. That needs a profile
@@ -174,21 +174,100 @@ if (patchText !== undefined) {
   }
 }
 
-// 5. Bilingual pairs.
-const pairs = [
-  ['README.md', 'README-zh.md'],
-  ['docs/INDEX-en.md', 'docs/INDEX-zh.md'],
-  ['docs/architecture-en.md', 'docs/architecture-zh.md'],
-]
-for (const [english, chinese] of pairs) {
-  if (!existsSync(join(root, english))) fail(`${english}: missing (bilingual pair)`)
-  if (!existsSync(join(root, chinese))) fail(`${chinese}: missing (bilingual pair)`)
+/**
+ * Documents at the top level of `docs/` that are deliberately single-language, each with the reason.
+ *
+ * This is the only way out of the pair rule below, and it is deliberately a list you have to edit: an
+ * unpaired document that is not named here fails the check by name. That is what makes the exception
+ * visible in review instead of silent — which is exactly what the hardcoded list of pairs allowed, and why
+ * `docs/upstream-lifecycle-gap.md` could not be told apart from an oversight.
+ *
+ * A naming convention was the alternative (no language suffix means "single-language by choice"). It was
+ * rejected because it records the fact and not the reason: the next reader still could not tell whether
+ * somebody meant it, and dropping a suffix would be a way to pass the check without deciding anything.
+ */
+const SINGLE_LANGUAGE_DOCS = new Map([
+  [
+    'upstream-lifecycle-gap.md',
+    'the issue-ready statement of the gap dsh-team fills, addressed to the English-language upstream '
+    + 'tracker; a Chinese copy would be a second document to keep in step, not a translation of this one',
+  ],
+])
+
+// 5. Bilingual pairs — a rule over docs/, not a list of pairs.
+//
+// What this replaced was three hardcoded pairs, and a list is not a rule: a new docs/foo-en.md whose
+// -zh.md was never written was simply not in the list, so the check said nothing. docs/upstream-lifecycle-gap.md
+// sat there unexamined for exactly that reason, with no way to tell a deliberate single-language document
+// from an oversight. Now every file at the top level of docs/ is classified below, and one the rule cannot
+// classify fails by name.
+//
+// The four legitimate shapes, and no others:
+//
+//   docs/name-en.md + docs/name-zh.md   a bilingual pair; both directions are checked, so either half
+//                                       missing is a failure that names the file
+//   docs/name-en-zh.md                  both languages in ONE file (a two-column glossary). It also ends
+//                                       in -zh.md, so the pair rule would read it as "no English side";
+//                                       it is therefore matched first, and proven by content — a name is
+//                                       not evidence that both languages are in the file
+//   docs/name.md                        single-language, and named in SINGLE_LANGUAGE_DOCS with the reason
+//   docs/adr/NN-name.md                 out of scope: a decision is English-only and numbered, so it never
+//                                       pairs (CONTRIBUTING §6). A directory rule, not one entry per decision.
+//
+// Root documents are NOT part of this scan and are handled explicitly below: README-zh.md ends in -zh.md
+// too, and README.md has no -en suffix, so the README pair is checked by name rather than by suffix.
+const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
+const LATIN_WORD = /[A-Za-z]{4,}/
+const docsDir = join(root, 'docs')
+const docNames = readdirSync(docsDir).filter((name) => name.endsWith('.md'))
+const docSet = new Set(docNames)
+for (const name of docNames) {
+  if (name.endsWith('-en-zh.md')) {
+    const text = readFileSync(join(docsDir, name), 'utf8')
+    if (!CJK.test(text)) fail(`docs/${name}: carries both languages by name but no Chinese text by content`)
+    if (!LATIN_WORD.test(text)) fail(`docs/${name}: carries both languages by name but no English prose by content`)
+    continue
+  }
+  if (name.endsWith('-en.md')) {
+    const wanted = `${name.slice(0, -'-en.md'.length)}-zh.md`
+    if (!docSet.has(wanted)) fail(`docs/${name}: has no docs/${wanted} (bilingual pair)`)
+    continue
+  }
+  if (name.endsWith('-zh.md')) {
+    const wanted = `${name.slice(0, -'-zh.md'.length)}-en.md`
+    if (!docSet.has(wanted)) fail(`docs/${name}: has no docs/${wanted} (bilingual pair)`)
+    continue
+  }
+  if (!SINGLE_LANGUAGE_DOCS.has(name)) {
+    fail(
+      `docs/${name}: single-language document with no declaration; add the -en/-zh pair, or list it in `
+      + 'SINGLE_LANGUAGE_DOCS in scripts/check.mjs with the one-line reason it is deliberately one language',
+    )
+  }
+}
+// The list is a declaration, so it must not outlive the file it describes.
+for (const name of SINGLE_LANGUAGE_DOCS.keys()) {
+  if (!docSet.has(name)) {
+    fail(`docs/${name}: declared single-language in scripts/check.mjs but does not exist; remove the entry`)
+  }
+}
+
+// Root documents, checked explicitly rather than by the rule above (CONTRIBUTING §6). README.md is the one
+// English document without an -en suffix, so the pair is named rather than derived; the rest are
+// single-language by the policy there, and this list is also what §6 scans, so naming them once is what
+// keeps "which documents exist" and "which documents are single-language" the same question.
+for (const name of ['README.md', 'README-zh.md']) {
+  if (!existsSync(join(root, name))) fail(`${name}: missing (bilingual pair)`)
+}
+const ROOT_SINGLE_LANGUAGE = ['AGENTS.md', 'CONTRIBUTING.md', 'PLAN.md', 'PROGRESS.md', 'CHANGELOG.md', 'LICENSE']
+for (const name of ROOT_SINGLE_LANGUAGE) {
+  if (!existsSync(join(root, name))) fail(`${name}: missing (single-language root document)`)
 }
 
 // 6. No machine-specific paths in shared documents.
 const documents = [
-  'README.md', 'README-zh.md', 'AGENTS.md', 'CONTRIBUTING.md', 'PLAN.md', 'PROGRESS.md', 'CHANGELOG.md',
-  ...readdirSync(join(root, 'docs')).filter((name) => name.endsWith('.md')).map((name) => `docs/${name}`),
+  'README.md', 'README-zh.md', ...ROOT_SINGLE_LANGUAGE,
+  ...docNames.map((name) => `docs/${name}`),
   ...readdirSync(join(root, 'docs', 'adr')).filter((name) => name.endsWith('.md')).map((name) => `docs/adr/${name}`),
 ]
 for (const document of documents) {
