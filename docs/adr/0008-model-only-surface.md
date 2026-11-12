@@ -73,7 +73,7 @@ repository contains no such ADR at the time of writing, so there is nothing to m
   the host's own subagent pickers. Retirement still removes a member from those pickers through the
   projection filter.
 - The model can now reach every subagent it spawns, which is the capability the change was for. The
-  installed seam's return shape is recorded in `docs/architecture-en.md` §4.5.1, because it is a
+  installed seam's return shape is recorded in `docs/architecture-en.md` §5.1, because it is a
   different generation from the public source tree and must be re-read after a Harness upgrade.
 - `webServer` is no longer a required injection, so a profile without a web server can install this
   bundle. The tools are the whole plugin.

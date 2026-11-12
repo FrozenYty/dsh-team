@@ -61,14 +61,14 @@ file's description of the role, with its consequences written down.**
 3. **The rest of the definition is the role, and it applies on a replace.** `ephemeral`, `cwd`,
    `provider`, `model`, `reasoning_effort`, `max_tokens` and `agent_preset` are merged exactly as they are
    on a fresh spawn: the call overrides them field by field, and the file supplies the rest. `ephemeral`
-   in particular **applies to a successor**, and the table in `docs/architecture-en.md` §4.3.3 (and its
+   in particular **applies to a successor**, and the table in `docs/architecture-en.md` §6.1 (and its
    Chinese pair) states the consequence plainly: a one-shot successor is retired by the next lazy sweep
    once it has run and stopped, and the open tasks it holds — including the ones the replacement just
    handed it — lose their owner and are reported in `unowned`/`unowned_tasks` (ADR 0017). A Lead that
    wants the successor to keep the work messages it once, which clears the flag, or passes
    `ephemeral: false` on the replace call.
 4. **The predecessor's `cwd` and model route are not inherited, and cannot be.** They are start options,
-   not record fields: `started_with` is a receipt on a tool result, not durable state (§4.2). A successor
+   not record fields: `started_with` is a receipt on a tool result, not durable state (`docs/roster-storage-en.md` §1). A successor
    therefore takes the file's or the call's values, and the matrix says so rather than leaving it to be
    discovered.
 5. **`message_member` never reads a definition.** A message acts on a member that already started, so the
@@ -76,8 +76,9 @@ file's description of the role, with its consequences written down.**
    message clears a one-shot flag (ADR 0013), and every other field of the file is fixed for that
    member's life — a different `cwd`, model or preset needs a new spawn or a replacement.
 6. **The matrix is in the architecture document, in both languages, one cell per field.** It is
-   `docs/architecture-en.md` §4.3.3 and `docs/architecture-zh.md` §4.3.3, next to the state matrix and the
-   transfer matrix it interacts with, not in a comment.
+   `docs/architecture-en.md` §6.1 and `docs/architecture-zh.md` §6.1, in the same document set as the
+   state matrix (`docs/member-lifecycle-en.md` §1) and the transfer matrix it interacts with
+   (`docs/task-board-en.md` §2), not in a comment.
 
 ## Rationale
 
@@ -147,5 +148,5 @@ file's description of the role, with its consequences written down.**
 The Harness records a member's start options durably, at which point a replace could inherit `cwd` and the
 model route from its predecessor exactly as it already inherits the assignment; a definition gains a field
 that is explicitly about one holder rather than the role, which would need its own precedence rather than
-a row in §4.3.3; or the Harness ships its own replacement primitive, in which case this rule has to be
+a row in `docs/architecture-en.md` §6.1; or the Harness ships its own replacement primitive, in which case this rule has to be
 stated there as well.

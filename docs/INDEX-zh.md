@@ -15,8 +15,10 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 1. `README.md`——插件是什么、怎么安装。
 2. `PLAN.md`——唯一的任务来源，未完成的工作都在这里。
 3. `PROGRESS.md`——当前状态为什么是这样，只追加。
-4. `docs/architecture-zh.md`——各部分如何咬合，含花名册状态矩阵。
+4. `docs/architecture-zh.md`——分层、Harness 底座、已发布的接口与风险边界。
 5. `docs/adr/`——那些难以回退的决策。
+
+设计主题各自独立成文，不再作为 `architecture-` 的一节：成员的一生见 `docs/member-lifecycle-zh.md`，工作板见 `docs/task-board-zh.md`，交接书及其模板见 `docs/handoff-zh.md`，存储记录与其保留策略见 `docs/roster-storage-zh.md`。§2 是地图。
 
 ## 2. 文档地图
 
@@ -26,7 +28,11 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 还剩什么没做，“完成”指什么？ | `PLAN.md` | 英文 |
 | 最近改了什么，为什么？ | `PROGRESS.md` | 英文 |
 | 每个版本发布了什么？ | `CHANGELOG.md` | 英文 |
-| 智能体与花名册怎么配合？ | `docs/architecture-zh.md` | 双语 |
+| 有哪些层、建立在什么 Harness 底座上、发布了什么接口、风险边界在哪？ | `docs/architecture-zh.md` | 双语 |
+| 成员如何在相态之间移动，退役与替换各自做什么？ | `docs/member-lifecycle-zh.md` | 双语 |
+| 工作板做什么，替换时未完成的工作去哪里？ | `docs/task-board-zh.md` | 双语 |
+| 继任者如何被交接，哪个模板生效？ | `docs/handoff-zh.md` | 双语 |
+| 存了什么，回收站如何被约束？ | `docs/roster-storage-zh.md` | 双语 |
 | 为什么花名册要自建而不是扩展官方？ | `docs/adr/0001-own-roster-on-subagents.md` | 英文 |
 | 为什么 bundle 入口不导入任何东西？ | `docs/adr/0002-zero-import-bundle-entry.md` | 英文 |
 | 花名册存在哪里？ | `docs/adr/0003-roster-storage.md` | 英文 |
@@ -61,7 +67,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 两份文档冲突时，以较新者为准，顺序如下：
 
 1. 已接受的 ADR；
-2. `docs/architecture-zh.md`；
+2. 设计文档（`docs/architecture-zh.md` 与 `docs/member-lifecycle-zh.md`、
+   `docs/task-board-zh.md`、`docs/handoff-zh.md`、`docs/roster-storage-zh.md`）；
 3. `PLAN.md`；
 4. `README.md`；
 5. `PROGRESS.md`（历史记录，描述的是当时的状态，永不回改）。
@@ -72,21 +79,22 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 
 | 若你改了 | 同时更新 |
 |---|---|
-| 工具名、参数或返回字段 | `docs/architecture-zh.md` §2 或 §4.5、`actions.js`、`README.md` + `README-zh.md`、`PLAN.md` 对应任务文字 |
-| 哪件工具注册到哪个作用域，或成员能读什么 | `index.js`、`actions.js`、`docs/architecture-zh.md` §4.5 与 §4.5.2、`README.md` + `README-zh.md`、ADR 0022 |
-| 某个操作的行为或失败原因 | `actions.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §4 |
-| 收养覆盖什么，或它消费的发现行形状 | `actions.js`、`roster.js`、`docs/architecture-zh.md` §4.5.1、`README.md` + `README-zh.md` |
-| 花名册相态或转移 | `docs/architecture-zh.md` §4.3 的状态矩阵；若模型变了，另写 ADR |
-| 成员的生存期、什么可以否决清扫，或一次退役必须带回什么 | `docs/architecture-zh.md` §4.3.1、`roster.js`、`actions.js`、`index.js` 里的工具 schema、`README.md` + `README-zh.md`、ADR 0026 |
-| 交接规则——替换、退役或恢复时成员的未完成任务怎么处理 | `docs/architecture-zh.md` §4.3.2 的交接矩阵、`actions.js`、`README.md` + `README-zh.md`、ADR 0017 |
-| 任务行的 `body`，或工作板写入如何基于已存记录构建 | `roster.js`、`actions.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §4.2 与 §4.3.2、`README.md` + `README-zh.md`、ADR 0020 |
-| 成员定义的格式、接受的 frontmatter 子集或 `team/` 路径 | `definitions.js`、`docs/architecture-zh.md` §4.6、`README.md` + `README-zh.md`、ADR 0018 |
-| 团队文件的格式、保留名 `team.md`、模板的三个来源或写入拒绝 | `definitions.js`、`actions.js`、`index.js`、`docs/architecture-zh.md` §4.4 与 §4.7、`README.md` + `README-zh.md`、ADR 0021 |
-| 定义字段在 replace 时由哪个来源胜出，或文件可以就成员的生存期声明什么 | `docs/architecture-zh.md` §4.3.3 的定义矩阵、`actions.js`、`index.js`、ADR 0019、ADR 0026 |
+| 工具名、参数或返回字段 | `docs/architecture-zh.md` §2 或 §5、`actions.js`、`README.md` + `README-zh.md`、`PLAN.md` 对应任务文字 |
+| 哪件工具注册到哪个作用域，或成员能读什么 | `index.js`、`actions.js`、`docs/architecture-zh.md` §5 与 §5.2、`README.md` + `README-zh.md`、ADR 0022 |
+| 某个操作的行为或失败原因 | `actions.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §5 |
+| 收养覆盖什么，或它消费的发现行形状 | `actions.js`、`roster.js`、`docs/architecture-zh.md` §5.1、`README.md` + `README-zh.md` |
+| 花名册相态或转移 | `docs/member-lifecycle-zh.md` §1 的状态矩阵；若模型变了，另写 ADR |
+| 成员的生存期、什么可以否决清扫，或一次退役必须带回什么 | `docs/member-lifecycle-zh.md` §2、`roster.js`、`actions.js`、`index.js` 里的工具 schema、`README.md` + `README-zh.md`、ADR 0026 |
+| 交接规则——替换、退役或恢复时成员的未完成任务怎么处理 | `docs/task-board-zh.md` §2 的交接矩阵、`actions.js`、`README.md` + `README-zh.md`、ADR 0017 |
+| 任务行的 `body`，或工作板写入如何基于已存记录构建 | `roster.js`、`actions.js`、`index.js` 里的工具 schema、`docs/task-board-zh.md` §1 与 §3、`README.md` + `README-zh.md`、ADR 0020 |
+| 成员定义的格式、接受的 frontmatter 子集或 `team/` 路径 | `definitions.js`、`docs/architecture-zh.md` §6、`README.md` + `README-zh.md`、ADR 0018 |
+| 团队文件的格式、保留名 `team.md`、模板的三个来源或写入拒绝 | `definitions.js`、`actions.js`、`index.js`、`docs/handoff-zh.md` §1 与 §2、`README.md` + `README-zh.md`、ADR 0021 |
+| 定义字段在 replace 时由哪个来源胜出，或文件可以就成员的生存期声明什么 | `docs/architecture-zh.md` §6.1 的定义矩阵、`actions.js`、`index.js`、ADR 0019、ADR 0026 |
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
-| 持久记录结构 | `docs/architecture-zh.md` §4.2、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
+| 持久记录结构 | `docs/roster-storage-zh.md` §1、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
 | 投影出口、官方团队面板或官方 `list_agents` 读取显示什么，或宿主钩子装没装上 | `host-hooks.js`、`index.js`、`docs/architecture-zh.md` §2.4、`README.md` + `README-zh.md`、ADR 0023、ADR 0025 |
-| 成员启动时用哪条路由、哪个来源优先，或掉队成员是否被标出 | `actions.js`、`roster.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §2.6、§4.1、§4.2 与 §4.5、`README.md` + `README-zh.md`、ADR 0024 |
+| 成员启动时用哪条路由、哪个来源优先，或掉队成员是否被标出 | `actions.js`、`roster.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §2.5 与 §4、`docs/roster-storage-zh.md` §1 与 `docs/architecture-zh.md` §5、`README.md` + `README-zh.md`、ADR 0024 |
+| 保留上限，或被剪除的墓碑保留什么 | `docs/roster-storage-zh.md` §3、`trash.js`、`roster.js`、ADR 0011、ADR 0012 |
 | 新增、改名或删除文档 | 本文件与 `INDEX-zh.md` |
 | 插件名称或显示标题，或补丁行的 `name` | `package.json`、`cordis.patch.yml`、`AGENTS.md`、`README.md` + `README-zh.md`、`docs/architecture-en.md` + `docs/architecture-zh.md`、一份新 ADR |
 | 任何改变安装步骤的改动 | `README.md` + `README-zh.md` |

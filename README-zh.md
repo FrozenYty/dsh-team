@@ -14,7 +14,7 @@
 
 ## 状态
 
-- 当前版本：v0.25.2。
+- 当前版本：v0.25.3。
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`（那是当时的行为，也是 v0.22.0 改掉的那一条：现在这种 spawn 会报出 `started_with.route_source`）；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
 - **本版要回答的成本边界，是在运行中的 profile 上实测出来的。** 切到中转之后，清点 60 份会话日志发现 18 份仍停在 `deepseek-official/deepseek-flash`——其中好几份是活团队的成员，而当时活着的 Lead 会话都在中转上——因为成员的路由在启动时就写进了自己的会话头，没有任何东西会给它改路由。v0.22.0 在 spawn 时转发 Lead 当前的路由、把它记在成员记录上，并标出路由已不再是 Lead 当前路由的成员。真机那一半——启动出的子代理**自己** `request/header` 上的路由——仍是所有者安装后的验证项（ADR 0024）。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
@@ -274,4 +274,4 @@ Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面�
 
 ## 文档与参与
 
-[docs/INDEX-zh.md](docs/INDEX-zh.md) 是文档地图；设计文档在 [docs/architecture-zh.md](docs/architecture-zh.md)；难以回退的决策在 [docs/adr/](docs/adr/)。AI 助手请先读 [AGENTS.md](AGENTS.md)；分支、提交与 CI 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+[docs/INDEX-zh.md](docs/INDEX-zh.md) 是文档地图；分层与已发布接口在 [docs/architecture-zh.md](docs/architecture-zh.md)，成员的一生在 [docs/member-lifecycle-zh.md](docs/member-lifecycle-zh.md)，工作板在 [docs/task-board-zh.md](docs/task-board-zh.md)，交接书在 [docs/handoff-zh.md](docs/handoff-zh.md)，存储记录在 [docs/roster-storage-zh.md](docs/roster-storage-zh.md)，难以回退的决策在 [docs/adr/](docs/adr/)。AI 助手请先读 [AGENTS.md](AGENTS.md)；分支、提交与 CI 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。

@@ -7,7 +7,7 @@ This is the gap `dsh-team` exists to fill, written so it can be filed as an issu
 `@deepseek-ai/dsh-experimental-agent-team` and `@deepseek-ai/dsh-experimental-tool-agent-team`
 (0.2.2-rc.1 as installed). Every claim below is cited by file and line in this repository
 (github.com/FrozenYty/dsh-team); the Harness facts inside those citations were read from the installed
-build, and this repository's own lifecycle is described in `docs/architecture-en.md`.
+build, and this repository's own lifecycle is described in `docs/member-lifecycle-en.md`.
 
 ## 1. What the shipped roster can do
 
@@ -22,7 +22,7 @@ build, and this repository's own lifecycle is described in `docs/architecture-en
   "names are permanent" and calls a delete operation "a later product decision"
   (`docs/adr/0001-own-roster-on-subagents.md:19-20`).
 - There is no completion notice: a descendant's `activity` is only `running | inactive`, and `inactive`
-  also covers a child that never started (`docs/architecture-en.md:616`, §5).
+  also covers a child that never started (`docs/architecture-en.md` §7).
 
 ## 2. Why the gap cannot be closed from outside
 
@@ -51,24 +51,24 @@ Session it ever held on disk.
 
 `dsh-team` does not extend the shipped projection. It owns a roster on the Harness subagent substrate,
 never writes a session event, and keeps its durable state in a `storageDomain` domain
-(`docs/adr/0001-own-roster-on-subagents.md:34-39`; `docs/architecture-en.md:170-175`, §4.1). The
+(`docs/adr/0001-own-roster-on-subagents.md:34-39`; `docs/architecture-en.md` §4). The
 workaround is the lifecycle the shipped roster does not have:
 
 - **A `retired` phase it owns.** Retirement is a protocol, not a deletion: record the reason, drain the
   child, tombstone the record, move the persisted Session into a trash the plugin controls, confirm the
   move, enforce a cap, hide the member from the projection exits, and report what happened
-  (`docs/architecture-en.md:455-490`, §4.4).
+  (`docs/member-lifecycle-en.md` §3).
 - **A move, not an erasure.** The Session moves to
   `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, and recovery is a directory move back
-  (`docs/architecture-en.md:135-156`, §2.5). Because the platform has no deletion API, the retention cap
+  (`docs/member-lifecycle-en.md` §4). Because the platform has no deletion API, the retention cap
   deletes only the copies the plugin itself moved into its trash
   (`docs/adr/0011-trash-retention.md:28-30, 44-52`).
 - **A reusable name.** Generation 1 is the bare base name and generation 2 and later is `<base>-g<N>`, so
   a successor reuses the name instead of colliding with a permanently taken one
-  (`docs/architecture-en.md:291-295`, §4.2).
+  (`docs/roster-storage-en.md` §1).
 - **A briefed successor and its work.** A replacement starts a successor from a brief composed from the
   predecessor's record and hands over the predecessor's open tasks in the same call; a retirement without
-  a successor leaves those tasks unowned and names them (`docs/architecture-en.md:492-546`, §4.4). The
+  a successor leaves those tasks unowned and names them (`docs/task-board-en.md` §2). The
   work board is the plugin's own, because the shipped board belongs to the shipped roster
   (`docs/adr/0017-own-task-board.md:9-13, 44-48`).
 - **Its own model-facing surface.** The plugin serves `spawn_member`, `list_members`, `message_member`,
@@ -78,7 +78,7 @@ workaround is the lifecycle the shipped roster does not have:
 
 Two limits remain inherent to working around rather than fixing: the shipped catalog still knows the
 member existed, because the platform never deletes what it owns
-(`docs/architecture-en.md:635-639`, §6); and the shipped catalog can still be listed beside this
+(`docs/architecture-en.md` §8); and the shipped catalog can still be listed beside this
 plugin's, because the `agent-team` service that answers `list_agents` stays mounted for adoption and the
 projection filter. Retiring the shipped *tool* row in v0.14.0 removed the spawn, wait and task tools it
 published, not that service (`cordis.patch.yml:28-44`).
@@ -106,6 +106,6 @@ Short, and each item removes one part of section 3 rather than asking for this p
   (`docs/adr/0011-trash-retention.md:18-26`).
 - Emit a member-state or completion event that distinguishes "never started" from "finished"; today the
   sweep needs the plugin's own `startedAt` because `inactive` covers both
-  (`docs/architecture-en.md:405-452`, §4.3.1).
+  (`docs/member-lifecycle-en.md` §2).
 - Document the upgrade rule for stored identifiers the way ADR 0014 does, so a rename has a migration
   path instead of a frozen name.

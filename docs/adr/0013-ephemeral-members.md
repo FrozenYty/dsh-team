@@ -19,7 +19,7 @@ finished members listed.
 
 Two facts constrained the design, and both were established before the code:
 
-1. **There is no completion event.** `docs/architecture-en.md` §4.3 already recorded the cell: `active` ×
+1. **There is no completion event.** `docs/member-lifecycle-en.md` §1 already recorded the cell: `active` ×
    "the child finishes its turn" is *"no durable change — no completion notice is observed"*. So no event
    hook was invented; the signal had to be discovered.
 2. **The installed seam is not the public source tree.** The plugin is built against
@@ -81,7 +81,7 @@ evidence it ran and then stopped. Nothing about retirement is reimplemented.**
 
 ## Alternatives rejected
 
-- **A Harness event or hook for completion.** None exists (`docs/architecture-en.md` §4.3), and the
+- **A Harness event or hook for completion.** None exists (`docs/member-lifecycle-en.md` §1), and the
   plugin may not depend on one. The alternatives were to invent a poll or to read a real registry, and the
   registry is real.
 - **Use `activity: 'inactive'` as the completion signal.** Rejected on the mechanism at

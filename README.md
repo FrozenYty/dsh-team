@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.25.2.
+- Current version: v0.25.3.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -641,7 +641,11 @@ whole local gate.
 
 ## Documentation and contributing
 
-[docs/INDEX-en.md](docs/INDEX-en.md) is the document map; the design is
-[docs/architecture-en.md](docs/architecture-en.md); the ADRs are under [docs/adr/](docs/adr/).
+[docs/INDEX-en.md](docs/INDEX-en.md) is the document map; the layers and the released surface are
+[docs/architecture-en.md](docs/architecture-en.md), a member's life is
+[docs/member-lifecycle-en.md](docs/member-lifecycle-en.md), the work board is
+[docs/task-board-en.md](docs/task-board-en.md), the brief is [docs/handoff-en.md](docs/handoff-en.md),
+the stored record is [docs/roster-storage-en.md](docs/roster-storage-en.md), and the ADRs are under
+[docs/adr/](docs/adr/).
 [AGENTS.md](AGENTS.md) is for AI assistants; [CONTRIBUTING.md](CONTRIBUTING.md) covers branches, commits
 and CI.

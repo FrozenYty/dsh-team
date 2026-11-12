@@ -55,10 +55,10 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 ### P2 — Own roster (v0.2): the lifecycle the shipped team lacks
 
 - [x] **P2-01** Choose the durable store for the roster and write down the record shape.
-  Done when `docs/architecture-en.md` names the service, the record fields and the key design, backed by
+  Done when `docs/roster-storage-en.md` names the service, the record fields and the key design, backed by
   a spike report rather than a guess.
 - [x] **P2-02** Write the roster state matrix (phases × events) before implementing transitions.
-  Done when `docs/architecture-en.md` contains the matrix with every cell decided, including
+  Done when `docs/member-lifecycle-en.md` contains the matrix with every cell decided, including
   retire-versus-spawn races and messages to a retired member.
 - [x] **P2-03** Roster service: spawn a member with a generation-suffixed name through `ctx.subagents`.
   Done when a spawn returns a member record carrying the child Session id and the name is unique in the
@@ -81,7 +81,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   task board. Done when the shipped roster tools are absent from a Lead's tool list, the plugin's own
   task tools replace them, and nothing else regressed.
   **P2-09 landed in v0.13.0, so this blocker is cleared.** The plugin's own board (`task_board`) now holds
-  a member's work and a replacement hands it over (§4.3.2, ADR 0017), so the shipped row is no longer the
+  a member's work and a replacement hands it over (`docs/task-board-en.md` §2, ADR 0017), so the shipped row is no longer the
   only board.
   Delivered (v0.14.0, bundle patch): the patch overrides `tool-agent-team` with `disabled: true`, so
   `spawn_teammate`, `wait_agent` and the shipped `team_task_*` tools are no longer registered; this
@@ -106,7 +106,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   row when the write would change nothing, so re-running any action is safe and no separate guard
   parameter is needed. **Dependencies are deliberately absent**: a task is `{ id, title, status, owner?,
   created_at, updated_at? }`, and what a handover needs is what is still owed, not an ordering rule for it.
-  The transfer matrix is in `docs/architecture-en.md` §4.3.2: every cell is written down, including the two
+  The transfer matrix is in `docs/task-board-en.md` §2: every cell is written down, including the two
   half-failures, the already-retired predecessor, a retirement with no successor, restore, the ephemeral
   sweep, and a reused owner name. Caps are refusals: 200 characters per title (`TASK_TITLE_MAX`) and 200
   tasks per Lead (`TASK_LIMIT`). The brief carries the successor's inherited tasks by id and title, bounded

@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.25.3] - 2026-11-13
+
+- The architecture document splits by subject.
+
 ## [0.25.2] - 2026-11-13
 
 - The pair check is a rule over `docs/`, not a list of pairs.
@@ -32,7 +36,7 @@ A release adds a section here in the same pull request that writes its `PROGRESS
 ## [0.25.0] - 2026-11-12
 
 - A member's lifetime is declared, and ending a role asks the person (P4-13).
-- A record that never became a role needs no consent.
+- A record that never became a role needs no consent (review follow-up).
 
 ## [0.24.0] - 2026-11-12
 
