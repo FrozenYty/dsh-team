@@ -14,11 +14,11 @@
 
 ## 状态
 
-- 当前版本：v0.14.1。
+- 当前版本：v0.15.0。
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
-- **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在这里仍没有对应物；替代做法见下面的**只面向模型**一节。
+- **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
-- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；以及任务板写入时的上限与真机没走到的交接矩阵格子。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；以及任务板写入时的上限与真机没走到的交接矩阵格子；还有 `wait_members` 的事件接线、超时、取消与无进展路径。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -34,6 +34,7 @@
 |---|---|
 | `spawn_member` | 把成员作为一个可续跑的子代理启动，可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。 |
 | `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、实时状态、`compactable`，驻留时还有上下文压力。 |
+| `wait_members` | 阻塞当前这一轮，直到某个成员的实时状态发生变化或超时到期，并报告是哪个成员、变成了什么。有界：默认 30 秒，最长一小时。没有成员处于 running 或 provisioning 时立刻回答 `no_progress`，绝不唤醒任何人，也不等待任务板写入或消息被处理。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
 | `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。 |
@@ -97,6 +98,37 @@ handoff-probe-g2（从未见过前任）回复：42
 
 给一次性成员发消息会清除该标记：再次给它派活，就是声明它不再是一次性的；没有这条规则，清扫就可能吃掉刚刚送达的消息所要保留的工作。
 
+## 限制与刻意省略
+
+五件本 bundle 不做的事，每一件都是决定，而不是遗漏。
+
+- **每个 Lead 一条记录，没有跨进程锁。** 花名册与这个 Lead 的任务板放在同一个 `storageDomain` 域的同一份 JSON 文档里，以 Lead 会话 id 为键（ADR 0003）。该设施没有跨进程锁（ADR 0010），所以两个 Harness 进程共用一份存储时是“后写者赢”：如果两边同时写同一个 Lead，后一次写入会替换前一次，而它没读到的更新就此丢失。对单个正在运行的 Harness 来说这是正确的，子代理本身也这样工作；插件不再加第二把锁，也没有合并协议。
+- **没有浏览器半区。** 没有面板、没有 HTTP 桥、没有客户端 bundle。v0.3 的设置页面板从未在真实 profile 里渲染过，点击也无效，因此 v0.4 选择删除而不是修复（ADR 0008）。所有界面都是面向模型的工具；将来若要做 UI，那是一个新决定，起点是 `actions.js` 里的操作。
+- **官方的 `agent-team` 服务行保持挂载。** 收养、成员判定与投影过滤都要读它，所以补丁不能把它禁用——而这项服务自己也发布三件面向模型的工具：`list_agents`、`send_message`、`interrupt_agent`，它们因此仍留在 Lead 的工具列表里。补丁退役的是官方**工具**行（`tool-agent-team`）；移除那三件会连服务、连同本插件的收养一起带走（ADR 0017）。
+- **被剪除的墓碑无法恢复。** 成功移入产物的那次退役会执行每个 Lead 的回收站上限，删掉超出的最旧条目。墓碑保留 `trashPath`，状态记为 `trashState: pruned`，但字节已经不在，因此 `restore_member` 以 `reason: "pruned"` 拒绝，且绝不调用工作区（ADR 0011）。长期存续的团队若需要超过 20 份可恢复会话，请提前调大上限。
+- **任务板是交接通道，不是项目跟踪器。** 一条任务只有 id、标题、`open`/`done` 和可选的 owner，刻意没有优先级、依赖、评论、子任务与截止日期（ADR 0017）。依赖尤其如此：它需要一张图和一条排序规则，而交接还得决定“依赖仍未完成的任务怎么办”；这个先后顺序留给 Lead 判断。任务板只回答一个问题：继任者现在扛着什么。
+
+## 运行要求与兼容性
+
+**运行**本 bundle 需要已安装的 Harness 以及它读取的官方包，而不是 npm 依赖：bundle 以链接方式装进 profile，且不导入任何 `@deepseek-ai/*` 包（ADR 0002），所以真正运行的就是这棵工作树。它读取子代理 seam（`startActivation`、`drainChildren`、`sendMessage`、`interrupt`、`listDescendants`）、官方 `agent-team` 服务（收养与成员判定）、`sessionController`（投影过滤；宿主没有这项就跳过）、token 计量（上下文压力）、存储域设施，以及智能体注册表与它的 `agent/status` 事件（等待）。`compact_member` 还需要已挂载的压缩后端，补丁里的 `compaction-basic` 条目会启用它。宿主侧效果都带能力探测：Harness 形状变了就跳过那项效果，而不是让加载失败。没有挂载实验性团队 bundle 的 profile 里没有 `tool-agent-team` 行可供补丁禁用；Loader 会就这个缺失目标告警，并跳过该条目。
+
+**开发**测试套件需要 Node 24 和 CI 钉住的那个 flag：`.github/workflows/ci.yml` 设置 `node-version: "24"`，并运行 `node --test --test-isolation=none tests/*.test.mjs`。这个 flag 不是可选项。Node 22 把它写作 `--experimental-test-isolation`，所以这个拼写本身就固定了大版本；而默认 runner 会为每个测试文件起一个进程，作者机器上的沙箱拒绝这种 spawn。CI 与本机跑同一条命令，所以本机通过的含义与 CI 通过相同。
+
+## 从 v0.13 或更早版本升级
+
+v0.14.0 禁用了官方的 `tool-agent-team` 行，因此用过它的 profile 会失去下表中的工具。v0.13.0 的花名册与任务板其余部分不变：存储域、补丁行 id、回收站目录、改名前的环境变量以及记录形状都照旧，所以升级不需要迁移（ADR 0014）。
+
+| v0.14.0 移除的工具 | 改用什么 |
+|---|---|
+| `spawn_teammate` | `spawn_member`；带 `replace` 的 `spawn_member` 会在同一次调用里启动继任者并退役前任。 |
+| `wait_agent` | `wait_members`（v0.15.0）：对成员的实时状态做有界等待。它不唤醒任何人，且在没有成员处于 running 或 provisioning 时立刻回答 `no_progress`。 |
+| `team_task_create` | `task_board` 配 `action: "create"`。 |
+| `team_task_list` | `task_board` 配 `action: "list"`。 |
+| `team_task_get` | `task_board` 配 `action: "list"`，再按 id 读那一行。 |
+| `team_task_update` | `task_board` 配 `action: "update"`（状态与 owner）、`"release"`（清空 owner）或 `"delete"`。依赖、优先级与评论的编辑没有替代：自有任务板没有这些字段（ADR 0017）。 |
+
+官方任务板上的行不会迁移，本插件也读不到。把工作留在那里的 Lead 用 `task_board` 重新创建即可，那只是几次 `create` 调用，不是一次迁移。官方的 `list_agents`、`send_message` 与 `interrupt_agent` **不在**被移除之列：它们由 `agent-team` 服务行发布，而那一行保持挂载。
+
 ## 安装与验证
 
 ```
@@ -110,7 +142,8 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 与 `trash_path`；
 - `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；当前任有未完成任务时，结果还会用 `transferred` 报告数量与 id，继任者的交接书里也会点名它们；
 - `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
-- Lead 的工具列表里有本插件的工具，没有 `spawn_teammate`、`wait_agent` 或 `team_task_*` 工具，但仍有 `agent-team` 服务发布的三件：`list_agents`、`send_message`、`interrupt_agent`；
+- 没有成员在跑时 `wait_members` 回答 `no_progress`；用 `message_member` 唤醒某个成员后，它会在超时之内返回该成员的 target 与 `status: "idle"`；
+- Lead 的工具列表里有本插件的工具（含 `wait_members`），没有 `spawn_teammate`、官方的 `wait_agent` 或 `team_task_*` 工具，但仍有 `agent-team` 服务发布的三件：`list_agents`、`send_message`、`interrupt_agent`；
 - `include:compaction-basic` 的状态是 `schema`，而不是 `inactive`。
 
 ## 配置
@@ -133,9 +166,9 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 
 ## 只面向模型
 
-没有浏览器半区、没有 HTTP 桥、没有客户端 bundle；v0.3 的设置页面板从未真正渲染，实际也点不动，因此选择移除而不是修复（ADR 0008）。`list_members` 就是控制面：它覆盖官方花名册的成员，以及用官方 `subagent` 工具启动的每个子代理，其余六个工具可以寻址它返回的任意一行。
+没有浏览器半区、没有 HTTP 桥、没有客户端 bundle；v0.3 的设置页面板从未真正渲染，实际也点不动，因此选择移除而不是修复（ADR 0008）。`list_members` 就是控制面：它覆盖官方花名册的成员，以及用官方 `subagent` 工具启动的每个子代理；其余工具都从它报告的内容出发——按成员寻址的工具取某一行的 `target`，而 `task_board`、`handoff_template` 与 `wait_members` 读写的是 Lead 自己的记录与这些行所描述的实时状态。
 
-补丁禁用了官方的团队工具行（P2-07），所以 Lead 能用的花名册调用就是本插件自有的九个工具。官方那行的 `spawn_teammate`、`wait_agent` 与 `team_task_*` 工具都已不在——调用它们会回答 `unknown tool`——它们各自在这里有对应物（`spawn_member`、`message_member`、`list_members`、`stop_member`、`task_board`），只有 `wait_agent` 没有：本插件没有阻塞式等待，所以 Lead 改为重读 `list_members` 看实时状态、用 `message_member` 唤醒需要的成员，并把 `inactive` 读作“当前没有轮次在执行”，而不是“已完成”。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由官方的 `agent-team` **服务**行发布，而那一行保持挂载，因为收养、成员判定与投影过滤都要读它；`list_members` 依旧报出它创建的成员，也正是因为这项服务还在；消失的是官方那行自己的工具集。
+补丁禁用了官方的团队工具行（P2-07），所以 Lead 能用的花名册调用就是本插件自有的十个工具。官方那行的 `spawn_teammate`、`wait_agent` 与 `team_task_*` 工具都已不在——调用它们会回答 `unknown tool`——每一件在这里都有替代：`spawn_member`、`message_member`、`list_members`、`stop_member`、`task_board`，以及接替 `wait_agent` 的 `wait_members`（v0.15.0）。`wait_members` 监听的是 Harness 自己的 `agent/status`，范围限定在本花名册的成员——官方的等待看不到这些成员；它只观察调用开始之后的变化，所以空闲成员仍要用 `message_member` 唤醒。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由官方的 `agent-team` **服务**行发布，而那一行保持挂载，因为收养、成员判定与投影过滤都要读它；`list_members` 依旧报出它创建的成员，也正是因为这项服务还在；消失的是官方那行自己的工具集。
 
 ## 开发
 
@@ -145,7 +178,7 @@ node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
 
-`--test-isolation=none` 在 Windows 上是必需的：默认 runner 会为每个文件起一个进程，而沙箱拒绝这种 spawn；这个 flag 同时固定了 Node 大版本，CI 也钉在 24。两边跑同一条命令，所以本机通过的含义与 CI 通过相同。
+Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面的[运行要求与兼容性](#运行要求与兼容性)；本地门槛就是这三条命令。
 
 ## 仓库结构
 

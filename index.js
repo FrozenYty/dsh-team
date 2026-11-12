@@ -9,10 +9,11 @@
  * this plugin replaces; the roster *service* stays mounted so this plugin can adopt the members it
  * created and keep using its Lead membership test.
  *
- * Tools: `spawn_member`, `list_members`, `message_member`, `stop_member`, `retire_member`,
- * `restore_member`, `compact_member`, `handoff_template`, `task_board`. The operation bodies live in
- * `actions.js`; this file keeps argument validation, the Lead-only authority check, and the tool result
- * schemas, and nothing else. The plugin has no browser half: it is entirely model-facing (ADR 0008).
+ * Tools: `spawn_member`, `list_members`, `wait_members`, `message_member`, `stop_member`,
+ * `retire_member`, `restore_member`, `compact_member`, `handoff_template`, `task_board`. The operation
+ * bodies live in `actions.js`; this file keeps argument validation, the Lead-only authority check, and
+ * the tool result schemas, and nothing else. The plugin has no browser half: it is entirely
+ * model-facing (ADR 0008).
  *
  * `spawn_member` with `replace` is the whole replacement: it starts the successor from a short handoff
  * brief composed from the assignment recorded on the predecessor's record, then retires the
@@ -23,7 +24,10 @@
  * what a Lead that never stores one gets. The shipped team *tool* row is disabled by the bundle patch
  * (P2-07), so the spawn, wait and task tools it published are gone; its *service* row stays mounted for
  * adoption and the projection filter, and that service is model-facing itself, so `list_agents`,
- * `send_message` and `interrupt_agent` remain in a Lead's tool list beside these tools.
+ * `send_message` and `interrupt_agent` remain in a Lead's tool list beside these tools. `wait_members`
+ * restores the blocking wait the disabled row took with it: it observes the Harness's own `agent/status`
+ * for the child Sessions on this Lead's roster, which the shipped service's `waitForChange` cannot see
+ * (a member spawned through `ctx.subagents` is not in that service's journal).
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
@@ -56,6 +60,9 @@ import {
   spawnMember,
   stopMember,
   taskBoard,
+  WAIT_TIMEOUT_DEFAULT,
+  WAIT_TIMEOUT_MAX,
+  waitMembers,
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
 import {
@@ -306,6 +313,29 @@ const MEMBER_LIST_VALUE = {
     // which (P2-09, ADR 0017). Both absent when nothing was swept or the swept members owned nothing.
     unowned: { type: 'integer' },
     unowned_tasks: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+/**
+ * The answer to one bounded wait.
+ *
+ * `target` and `status` are present only on the wake path and name the member whose transition ended
+ * the wait; `no_progress` is present only when the wait refused to start. A timeout adds neither,
+ * which is what lets the model tell "someone moved" from "I stopped looking" from "nothing could move".
+ */
+const WAIT_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['timed_out', 'waited_ms', 'message'],
+  properties: {
+    timed_out: { type: 'boolean' },
+    waited_ms: { type: 'integer' },
+    // True when the call returned immediately because no member was running or provisioning.
+    no_progress: { type: 'boolean' },
+    // The member that changed, and the live status it entered.
+    target: { type: 'string' },
+    status: { type: 'string', enum: ['running', 'idle'] },
+    message: { type: 'string' },
   },
 }
 
@@ -673,6 +703,39 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           dataDir,
           hooks,
           trashLimit,
+        })
+      },
+    })))
+
+    register(scoped.tools.register(defineTool({
+      name: 'wait_members',
+      description: `Block inside this turn until one of this Lead's members changes live state (running or idle) or the timeout expires, then report which member changed and into what. It observes only changes after the call starts, wakes nobody, and returns no_progress at once when no member is running or provisioning, because nothing can change while the Lead is blocked. It does NOT wait for a task_board change, for a message to be processed, for a member to finish its whole assignment, or for a retired member's state; re-read list_members after it returns. timeout_ms defaults to ${WAIT_TIMEOUT_DEFAULT} and may not exceed ${WAIT_TIMEOUT_MAX} (one hour).`,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          timeout_ms: {
+            type: 'integer',
+            description: `How long to wait in milliseconds: a positive integer up to ${WAIT_TIMEOUT_MAX}. Omit for ${WAIT_TIMEOUT_DEFAULT} (30 seconds), the default.`,
+          },
+        },
+      },
+      output: { schema: WAIT_VALUE },
+      async execute(args, exec) {
+        const caller = callingAgent(exec.agent, 'wait_members')
+        requireLead(ctx, caller, 'wait_members')
+        if (args.timeout_ms !== undefined
+          && (!Number.isSafeInteger(args.timeout_ms) || args.timeout_ms < 1 || args.timeout_ms > WAIT_TIMEOUT_MAX)) {
+          throw new Error(`wait_members: timeout_ms must be an integer from 1 through ${WAIT_TIMEOUT_MAX}`)
+        }
+        const table = await store
+        return await waitMembers({
+          ctx,
+          table,
+          leadSessionId: leadSessionIdOf(caller),
+          leadAgent: caller,
+          timeoutMs: args.timeout_ms,
+          signal: exec.signal,
         })
       },
     })))

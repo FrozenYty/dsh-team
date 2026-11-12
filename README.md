@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.14.1.
+- Current version: v0.15.0.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -42,8 +42,9 @@ directory did not, on purpose (ADR 0014).
   gone from a Lead's list and calling one answers `unknown tool`, while this plugin's `spawn_member` and
   `task_board` remain. Three tools are still there, and this patch cannot remove them: `list_agents`,
   `send_message` and `interrupt_agent` come from the `agent-team` *service* row, which the bundle keeps
-  mounted because adoption, the membership test and the projection filter read it. `wait_agent` remains
-  the one tool with no equivalent here; the replacement for it is under **Model-facing only** below.
+  mounted because adoption, the membership test and the projection filter read it. `wait_agent` was the
+  one tool with no equivalent here until v0.15.0; `wait_members` now replaces it, built on the Harness's
+  own `agent/status` event, and it is unit-tested only — its live subscription has not run in a profile.
 - **Two failures only a live install could show**, each one line, each fixed inside the release that had
   it and each now covered: v0.12.0's bundle installed and did not activate until a schema keyword was
   removed (same version; `scripts/check.mjs` now refuses that keyword), and v0.13.0's replacement answered
@@ -52,8 +53,8 @@ directory did not, on purpose (ADR 0014).
 - **Unit-tested only**, with no live profile having exercised them: the write-time `label` and
   `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
   operations overlap; that a member still running is never swept; the exact request a spawn with no
-  `spawn_options` composes; and the task board's write-time caps and the transfer-matrix cells a live run
-  did not reach.
+  `spawn_options` composes; the task board's write-time caps and the transfer-matrix cells a live run did
+  not reach; and `wait_members`' event wiring, timeout, cancellation and no-progress paths.
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -77,6 +78,7 @@ that is a move rather than a deletion.
 |---|---|
 | `spawn_member` | Start a named member as a continuable child, optionally with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
 | `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, live state, `compactable` and — while resident — context pressure. |
+| `wait_members` | Block this turn until a member's live status changes or a timeout expires, and report which member changed and into what. Bounded: 30 seconds by default, at most one hour. It answers `no_progress` at once when no member is running or provisioning, never wakes anyone, and does not wait for board writes or message processing. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
 | `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. |
@@ -190,6 +192,78 @@ the sweep retired nobody.
 Messaging an ephemeral member clears the flag: sending it work again is a declaration that it is not
 one-shot after all, and without that rule a sweep could eat work a just-delivered message meant to keep.
 
+## Limits and deliberate omissions
+
+Five things this bundle does not do, each decided rather than forgotten.
+
+- **One record per Lead, and no cross-process lock.** The roster and this Lead's board live in one JSON
+  document in a `storageDomain` domain keyed by the Lead Session id (ADR 0003). The facility has no
+  cross-process lock (ADR 0010), so two Harness processes over one store are last-writer-wins: if both
+  write the same Lead, the later write replaces the earlier one and the update it never read is lost.
+  That is correct for one running Harness, which is how subagents themselves work; the plugin adds no
+  second lock and no merge protocol.
+- **No browser half.** There is no panel, HTTP bridge or client bundle. v0.3's Settings panel was never
+  rendered in a real profile and its clicks did not work, so v0.4 deleted it rather than repairing it
+  (ADR 0008). Every surface is a model-facing tool, and a future UI is a new decision that starts from
+  the operations in `actions.js`.
+- **The shipped `agent-team` service row stays mounted.** Adoption, the membership test and the
+  projection filter read it, so the patch cannot disable it — and that service publishes three
+  model-facing tools of its own, `list_agents`, `send_message` and `interrupt_agent`, which therefore
+  remain in a Lead's tool list. The patch retires the shipped *tool* row (`tool-agent-team`); removing
+  those three would take the service, and this plugin's adoption, with them (ADR 0017).
+- **A pruned tombstone cannot be restored.** A retirement that moves an artifact in enforces the
+  per-Lead trash cap and removes the oldest entries past it. The tombstone keeps its `trashPath` and
+  records `trashState: pruned`, but the bytes are gone, so `restore_member` refuses with
+  `reason: "pruned"` and never calls the workspace (ADR 0011). Configure a larger cap before a
+  long-lived team needs more than 20 recoverable sessions.
+- **The task board is a handover channel, not a project tracker.** A task has an id, a title,
+  `open`/`done` and an optional owner, and deliberately no priorities, dependencies, comments,
+  sub-tasks or due dates (ADR 0017). Dependencies would need a graph and an ordering rule, and a
+  handover would then have to decide what to do with a task whose dependency is still open; that order
+  stays the Lead's judgment. The board answers one question: what work does the successor carry now?
+
+## Requirements and compatibility
+
+**To run**, the bundle needs the installed Harness and the shipped packages it reads — not npm
+dependencies: it is linked into a profile and imports no `@deepseek-ai/*` package (ADR 0002), so what
+runs is this working tree. It reads the subagent seam (`startActivation`, `drainChildren`,
+`sendMessage`, `interrupt`, `listDescendants`), the shipped `agent-team` service (adoption and the
+membership test), `sessionController` (the projection filter; a host without it is skipped), the token
+meter (context pressure), the storage-domain facility, and the agent registry with its `agent/status`
+event (the wait). `compact_member` additionally needs a mounted compaction backend, which the patch's
+`compaction-basic` entry enables. The host-side effects are capability-probed: a Harness whose shape
+changed skips that effect rather than failing the load. A profile that does not mount the experimental
+team bundle has no `tool-agent-team` row for the patch to disable; the Loader warns about the missing
+target and skips that entry.
+
+**To develop**, the test suite needs Node 24 and the flag CI pins: `.github/workflows/ci.yml` sets
+`node-version: "24"` and runs `node --test --test-isolation=none tests/*.test.mjs`. The flag is not
+optional. Node 22 documents it as `--experimental-test-isolation`, so the spelling itself fixes the
+major version; and the default runner spawns one process per test file, which the sandbox on the
+author's machine refuses. CI runs the same command as the local machine, so a local pass is the same
+statement as a green run.
+
+## Upgrading from v0.13 or earlier
+
+v0.14.0 disabled the shipped `tool-agent-team` row, so a profile that used it loses the tools below.
+v0.13.0's roster and board are otherwise unchanged: the storage domain, the patch row id, the trash
+directory, the pre-rename environment variable and the record shape all carry over, so upgrading needs
+no migration (ADR 0014).
+
+| Removed in v0.14.0 | Call instead |
+|---|---|
+| `spawn_teammate` | `spawn_member`; `spawn_member` with `replace` starts the successor and retires the predecessor in one call. |
+| `wait_agent` | `wait_members` (v0.15.0): a bounded wait on the members' live status. It does not wake anyone, and answers `no_progress` at once when no member is running or provisioning. |
+| `team_task_create` | `task_board` with `action: "create"`. |
+| `team_task_list` | `task_board` with `action: "list"`. |
+| `team_task_get` | `task_board` with `action: "list"`, then read the row by id. |
+| `team_task_update` | `task_board` with `action: "update"` (status and owner), `"release"` (clear the owner) or `"delete"`. Dependency, priority and comment edits have no replacement: the owned board has none of those fields (ADR 0017). |
+
+The shipped board's rows are not migrated and not readable from this plugin. A Lead that kept work
+there re-creates it with `task_board`, which is a couple of `create` calls rather than a migration. The
+shipped `list_agents`, `send_message` and `interrupt_agent` are **not** among the removed tools: the
+`agent-team` service row publishes them and stays mounted.
+
 ## Install and verify
 
 ```
@@ -207,9 +281,11 @@ tree — there is no build step. Verification after installing is live calls, no
   and the successor's brief names them;
 - `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed, or
   `started: false` with a `reason` when the profile's provider or preset registry refuses it;
-- a Lead's tool list contains this plugin's tools, no `spawn_teammate`, `wait_agent` or `team_task_*` tool,
-  and the three the `agent-team` service still publishes: `list_agents`, `send_message` and
-  `interrupt_agent`;
+- `wait_members` answers `no_progress` when nothing is running; after `message_member` wakes a member,
+  it returns that member's target with `status: "idle"` when the turn ends, within its timeout;
+- a Lead's tool list contains this plugin's tools — `wait_members` included — and no `spawn_teammate`,
+  shipped `wait_agent` or `team_task_*` tool, and the three the `agent-team` service still publishes:
+  `list_agents`, `send_message` and `interrupt_agent`;
 - `include:compaction-basic` reports status `schema`, not `inactive`.
 
 ## Configuration
@@ -243,19 +319,22 @@ projects, and a zero-import bundle (ADR 0002) cannot import one (ADR 0012).
 
 No browser half, no HTTP bridge, no client bundle; the v0.3 Settings panel was never rendered and did not
 work in use, so it was removed rather than repaired (ADR 0008). `list_members` is the control surface: it
-covers the shipped roster's members and every child spawned with the shipped `subagent` tools, and the
-other six tools address any row it returns.
+covers the shipped roster's members and every child spawned with the shipped `subagent` tools, and every
+other tool works from what it reports — the member-scoped ones take a row's `target`, while `task_board`,
+`handoff_template` and `wait_members` read or write the Lead's own record and the live state those rows
+describe.
 
 The shipped team tool row is disabled by the patch (P2-07), so the roster calls a Lead has are this
-plugin's own nine tools. The row's `spawn_teammate`, `wait_agent` and `team_task_*` tools are gone —
-calling one now answers `unknown tool` — and every one of them has an equivalent here (`spawn_member`,
-`message_member`, `list_members`, `stop_member`, `task_board`) except `wait_agent`: there is no blocking
-wait, so a Lead re-reads `list_members` for live state and uses `message_member` to wake a member it
-needs, and reads `inactive` as "no turn is executing", never as "finished". Three tools remain, and the
-patch cannot remove them: `list_agents`, `send_message` and `interrupt_agent` are published by the shipped
-`agent-team` *service* row, which stays mounted because adoption, the membership test and the projection
-filter read it. `list_members` still reports the members the shipped roster created, and that is the same
-service at work; what is gone is the shipped row's own tool set.
+plugin's own ten tools. The row's `spawn_teammate`, `wait_agent` and `team_task_*` tools are gone —
+calling one now answers `unknown tool` — and each has a replacement here: `spawn_member`,
+`message_member`, `list_members`, `stop_member` and `task_board`, plus `wait_members` for `wait_agent`
+(v0.15.0). `wait_members` blocks on the Harness's own `agent/status` for the members on this roster,
+where the shipped wait could not see them, and it observes changes only after the call starts, so an
+idle member still has to be woken with `message_member`. Three tools remain, and the patch cannot remove
+them: `list_agents`, `send_message` and `interrupt_agent` are published by the shipped `agent-team`
+*service* row, which stays mounted because adoption, the membership test and the projection filter read
+it. `list_members` still reports the members the shipped roster created, and that is the same service at
+work; what is gone is the shipped row's own tool set.
 
 ## Development
 
@@ -265,8 +344,9 @@ node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
 
-`--test-isolation=none` is required on Windows (the default runner spawns one process per file, which the
-sandbox refuses) and fixes the Node major, which CI pins to 24 too; both sides run the same command.
+The Node 24 requirement and why `--test-isolation=none` is not optional are in
+[Requirements and compatibility](#requirements-and-compatibility) above; the three commands are the
+whole local gate.
 
 ## Repository layout
 

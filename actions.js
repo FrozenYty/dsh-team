@@ -489,6 +489,127 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
 }
 
 /**
+ * How long `wait_members` blocks by default, and the longest it may block.
+ *
+ * Bounded on purpose: the tool exists so a Lead can block inside one turn, never so it can block
+ * forever. 30 seconds is the shipped `wait_agent` default and the ceiling is that tool's documented
+ * maximum, so a model that knows one surface already knows this one.
+ */
+export const WAIT_TIMEOUT_DEFAULT = 30_000
+export const WAIT_TIMEOUT_MAX = 3_600_000
+
+/**
+ * Resolve on the next live-status change of one of the watched agents, or on the timeout.
+ *
+ * This is the whole wait: one subscription on the Harness's own status event, one timer, and the
+ * caller's own cancellation. The subscription is removed on every exit, so a finished wait leaves no
+ * listener behind.
+ * @param ctx - plugin context, which owns the subscription.
+ * @param {Map<string, string>} watched - child Session id to member target, for the members in scope.
+ * @param {number} timeoutMs - the bound, already validated by the caller.
+ * @param {AbortSignal|undefined} signal - the tool call's cancellation.
+ * @returns {Promise<{target: string, status: string}|{timedOut: true}|{aborted: true}>} the observation.
+ */
+function nextMemberStatus(ctx, watched, timeoutMs, signal) {
+  return new Promise((resolve) => {
+    let settled = false
+    let timer
+    let off = () => {}
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      off()
+      if (signal !== undefined) signal.removeEventListener('abort', onAbort)
+      resolve(value)
+    }
+    const onAbort = () => finish({ aborted: true })
+    off = ctx.on('agent/status', (payload) => {
+      const target = watched.get(payload?.agent?.id)
+      // The Lead's own transition and every unrelated agent are not this wait's business.
+      if (target === undefined) return
+      if (payload.status !== 'running' && payload.status !== 'idle') return
+      finish({ target, status: payload.status })
+    })
+    if (typeof off !== 'function') off = () => {}
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+    timer = setTimeout(() => finish({ timedOut: true }), timeoutMs)
+  })
+}
+
+/**
+ * Wait for the next live-status change among one Lead's members.
+ *
+ * The event is the Harness's own `agent/status` (`idle` ⇄ `running` for one Agent). The plugin
+ * subscribes from its own context and filters by the child Session ids on this Lead's roster, rather
+ * than calling the shipped `agentTeams.waitForChange`: that service is notified from the same event,
+ * but only for an agent its own membership test resolves, and `tryMembership` answers `undefined` for
+ * a subagent its journal does not own (installed `dsh-experimental-agent-team`
+ * `lib/types/roster.js:75-79`; its observer is `lib/index.js:1477-1480`). Every member this plugin
+ * spawns is exactly such a child, so the shipped wait would never wake for it. An unscoped listener is
+ * admitted to a scoped dispatch (`@deepseek-ai/dsh-scope` `lib/index.js:327-338`), so this plugin can
+ * observe those transitions itself.
+ *
+ * A wait that could never end is refused before it starts: while the Lead is blocked, an idle member
+ * has no turn to end and nothing can wake it, so a roster with no `running` member and no
+ * `provisioning` reservation answers `no_progress` at once. It observes changes only after the call
+ * starts, wakes nobody, and never waits for a task-board write, a delivered message to be processed,
+ * a member's whole assignment, or a retired member's state.
+ * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
+ *   timeoutMs?: number, signal?: AbortSignal}} request
+ * @returns {Promise<object>} the tool's result object.
+ */
+export async function waitMembers({
+  ctx,
+  table,
+  leadSessionId,
+  leadAgent,
+  timeoutMs = WAIT_TIMEOUT_DEFAULT,
+  signal,
+}) {
+  const caller = requireLiveLead('wait_members', leadSessionId, leadAgent)
+  const startedAt = Date.now()
+  const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+  const watched = new Map()
+  let canChange = false
+  for (const member of roster.members) {
+    watched.set(member.childId, targetOf(member))
+    if (member.phase === PHASE.provisioning || liveStateOf(ctx, member).status === 'running') canChange = true
+  }
+  if (!canChange) {
+    return {
+      timed_out: false,
+      waited_ms: Date.now() - startedAt,
+      no_progress: true,
+      message: 'No member is running or provisioning, so no member can change state while this call blocks. Re-list with list_members, wake the member you need with message_member, then wait again.',
+    }
+  }
+  const observed = await nextMemberStatus(ctx, watched, timeoutMs, signal)
+  const waited_ms = Date.now() - startedAt
+  if (observed.aborted) throw signal?.reason ?? new Error('wait_members: the wait was cancelled')
+  if (observed.timedOut) {
+    return {
+      timed_out: true,
+      waited_ms,
+      message: `No member changed state within ${timeoutMs} ms. Re-list with list_members for the current roster.`,
+    }
+  }
+  return {
+    timed_out: false,
+    waited_ms,
+    target: observed.target,
+    status: observed.status,
+    message: `Member "${observed.target}" is now ${observed.status}. Re-list with list_members for the whole roster.`,
+  }
+}
+
+/**
  * The optional part of the Harness activation request, built from the tool's `spawn_options`.
  *
  * The plugin interprets none of these values. `cwd` is forwarded exactly as the model wrote it: the

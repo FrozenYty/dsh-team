@@ -1,6 +1,6 @@
 {
   "name": "dsh-team",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
   "description": "Agent-team roster with retirement, replacement, session trash and context tooling for DeepSeek Harness.",

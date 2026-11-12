@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { apply } from '../index.js'
+import { WAIT_TIMEOUT_MAX } from '../actions.js'
 import { memoryTable } from './memory-table.mjs'
 
 /**
@@ -209,6 +210,25 @@ test('task_board validates its action surface and forwards it to the operation',
   assert.equal(table.get('lead-1').tasks.length, 0)
 })
 
+test('wait_members validates its timeout and refuses a non-Lead caller', async () => {
+  const { tools, child, lead } = harness()
+  const wait = tools.get('wait_members')
+  assert.ok(wait, 'the wait is registered on the Lead context')
+
+  for (const timeout_ms of [0, -1, 1.5, '100', WAIT_TIMEOUT_MAX + 1]) {
+    await assert.rejects(
+      () => wait.execute({ timeout_ms }, { agent: lead }),
+      /timeout_ms must be an integer from 1 through/,
+    )
+  }
+  await assert.rejects(() => wait.execute({}, { agent: child }), /available to the Team Lead only/)
+
+  // An empty roster can produce no change: the wait says so at once instead of blocking for its bound.
+  const result = await wait.execute({}, { agent: lead })
+  assert.equal(result.no_progress, true)
+  assert.equal(result.timed_out, false)
+})
+
 test('the loader path reads the trash cap from the config and refuses a bad one before registering anything', () => {
   // No config at all, and an empty config row: both are the documented default, not a failure.
   for (const config of [undefined, {}]) {
@@ -300,6 +320,8 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.equal(born.target, 'reviewer')
   const task = await answer('task_board', { action: 'create', title: 'Recheck the curve', owner: 'reviewer' })
   await answer('list_members', {})
+  const waited = await answer('wait_members', {})
+  assert.equal(waited.no_progress, true, 'no member is live in this harness, so the wait reports it')
 
   // The exact shape v0.13.0 lost: a replacement that moves work answers with the transfer.
   const successor = await answer('spawn_member', { replace: 'reviewer', label: 'Reviewer II', prompt: 'Take over.' })
