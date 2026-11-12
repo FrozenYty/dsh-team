@@ -117,12 +117,15 @@ request, not on this field. A start the Harness refuses comes back as `started: 
 reason and the way out; and a refusal for a stale target names the live holder of that name in
 `current_holder`, so a Lead whose member was replaced can retarget the old name.
 
-Two host-side effects run for every retirement, both capability-probed: the host's session-list exits strip
-retired ids from `subagentCatalog` and `agentTeam` frames, so the top subagent picker and the built-in team
-panel stop rendering the member (no host source change, no Web rebuild); and while a spawn runs, the
-shipped roster's effective `maxMembers` rises by that Lead's retired count, so one retirement buys back one
-slot. Separately, the patch enables the shipped `compaction-basic` row with `disabled: false`, so
-automatic compaction covers every agent in the process, subagents included.
+Two host-side effects run on the session-list exits, both capability-probed: the projections strip retired
+ids from `subagentCatalog` and `agentTeam` frames, so the top subagent picker and the built-in team panel
+stop rendering a retired member (no host source change, no Web rebuild); and the same `agentTeam` value
+gains this Lead's live members, so the shipped **成员** panel lists the members this plugin spawned, with
+a click opening each member's real chat. A retired member leaves that panel — it is not rendered as a row
+marked retired, because the panel's phase vocabulary has no such value. While a spawn runs, the shipped
+roster's effective `maxMembers` rises by that Lead's retired count, so one retirement buys back one slot.
+Separately, the patch enables the shipped `compaction-basic` row with `disabled: false`, so automatic
+compaction covers every agent in the process, subagents included.
 
 ## In use
 
@@ -287,9 +290,13 @@ Five things this bundle does not do, each decided rather than forgotten.
   write the same Lead, the later write replaces the earlier one and the update it never read is lost.
   That is correct for one running Harness, which is how subagents themselves work; the plugin adds no
   second lock and no merge protocol.
-- **No browser half.** There is no panel, HTTP bridge or client bundle. v0.3's Settings panel was never
-  rendered in a real profile and its clicks did not work, so v0.4 deleted it rather than repairing it
-  (ADR 0008). Every surface is a model-facing tool, and a future UI is a new decision that starts from
+- **No browser half of its own.** There is no plugin panel, HTTP bridge or client bundle.
+  v0.3's Settings panel was never rendered in a real profile and its clicks did not work, so v0.4 deleted
+  it rather than repairing it (ADR 0008). What the panel shows is overlaid at the host's session-list
+  exit (ADR 0023): its **成员** section lists this plugin's live members, and a retired member leaves the
+  panel rather than being marked. The overlay only reads: it can neither retire nor replace anything, and
+  it cannot write the Session log, which is why the shipped fold's closed phases (ADR 0001) do not apply
+  to it. Every operation remains a model-facing tool, and a future UI is a new decision that starts from
   the operations in `actions.js`.
 - **The shipped `agent-team` service row stays mounted.** Adoption, the membership test and the
   projection filter read it, so the patch cannot disable it — and that service publishes three
@@ -313,9 +320,9 @@ Five things this bundle does not do, each decided rather than forgotten.
 dependencies: it is linked into a profile and imports no `@deepseek-ai/*` package (ADR 0002), so what
 runs is this working tree. It reads the subagent seam (`startActivation`, `drainChildren`,
 `sendMessage`, `interrupt`, `listDescendants`), the shipped `agent-team` service (adoption and the
-membership test), `sessionController` (the projection filter; a host without it is skipped), the token
-meter (context pressure), the storage-domain facility, and the agent registry with its `agent/status`
-event (the wait). `compact_member` additionally needs a mounted compaction backend, which the patch's
+membership test), `sessionController` (the projection filter and the panel overlay; a host without it is
+skipped), the token meter (context pressure), the storage-domain facility, and the agent registry with its
+`agent/status` event (the wait). `compact_member` additionally needs a mounted compaction backend, which the patch's
 `compaction-basic` entry enables. The host-side effects are capability-probed: a Harness whose shape
 changed skips that effect rather than failing the load. A profile that does not mount the experimental
 team bundle has no `tool-agent-team` row for the patch to disable; the Loader warns about the missing
@@ -371,6 +378,9 @@ tree — there is no build step. Verification after installing is live calls, no
 - a Lead's tool list contains this plugin's tools — `wait_members` included — and no `spawn_teammate`,
   shipped `wait_agent` or `team_task_*` tool, and the three the `agent-team` service still publishes:
   `list_agents`, `send_message` and `interrupt_agent`;
+- the shipped team panel's **成员** section lists a member started with `spawn_member`, an idle one reads
+  未运行 (not running), a click opens its chat, and after `retire_member` the row is gone rather than
+  relabelled;
 - `include:compaction-basic` reports status `schema`, not `inactive`.
 
 ## Configuration
@@ -403,11 +413,13 @@ projects, and a zero-import bundle (ADR 0002) cannot import one (ADR 0012).
 ## Model-facing only
 
 No browser half, no HTTP bridge, no client bundle; the v0.3 Settings panel was never rendered and did not
-work in use, so it was removed rather than repaired (ADR 0008). `list_members` is the control surface: it
-covers the shipped roster's members and every child spawned with the shipped `subagent` tools, and every
-other Lead tool works from what it reports — the target-taking tools take a row's `target`, while
-`task_board`, `handoff_template` and `wait_members` read or write the Lead's own record and the live state
-those rows describe.
+work in use, so it was removed rather than repaired (ADR 0008). The only in-app view is the shipped team
+panel, which this plugin overlays read-only at the host's session-list exit: its **成员** section lists
+this plugin's live members, and a retired member leaves that list (ADR 0023). `list_members` is the
+control surface: it covers the shipped roster's members and every child spawned with the shipped
+`subagent` tools, and every other Lead tool works from what it reports — the target-taking tools take a
+row's `target`, while `task_board`, `handoff_template` and `wait_members` read or write the Lead's own
+record and the live state those rows describe.
 
 The other scope is the member's. `list_my_tasks` is registered on a member Agent, not on the Lead, takes
 no argument, and is read-only: the caller's Session picks the roster row and therefore the rows, so a
@@ -447,7 +459,7 @@ whole local gate.
 | `actions.js` | The roster operations behind the tools |
 | `roster.js`, `trash.js` | Durable roster (phases, name generations, adoption, migration) and the session trash with its restore and retention cap |
 | `definitions.js` | The `team/` layer: the flat-frontmatter parser, the member-definition scan and its caps, the team file's handoff template, and the working directory both are resolved from |
-| `host-hooks.js` | Projection filter and roster slot credit |
+| `host-hooks.js` | Projection filter (strip retired ids, add this plugin's live members to the team panel) and roster slot credit |
 | `tests/`, `scripts/check.mjs` | Unit tests, and the repository checks CI runs |
 | `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `.github/` | The bundle, its CI workflow and templates |
 | `PLAN.md`, `PROGRESS.md`, `docs/` | Open tasks, the append-only change log, and the design documents (bilingual) with the ADRs |

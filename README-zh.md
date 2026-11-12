@@ -47,7 +47,7 @@
 
 **成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值——只有一个例外：改了 `provider` 或 `model` 却没给 `reasoning_effort` 时，新路由解析自己的默认值。`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 携带 `provider`、`model`、`reasoning_effort` 与 `max_tokens`，最后一项是 token 上限，也是挑更便宜模型的地方；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。`started_with` 是插件转发内容的回执，不是子代理解析结果的确认：它原样回显传入的字段，既不解析也不回读，所以模型有没有真正生效，要靠成员的第一条请求去确认，而不是这个字段。Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
 
-每次退役都会产生两个宿主侧效果，二者都带能力探测：宿主会话列表出口会从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
+每次退役都在会话列表出口触发两项宿主侧效果，两者都带能力探测：投影先是从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；同一个 `agentTeam` 值随后还会追加该 Lead 的活成员，于是官方**成员**面板会列出本插件启动的成员，点击即可打开该成员真实的会话。已退役成员则是**离场**——面板不会把它留成一行并标注“已退役”，因为面板的相态词表里没有这个值。spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 
 ## 用起来是什么样
 
@@ -131,14 +131,14 @@ You review changes. Report only findings that change behaviour, with the file an
 五件本 bundle 不做的事，每一件都是决定，而不是遗漏。
 
 - **每个 Lead 一条记录，没有跨进程锁。** 花名册与这个 Lead 的任务板放在同一个 `storageDomain` 域的同一份 JSON 文档里，以 Lead 会话 id 为键（ADR 0003）。该设施没有跨进程锁（ADR 0010），所以两个 Harness 进程共用一份存储时是“后写者赢”：如果两边同时写同一个 Lead，后一次写入会替换前一次，而它没读到的更新就此丢失。对单个正在运行的 Harness 来说这是正确的，子代理本身也这样工作；插件不再加第二把锁，也没有合并协议。
-- **没有浏览器半区。** 没有面板、没有 HTTP 桥、没有客户端 bundle。v0.3 的设置页面板从未在真实 profile 里渲染过，点击也无效，因此 v0.4 选择删除而不是修复（ADR 0008）。所有界面都是面向模型的工具；将来若要做 UI，那是一个新决定，起点是 `actions.js` 里的操作。
+- **没有自己的浏览器半区。** 没有本插件自己的面板、没有 HTTP 桥、没有客户端 bundle。v0.3 的设置页面板从未在真实 profile 里渲染过，点击也无效，因此 v0.4 选择删除而不是修复（ADR 0008）。面板显示的内容是在宿主会话列表出口覆盖上去的（ADR 0023）：**成员**区列出本插件的活成员，已退役成员则离开面板而不是被标注。覆盖层只读：它既不能退役也不能替换任何东西，更不能写会话日志，所以官方折叠那套封闭相态（ADR 0001）约束不到它。所有操作仍然是面向模型的工具；将来若要做 UI，那是一个新决定，起点是 `actions.js` 里的操作。
 - **官方的 `agent-team` 服务行保持挂载。** 收养、成员判定与投影过滤都要读它，所以补丁不能把它禁用——而这项服务自己也发布三件面向模型的工具：`list_agents`、`send_message`、`interrupt_agent`，它们因此仍留在 Lead 的工具列表里。补丁退役的是官方**工具**行（`tool-agent-team`）；移除那三件会连服务、连同本插件的收养一起带走（ADR 0017）。
 - **被剪除的墓碑无法恢复。** 成功移入产物的那次退役会执行每个 Lead 的回收站上限，删掉超出的最旧条目。墓碑保留 `trashPath`，状态记为 `trashState: pruned`，但字节已经不在，因此 `restore_member` 以 `reason: "pruned"` 拒绝，且绝不调用工作区（ADR 0011）。长期存续的团队若需要超过 20 份可恢复会话，请提前调大上限。
 - **任务板是交接通道，不是项目跟踪器。** 一条任务只有 id、标题、一段有上限的正文、`open`/`done` 和可选的 owner，刻意没有优先级、依赖、评论、子任务与截止日期（ADR 0017、ADR 0020）。依赖尤其如此：它需要一张图和一条排序规则，而交接还得决定“依赖仍未完成的任务怎么办”；这个先后顺序留给 Lead 判断。任务板只回答一个问题：继任者现在扛着什么。
 
 ## 运行要求与兼容性
 
-**运行**本 bundle 需要已安装的 Harness 以及它读取的官方包，而不是 npm 依赖：bundle 以链接方式装进 profile，且不导入任何 `@deepseek-ai/*` 包（ADR 0002），所以真正运行的就是这棵工作树。它读取子代理 seam（`startActivation`、`drainChildren`、`sendMessage`、`interrupt`、`listDescendants`）、官方 `agent-team` 服务（收养与成员判定）、`sessionController`（投影过滤；宿主没有这项就跳过）、token 计量（上下文压力）、存储域设施，以及智能体注册表与它的 `agent/status` 事件（等待）。`compact_member` 还需要已挂载的压缩后端，补丁里的 `compaction-basic` 条目会启用它。宿主侧效果都带能力探测：Harness 形状变了就跳过那项效果，而不是让加载失败。没有挂载实验性团队 bundle 的 profile 里没有 `tool-agent-team` 行可供补丁禁用；Loader 会就这个缺失目标告警，并跳过该条目。
+**运行**本 bundle 需要已安装的 Harness 以及它读取的官方包，而不是 npm 依赖：bundle 以链接方式装进 profile，且不导入任何 `@deepseek-ai/*` 包（ADR 0002），所以真正运行的就是这棵工作树。它读取子代理 seam（`startActivation`、`drainChildren`、`sendMessage`、`interrupt`、`listDescendants`）、官方 `agent-team` 服务（收养与成员判定）、`sessionController`（投影过滤与面板覆盖层；宿主没有这项就跳过）、token 计量（上下文压力）、存储域设施，以及智能体注册表与它的 `agent/status` 事件（等待）。`compact_member` 还需要已挂载的压缩后端，补丁里的 `compaction-basic` 条目会启用它。宿主侧效果都带能力探测：Harness 形状变了就跳过那项效果，而不是让加载失败。没有挂载实验性团队 bundle 的 profile 里没有 `tool-agent-team` 行可供补丁禁用；Loader 会就这个缺失目标告警，并跳过该条目。
 
 **开发**测试套件需要 Node 24 和 CI 钉住的那个 flag：`.github/workflows/ci.yml` 设置 `node-version: "24"`，并运行 `node --test --test-isolation=none tests/*.test.mjs`。这个 flag 不是可选项。Node 22 把它写作 `--experimental-test-isolation`，所以这个拼写本身就固定了大版本；而默认 runner 会为每个测试文件起一个进程，作者机器上的沙箱拒绝这种 spawn。CI 与本机跑同一条命令，所以本机通过的含义与 CI 通过相同。
 
@@ -172,6 +172,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 - `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
 - 没有成员在跑时 `wait_members` 回答 `no_progress`；用 `message_member` 唤醒某个成员后，它会在超时之内返回该成员的 target 与 `status: "idle"`；
 - Lead 的工具列表里有本插件的工具（含 `wait_members`），没有 `spawn_teammate`、官方的 `wait_agent` 或 `team_task_*` 工具，但仍有 `agent-team` 服务发布的三件：`list_agents`、`send_message`、`interrupt_agent`；
+- 官方团队面板的**成员**区列出用 `spawn_member` 启动的成员，空闲成员显示“未运行”，点击可打开它的会话；`retire_member` 之后该行消失，而不是被改标注；
 - `include:compaction-basic` 的状态是 `schema`，而不是 `inactive`。
 
 ## 配置
@@ -194,7 +195,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 
 ## 只面向模型
 
-没有浏览器半区、没有 HTTP 桥、没有客户端 bundle；v0.3 的设置页面板从未真正渲染，实际也点不动，因此选择移除而不是修复（ADR 0008）。对 Lead 来说，`list_members` 就是控制面：它覆盖官方花名册的成员，以及用官方 `subagent` 工具启动的每个子代理；其余 Lead 工具都从它报告的内容出发——按成员寻址的工具取某一行的 `target`，而 `task_board`、`handoff_template` 与 `wait_members` 读写的是 Lead 自己的记录与这些行所描述的实时状态。
+没有浏览器半区、没有 HTTP 桥、没有客户端 bundle；v0.3 的设置页面板从未真正渲染，实际也点不动，因此选择移除而不是修复（ADR 0008）。唯一的内置视图是官方团队面板，本插件在宿主会话列表出口对它做只读覆盖：**成员**区列出本插件的活成员，已退役成员则离开这个列表（ADR 0023）。对 Lead 来说，`list_members` 就是控制面：它覆盖官方花名册的成员，以及用官方 `subagent` 工具启动的每个子代理；其余 Lead 工具都从它报告的内容出发——按成员寻址的工具取某一行的 `target`，而 `task_board`、`handoff_template` 与 `wait_members` 读写的是 Lead 自己的记录与这些行所描述的实时状态。
 
 另一个作用域属于成员。`list_my_tasks` 注册在成员 Agent 上而不是 Lead 上，不接受参数，且只读：调用方的会话决定花名册行，因此也决定它能看到哪些行；成员只看得到自己名下的工作，Lead 的工具列表保持不变。正因如此，“继任者从任务板上读正文”这句话才成立——名下有任务的继任者不必再问 Lead，也不必去读插件的存储文件（ADR 0022）。
 
@@ -218,7 +219,7 @@ Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面�
 | `actions.js` | 模型侧工具背后的花名册操作 |
 | `roster.js`、`trash.js` | 持久花名册（相态、代次命名、收养、迁移），以及带恢复与保留上限的会话回收站 |
 | `definitions.js` | `team/` 层：扁平 frontmatter 解析器、成员定义扫描及其上限、团队文件的交接书模板，以及两者解析所用的工作目录 |
-| `host-hooks.js` | 投影过滤与花名册名额补偿 |
+| `host-hooks.js` | 投影过滤（剔除已退役 id，并把本插件的活成员追加进团队面板）与花名册名额补偿 |
 | `tests/`、`scripts/check.mjs` | 单元测试，以及 CI 会跑的仓库检查 |
 | `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`.github/` | bundle 本体、CI workflow 与模板 |
 | `PLAN.md`、`PROGRESS.md`、`docs/` | 待办任务、只追加的变更日志，以及双语的设计文档与 ADR |

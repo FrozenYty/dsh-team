@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { installProjectionFilter, installSlotCredit, stripRetiredMembers } from '../host-hooks.js'
+import { installProjectionFilter, installSlotCredit, mergeLiveMembers, stripRetiredMembers } from '../host-hooks.js'
+import { livePanelMembers } from '../index.js'
 
 const payload = () => ({
   sessions: [
@@ -62,6 +63,157 @@ test('a host without sessionController is skipped, not fatal', () => {
   const installed = installProjectionFilter({ get: () => undefined }, { readRetired: async () => new Set() })
   assert.equal(installed.installed, false)
   installed.dispose()
+})
+
+// The overlay's exits, in the shapes the installed `sessionController` serves: the `projections`
+// baseline, a `list` row, the `control` baseline map, a `control` change frame and a `follow` snapshot.
+const leadRow = { id: 'lead-1', name: 'lead', role: 'lead', phase: 'active' }
+const liveByLead = (lead) => (lead === 'lead-1' ? [{ id: 'child-live', name: 'reviewer-g2' }] : [])
+const teamView = (...extra) => ({ members: [leadRow, ...extra], tasks: [] })
+const projectionsBaseline = (...extra) => ({ kind: 'sequenced', asOfSeq: 7, values: { agentTeam: teamView(...extra) } })
+const listBlock = (...extra) => ({
+  items: [{ sessionId: 'lead-1', projections: { kind: 'sequenced', asOfSeq: 7, values: { agentTeam: teamView(...extra) } } }],
+})
+const controlBaseline = (...extra) => ({
+  type: 'baseline',
+  value: { projections: { 'lead-1': { asOfSeq: 7, values: { agentTeam: teamView(...extra) } } } },
+})
+const controlChange = (...extra) => ({
+  type: 'projection',
+  sessionId: 'lead-1',
+  seq: 8,
+  changes: [{ key: 'agentTeam', val: teamView(...extra) }],
+})
+const followSnapshot = (...extra) => ({
+  type: 'snapshot',
+  header: { id: 'lead-1' },
+  projections: { asOfSeq: 7, values: { agentTeam: teamView(...extra) } },
+  cursor: 7,
+})
+const shapes = [
+  ['projections baseline', projectionsBaseline],
+  ['list block', listBlock],
+  ['control baseline', controlBaseline],
+  ['control change frame', controlChange],
+  ['follow snapshot', followSnapshot],
+]
+const membersOf = (value) => {
+  if (Array.isArray(value.items)) return value.items[0].projections.values.agentTeam.members
+  if (value.type === 'baseline') return value.value.projections['lead-1'].values.agentTeam.members
+  if (value.type === 'projection') return value.changes[0].val.members
+  if (value.type === 'snapshot') return value.projections.values.agentTeam.members
+  return value.values.agentTeam.members
+}
+
+test('the overlay adds one live member on every exit shape it wraps', () => {
+  for (const [label, build] of shapes) {
+    const value = build()
+    // A `projections` baseline carries no Session id of its own; the wrapped unary method supplies it
+    // from the request, exactly as `installProjectionFilter` does. The other shapes carry theirs.
+    const hint = label === 'projections baseline' ? 'lead-1' : undefined
+    const result = mergeLiveMembers(value, liveByLead, hint)
+    assert.equal(result, value, `${label}: the payload reference is kept`)
+    assert.deepEqual(membersOf(value).map((member) => member.id), ['lead-1', 'child-live'], label)
+    assert.deepEqual(membersOf(value).at(-1), {
+      id: 'child-live',
+      name: 'reviewer-g2',
+      role: 'teammate',
+      phase: 'active',
+    }, `${label}: only the four fields the wire schema requires`)
+  }
+})
+
+test('a member the value already carries is neither duplicated nor renamed', () => {
+  const shipped = { id: 'child-live', name: 'shipped-name', role: 'lead', phase: 'failed' }
+  for (const [label, build] of shapes) {
+    const value = build(shipped)
+    mergeLiveMembers(value, liveByLead, label === 'projections baseline' ? 'lead-1' : undefined)
+    const members = membersOf(value)
+    assert.equal(members.length, 2, label)
+    assert.deepEqual(members[1], shipped, `${label}: the existing row is left exactly as it is`)
+  }
+})
+
+test('the filter still strips a retired member from every exit and still merges the live one', async () => {
+  const gone = { id: 'gone', name: 'retired-member', role: 'teammate', phase: 'active' }
+  const service = {
+    list: async () => listBlock(gone),
+    projections: async (request) => projectionsBaseline(gone),
+    async *control() { yield controlBaseline(gone); yield controlChange(gone) },
+    async *follow() { yield followSnapshot(gone) },
+  }
+  const ctx = { get: () => service }
+  const installed = installProjectionFilter(ctx, {
+    readRetired: async () => new Set(['gone']),
+    readLive: liveByLead,
+  })
+  assert.equal(installed.installed, true)
+
+  const frames = [await service.list(), await service.projections({ sessionId: 'lead-1' })]
+  for await (const frame of service.control()) frames.push(frame)
+  for await (const frame of service.follow()) frames.push(frame)
+  assert.equal(frames.length, 5)
+  for (const frame of frames) {
+    assert.deepEqual(membersOf(frame).map((member) => member.id), ['lead-1', 'child-live'])
+  }
+
+  installed.dispose()
+})
+
+test('nothing to merge leaves the outgoing value untouched', async () => {
+  const value = projectionsBaseline()
+  const team = value.values.agentTeam
+  const members = team.members
+  assert.equal(mergeLiveMembers(value, () => []), value)
+  assert.equal(value.values.agentTeam, team)
+  assert.equal(team.members, members)
+  assert.deepEqual(members.map((member) => member.id), ['lead-1'])
+
+  // Every candidate already present is the other empty case: the same array reference, not a copy.
+  assert.equal(mergeLiveMembers(value, () => [{ id: 'lead-1', name: 'lead' }]).values.agentTeam.members, members)
+})
+
+test('dispose restores every wrapped exit, not only list', async () => {
+  const service = {
+    list: async () => listBlock(),
+    projections: async () => projectionsBaseline(),
+    async *control() { yield controlBaseline() },
+    async *follow() { yield followSnapshot() },
+  }
+  const originals = {
+    list: service.list,
+    projections: service.projections,
+    control: service.control,
+    follow: service.follow,
+  }
+  const installed = installProjectionFilter({ get: () => service }, {
+    readRetired: async () => new Set(),
+    readLive: liveByLead,
+  })
+  assert.equal(installed.installed, true)
+  assert.equal((await service.projections({ sessionId: 'lead-1' })).values.agentTeam.members.length, 2)
+
+  installed.dispose()
+  for (const method of Object.keys(originals)) {
+    assert.equal(service[method], originals[method], `dispose restores ${method}`)
+  }
+})
+
+test('a roster row with no recorded child id is not offered to the panel', () => {
+  const rows = livePanelMembers({
+    members: [
+      { memberId: 'm1', name: 'reviewer', generation: 1, childId: 'child-ready', phase: 'active' },
+      { memberId: 'm2', name: 'writer', generation: 2, childId: 'child-successor', phase: 'active' },
+      { memberId: 'm3', name: 'reserved', generation: 1, childId: '', phase: 'active' },
+      { memberId: 'm4', name: 'nameless', generation: 1, phase: 'active' },
+      { memberId: 'm5', name: 'starting', generation: 1, childId: 'child-starting', phase: 'provisioning' },
+      { memberId: 'm6', name: 'gone', generation: 1, childId: 'child-gone', phase: 'retired' },
+    ],
+  })
+  assert.deepEqual(rows, [
+    { id: 'child-ready', name: 'reviewer' },
+    { id: 'child-successor', name: 'writer-g2' },
+  ])
 })
 
 test('slot credit raises the shipped limit only for the spawning Lead', async () => {

@@ -2,9 +2,10 @@
  * dsh-team — a team roster whose members can be retired, removed and replaced.
  *
  * Host half. It owns the roster (`roster.js`), exposes it as Lead-scoped tools, compacts one member's
- * context in place, and applies two host-side effects on retirement (`host-hooks.js`): retired members
- * are stripped from the session-list projections every client renders, and their budget is credited back
- * to the shipped roster. The member's persisted session is moved to a recoverable trash directory
+ * context in place, and applies host-side effects around retirement (`host-hooks.js`): retired members
+ * are stripped from the session-list projections every client renders, this plugin's live members are
+ * added to the built-in team panel at that same exit, and their budget is credited back to the shipped
+ * roster. The member's persisted session is moved to a recoverable trash directory
  * (`trash.js`) rather than deleted. The bundle patch disables the shipped team tool row, whose tools
  * this plugin replaces; the roster *service* stays mounted so this plugin can adopt the members it
  * created and keep using its Lead membership test.
@@ -92,6 +93,7 @@ import {
   TASK_TITLE_MAX,
   findByTarget,
   openRosterStore,
+  readRoster,
   targetOf,
 } from './roster.js'
 import { resolveDataDir, resolveTrashLimit } from './trash.js'
@@ -628,6 +630,25 @@ const HANDOFF_TEMPLATE_VALUE = {
 /** The durable roster key for one Lead. */
 function leadSessionIdOf(agent) {
   return String(agent.session.id)
+}
+
+/**
+ * The rows the shipped team panel is overlaid with for one Lead: its live members that carry a recorded
+ * child id, as the two fields the overlay reads.
+ *
+ * Only `active` counts. A `provisioning` record is a reservation whose child may not exist yet, a
+ * `failed` one has no session to open, and a `retired` one must be *absent* from the panel rather than
+ * present and marked — the wire member phase is closed at `provisioning | active | failed`, so
+ * "retired" has no honest spelling there (ADR 0023). `name` is the model-facing target, the handle the
+ * panel label and the click's conversation share; `id` is the child Session id the record holds, which
+ * is what makes that click open the member's real chat (host-hooks.js).
+ * @param {object} roster - one Lead's roster record.
+ * @returns {Array<{id: string, name: string}>} panel rows, in roster order.
+ */
+export function livePanelMembers(roster) {
+  return roster.members
+    .filter((member) => member.phase === PHASE.active && typeof member.childId === 'string' && member.childId.length > 0)
+    .map((member) => ({ id: member.childId, name: targetOf(member) }))
 }
 
 /**
@@ -1234,6 +1255,11 @@ export function apply(ctx, config) {
   // error on first use instead of an unhandled rejection at load.
   const store = openRosterStore(ctx)
   store.catch(() => undefined)
+  // The panel overlay reads the roster synchronously at each outgoing frame. `store` resolves before any
+  // member can be spawned, so the accessor starts empty rather than suspending a host stream on a promise
+  // this plugin does not own.
+  let rosterTable
+  store.then((table) => { rosterTable = table }, () => undefined)
 
   const log = (line) => {
     if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(line)
@@ -1255,7 +1281,11 @@ export function apply(ctx, config) {
     }
     return byTeam
   }
-  const filter = installProjectionFilter(ctx, { readRetired, log })
+  // The built-in team panel renders the shipped fold, which never heard of a member started through
+  // `ctx.subagents`. The same exit that hides a retired id adds this Lead's live members, in the shape
+  // the wire schema requires (ADR 0023).
+  const readLive = (leadSessionId) => rosterTable === undefined ? [] : livePanelMembers(readRoster(rosterTable, leadSessionId))
+  const filter = installProjectionFilter(ctx, { readRetired, readLive, log })
   const slots = installSlotCredit(ctx, { readRetiredByTeam, log })
   if (slots.installed) void slots.refresh()
   const hooks = { filter, slots }

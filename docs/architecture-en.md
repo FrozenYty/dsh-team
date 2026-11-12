@@ -138,18 +138,48 @@ re-creates them on the owned board (ADR 0017).
 
 ### 2.4 Host-side effects
 
-Two effects make a retirement visible to clients and keep the shipped member budget usable. Both are
-capability-probed, both restore exactly what they replaced on plugin unload, and neither writes to the
-Lead Session (ADR 0004).
+Two effects make a retirement visible to clients, make this plugin's members visible in the shipped team
+panel, and keep the shipped member budget usable. Both are capability-probed, both restore exactly what
+they replaced on plugin unload, and neither writes to the Lead Session (ADR 0004, ADR 0023).
 
 | Effect | Mechanism | Behaviour when the host shape is absent |
 |---|---|---|
-| Projection filter | wraps `sessionController.list` / `projections` / `control` / `follow` and strips retired ids from `subagentCatalog` and `agentTeam` frames | retirement still works; clients keep rendering the member |
+| Projection filter | wraps `sessionController.list` / `projections` / `control` / `follow`; strips retired ids from `subagentCatalog` and `agentTeam` frames, then appends this Lead's live members to the same `agentTeam` value | retirement still works; clients keep rendering the member and never see this plugin's |
 | Slot credit | replaces the legacy roster's `maxMembers` getter and wraps `spawn`, adding the retired count of the spawning Lead for the duration of that spawn | retirement still works; the shipped budget stays consumed |
 
 Both read retired records through a two-second cache that `retire_member` invalidates, and both are
 transparent to other plugins: same arguments, same return shape, and the payload is mutated rather than
-copied so a caller's reference stays valid.
+copied so a caller's reference stays valid. The overlay's live rows are read synchronously from the
+roster table, because they change with a spawn and a cache would only add a stale window.
+
+#### 2.4.1 The panel overlay: what a plugin may write, and what the panel reads
+
+The built-in team panel — **成员** (members) and **共享任务** (tasks) in the Chinese locale — renders
+`projectionsBySession[lead].values.agentTeam`, the wire view of the Lead Session's team fold. That fold
+hears only the `team/member` and `team/task` events the shipped roster appends, so a member started
+through `ctx.subagents` was invisible there. The projection filter therefore does a second thing at the
+same four exits: it appends this Lead's live members to the outgoing copy, and synthesises only the
+fields the strict wire schema requires.
+
+| Written by the overlay | Read by the panel as | Source |
+|---|---|---|
+| `id` | the row key and the member's Session identity: model lookup, running state, and the click that opens its chat | the `childId` on the roster record |
+| `name` | the row label | the model-facing target (`reviewer`, `reviewer-g2`) |
+| `role: 'teammate'` | nothing directly; the strict wire schema requires it | synthesised |
+| `phase: 'active'` | 运行中 (running) when that Session is running, otherwise 未运行 (not running) | the record is `active` and has a child id |
+
+**What a plugin may write where** is the point of the table. It may write only the **outgoing copy**: the
+value each publish point validates with `wire.viewSchema.parse`, which builds new objects, so mutating it
+cannot reach the projection's stored cell and cannot append a Session event. It may not write the log: a
+member phase is closed at `provisioning | active | failed`, a transition out of a terminal phase throws,
+and the projection stores that throw as a permanent `failure` (§3, ADR 0001). A retired member is not
+written at all — the row leaves the value, and the panel draws one row fewer — because the wire enum has
+no honest spelling for "retired" (ADR 0023). An id the value already carries is left exactly as it is, so
+the overlay never duplicates, renames or re-roles a row.
+
+The shared-task half of the panel is **not** overlaid. A task view needs ten fields this board does not
+have (`revision`, `blockedBy`, `writeScopes`, `ownerName`, `ready`, `writeScopeWarnings`, …), while a
+member row needs four; that is the next step, not this one (ADR 0023).
 
 ### 2.5 Retirement moves the artifact
 
@@ -881,14 +911,20 @@ for the template and would be a bug for the board.
 | resolve the Lead's working directory, and the `team/` a member definition or the team file is read from | `ctx.get('workingDirectory').ensure(agent, signal)` — the same service and method the spawn seam uses to resolve a relative `cwd`; optional, so a profile without it refuses a definition spawn and cannot see a team file, instead of guessing a directory (§4.6, §4.7, ADR 0018, ADR 0021) |
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
+| make the shipped team panel list this plugin's live members | the same exits: append the four-field member row to the outgoing `agentTeam` value (ADR 0023) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
 | move a retired session aside | `ctx.get('sessionPersistence').stat(id).location.path` + a rename into the trash |
 
 ## 6. Risks and limits
 
-- **No in-app view.** The roster is visible to the model through `list_members` only; there is no
-  Settings page. The host's own subagent pickers still render what they always did, minus retired ids
-  (ADR 0008).
+- **The in-app view is the shipped team panel, overlaid — not a panel of ours.** There is no Settings
+  page (ADR 0008). The 成员 (members) section lists this plugin's live members because the projection
+  filter adds them to the outgoing `agentTeam` value, and a retired member leaves that value rather than
+  appearing as a row marked retired (ADR 0023). The overlay is a view: it cannot retire, replace or edit
+  anything, and it is only as fresh as the next `list`/`projections`/`follow` read or `control` frame —
+  this plugin writes no Session event, so a spawn publishes no team change frame of its own. The
+  共享任务 (tasks) section still shows the shipped board, because a task view needs ten fields this
+  board does not have.
 - **The shipped roster is still the source of the members it created.** Its spawn, wait and task tools are
   disabled (P2-07), but its service is not, because adoption and the projection filter need it:
   `list_members` reports those members, this plugin keeps their tombstones, and the service's three
