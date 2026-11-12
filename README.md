@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.15.0.
+- Current version: v0.16.0.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -54,7 +54,9 @@ directory did not, on purpose (ADR 0014).
   `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
   operations overlap; that a member still running is never swept; the exact request a spawn with no
   `spawn_options` composes; the task board's write-time caps and the transfer-matrix cells a live run did
-  not reach; and `wait_members`' event wiring, timeout, cancellation and no-progress paths.
+  not reach; `wait_members`' event wiring, timeout, cancellation and no-progress paths; and the whole
+  definition layer (v0.16.0) — reading a file, the precedence report, and every refusal. A live start from
+  a definition is the owner's install check (ADR 0018).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -76,7 +78,7 @@ that is a move rather than a deletion.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Start a named member as a continuable child, optionally with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
+| `spawn_member` | Start a named member as a continuable child, optionally from a member definition on disk with `definition`, or with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
 | `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, live state, `compactable` and — while resident — context pressure. |
 | `wait_members` | Block this turn until a member's live status changes or a timeout expires, and report which member changed and into what. Bounded: 30 seconds by default, at most one hour. It answers `no_progress` at once when no member is running or provisioning, never wakes anyone, and does not wait for board writes or message processing. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
@@ -134,6 +136,44 @@ handoff-probe-g2, which never saw its predecessor, replies: 42
 ```
 
 The walkthrough is abridged from an acceptance run recorded in [PROGRESS.md](PROGRESS.md).
+
+## Defining a member
+
+A member can be a file instead of a paragraph in a tool call: `spawn_member` with
+`definition: "<name>"` reads a definition from `team/` under the Lead's working directory. The file is
+committed with the project, reviewed and versioned like any other source, and the roster stays runtime
+state — the split this plugin's vocabulary comes from. The plugin only reads these files; you write them
+with your own file tools (ADR 0018).
+
+```markdown
+---
+name: reviewer
+label: Review the diff
+assignment: Check every changed file for behaviour changes
+model: a-cheaper-model
+---
+You review changes. Report only findings that change behaviour, with the file and the line.
+```
+
+The block between the two `---` lines is flat frontmatter and the markdown below it is the member's
+prompt. `name` and `label` are required, and every other accepted field is one `spawn_member` already
+takes: `assignment`, `ephemeral`, `cwd`, `provider`, `model`, `reasoning_effort`, `max_tokens` and
+`agent_preset`. That list is the whole subset — a nested value, an anchor, a block scalar, a list, a
+duplicate key or an unknown field is refused with the file and the line rather than guessed at, and a
+quoted value loses its quotes without any escape being interpreted.
+
+**The call wins, and the result says so.** Every field passed to `spawn_member` overrides the file's, and
+the answer's `definition` object names the file, what came from it (`from_file`) and what you overrode
+(`overridden`). The one field the call cannot replace is `prompt`: the body is the member's standing
+prompt and the call's `prompt` is appended after it, which `definition.prompt` reports as `file+call`.
+
+**One bad file does not hide the others.** A malformed definition is reported by path and line in
+`definition.problems` on an otherwise successful spawn, and the valid definitions still work. A name
+declared by two files is usable from neither, because a lookup that quietly picked one would make the
+other file's edits invisible. The caps refuse rather than truncate: 16 KiB per file, and 64 files per
+scan — a directory past that refuses the whole scan instead of serving a partial set. The path is never
+guessed either: a profile that mounts no `workingDirectory` service answers `started: false` with
+`reason: "working-directory-unavailable"` and reserves no member.
 
 ## The lifecycle
 
@@ -339,7 +379,7 @@ work; what is gone is the shipped row's own tool set.
 ## Development
 
 ```sh
-node --check index.js actions.js roster.js trash.js host-hooks.js
+node --check index.js actions.js roster.js definitions.js trash.js host-hooks.js
 node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
@@ -355,6 +395,7 @@ whole local gate.
 | `index.js` | Host plugin entry: tool definitions, argument validation, Lead-only authority check |
 | `actions.js` | The roster operations behind the tools |
 | `roster.js`, `trash.js` | Durable roster (phases, name generations, adoption, migration) and the session trash with its restore and retention cap |
+| `definitions.js` | Member definitions: the flat-frontmatter parser, the `team/` scan and its caps, and the working directory they are resolved from |
 | `host-hooks.js` | Projection filter and roster slot credit |
 | `tests/`, `scripts/check.mjs` | Unit tests, and the repository checks CI runs |
 | `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `.github/` | The bundle, its CI workflow and templates |

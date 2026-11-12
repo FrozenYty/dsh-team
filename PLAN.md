@@ -162,6 +162,33 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   prints that value. The documented default is `DEFAULT_TRASH_LIMIT` (20), so a profile that configures
   nothing behaves exactly as the v0.7.0 delivery above describes.
 
+- [x] **P4-06** Member definitions on disk (v0.16.0).
+  Done when a member can be started from a markdown file under `team/` in the Lead's working directory
+  instead of from the call, the call's own arguments win over the file's and the result reports which
+  parts came from where, an unknown field or a construct outside the documented flat frontmatter subset
+  is refused by file and line, a malformed file does not stop a valid one, the size and count caps refuse
+  rather than truncate, a Lead whose working directory cannot be resolved gets a typed refusal, and no
+  create/update/delete tool is added for the files.
+  Delivered with one new published module (`definitions.js`) and one optional `spawn_member` parameter,
+  `definition`. The path is `<Lead working directory>/team/*.md`, resolved through
+  `ctx.get('workingDirectory').ensure(leadAgent, signal)` — the service and method the installed spawn
+  seam uses for a relative `cwd` — and never from `process.cwd()`; an absent service, a rejected `ensure`
+  or a non-absolute answer is `reason: 'working-directory-unavailable'` with nothing reserved. The
+  accepted frontmatter is `name` and `label` (required) plus `assignment`, `ephemeral`, `cwd`, `provider`,
+  `model`, `reasoning_effort`, `max_tokens` and `agent_preset`; the body is the prompt. Nesting, list
+  items, block scalars, anchors/aliases, merge keys, flow collections, duplicate keys, an unknown field, a
+  key with no value and an empty body are refused with the file and the line (ADR 0018). Precedence is
+  per field and reported: `definition.from_file` and `definition.overridden` name the fields, and
+  `prompt` is the one the call cannot replace — the call's text is appended after the body and
+  `definition.prompt` says `file` or `file+call`. A refused file is a `definition.problems` row on a
+  successful spawn and a `problems` row on a refusal; a name two files declare refuses both; caps are
+  16 KiB per file (refused per file) and 64 files per scan (refused per directory, never a partial set).
+  `spawn_member`'s output schema is a two-branch `oneOf` (the member row, or the typed refusal), and the
+  suite covers a definition supplying what it says, an explicit argument overriding it with the report,
+  the four refused frontmatter shapes, an unknown field, a duplicate name, a malformed file beside a valid
+  one, both caps, and the unresolvable working directory. The live start from a definition is the owner's
+  install check.
+
 ### P3 — Settings panel (cancelled in v0.4)
 
 > **Cancelled by [ADR 0008](docs/adr/0008-model-only-surface.md).** The panel and its HTTP bridge were

@@ -23,6 +23,7 @@ jobs:
           node --check index.js
           node --check actions.js
           node --check roster.js
+          node --check definitions.js
           node --check trash.js
           node --check host-hooks.js
 

@@ -47,14 +47,14 @@ that trailer as another contributor.
 | Job | Command | Fix |
 |---|---|---|
 | Bundle checks | `node scripts/check.mjs` | read the reported file and key |
-| Entry syntax | `node --check index.js` (also `actions.js`, `roster.js`, `trash.js`, `host-hooks.js`) | repair the syntax error |
+| Entry syntax | `node --check index.js` (also `actions.js`, `roster.js`, `definitions.js`, `trash.js`, `host-hooks.js`) | repair the syntax error |
 | Unit tests | `node --test --test-isolation=none tests/*.test.mjs` | fix the failing behaviour, not the assertion |
 
 `scripts/check.mjs` verifies, without loading the Harness:
 
 - `package.json` parses, `dsh.bundle.patch` points at the patch, and every path in `files` exists;
 - `index.js` is published and exports `apply(ctx, config)`;
-- each Host module (`index.js`, `actions.js`, `roster.js`, `trash.js`, `host-hooks.js`) is published and
+- each Host module (`index.js`, `actions.js`, `roster.js`, `definitions.js`, `trash.js`, `host-hooks.js`) is published and
   imports no `@deepseek-ai` package (ADR 0002);
 - every `execute(` in `index.js` declares `(args, exec)` — the wrapper signature the unit tests cannot
   cover;

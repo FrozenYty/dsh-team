@@ -34,6 +34,8 @@
 - **v0.12**——成员可以用自己的 cwd、模型路由或 agent preset 启动；Harness 拒绝的启动变成带类型的结果；陈旧 target 的拒绝会指出该名字现在的活持有者（§4.1、§4.3、§4.4、§4.5、ADR 0016）。
 - **v0.13**——插件拥有的是工作本身，而不只是成员：任务板放在 Lead 的花名册记录上，替换会把前任的未完成任务交给继任者，而没有继任者的退役会让这些任务变为无主并点出它们的 id（§4.2、§4.3.2、§4.4、§4.5、ADR 0017）。
 - **v0.14**——官方团队工具行退役：bundle 补丁禁用 `tool-agent-team`，于是那行的 `spawn_teammate`、`wait_agent` 与 `team_task_*` 工具不再注册，Lead 由本插件自己的工具服务。被保留的 `agent-team` 服务还发布三件模型侧工具——`list_agents`、`send_message`、`interrupt_agent`——它们仍在（§1、§2.3、§4.5、§6）。
+- **v0.15**——阻塞式等待回到本插件自己的接口：`wait_members` 监听 Harness 的 `agent/status`，范围是本 Lead 花名册上的子会话；这件事原本由被禁用那行的 `wait_agent` 覆盖，而官方服务看不到这些成员（§4.5）。
+- **v0.16**——成员可以定义在磁盘上：`spawn_member.definition` 读取 Lead 工作目录下 `team/` 里带扁平 frontmatter 的 markdown 文件，调用自己的参数优先于文件内容，结果会说明每一部分来自哪里（§4.5、§4.6、ADR 0018）。
 
 ### 2.1 启用压缩
 
@@ -297,7 +299,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `replace` 时，让继任者从交接书启动、把前任的未完成任务交给它，并在同一次调用里退役前任（§4.4、§4.3.2）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options`（`provider`、`model`、`reasoning_effort`、`max_tokens`）或 `agent_preset` 启动；省略的字段继承 Lead 的值——但改了 `provider` 或 `model` 却未给 `reasoning_effort` 时，新路由解析自己的默认值——而 `started_with` 报告的是插件转发出去的内容，不是子代理解析出的结果。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误（ADR 0016）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
+| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `definition` 时从随项目提交的成员定义启动，文件里的字段补齐调用省略的部分（§4.6）；带 `replace` 时，让继任者从交接书启动、把前任的未完成任务交给它，并在同一次调用里退役前任（§4.4、§4.3.2）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options`（`provider`、`model`、`reasoning_effort`、`max_tokens`）或 `agent_preset` 启动；省略的字段继承 Lead 的值——但改了 `provider` 或 `model` 却未给 `reasoning_effort` 时，新路由解析自己的默认值——而 `started_with` 报告的是插件转发出去的内容，不是子代理解析出的结果。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误；读不出来的成员定义也以同样的方式回答（ADR 0016、ADR 0018）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
 | `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`——被清扫的成员留下未完成任务时，再加 `unowned`/`unowned_tasks`（§4.3.2）。 |
 | `wait_members` | 对这个 Lead 成员的实时状态做一次有界等待：某个成员的 `agent/status` 在 `idle` ⇄ `running` 之间变化时返回，或超时后返回，并报告是哪个成员、变成了什么。超时默认 30 秒，超过 1 小时即拒绝；若没有 `running` 成员也没有 `provisioning` 预留，则立刻回答 `no_progress`，因为被阻塞的 Lead 无法唤醒空闲成员。它只观察调用之后的变化，绝不唤醒任何人（§4.5）。 |
 | `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。给临时成员发消息会清掉它的标记，因此它不会被清扫。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。当该名字的另一个代次还活着时，拒绝还会带上 `current_holder` 并在消息里说明。 |
@@ -316,6 +318,24 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 `ensureAdopted`（`actions.js`）是这套接口完整可用的原因：它读取官方团队花名册与子代理注册表，把每个不认识的子代理记成成员；从官方花名册收养的成员沿用官方名字，相态从 `active` 开始。注册表读取是 `ctx.subagents.listDescendants(rootSessionId, signal)`（安装版 seam `dsh-subagent` `0.2.2-rc.1`，`lib/index.js` 第 3181–3183 行委托到第 2380–2446 行）；子行是 `{ id, mode, label?, kind: 'child', parentId, depth, activity, hasChildren }`，`kind: 'diagnostic'` 行跳过；有 label 的子代理按与官方名字相同的规范化规则命名，没有 label 的命名为 `subagent-<id>`。收养按子会话 id 幂等，而让幂等成立的正是退役记录这块墓碑——排空子代理不会删掉父代持久 catalog 里的那一行。消息投递通过 Lead 的直接子代权限寻址，而退役即使排空被拒绝也会立碑。出厂深度上限是 1，所以每个后代都是直接子代；更深的树（只有调高深度上限才可能出现）会被消息投递拒绝，但仍可退役。
 
+### 4.6 成员定义（v0.16.0）
+
+成员过去只作为一种工具调用存在：提示词、标签与 assignment 只活在那次调用和 Lead 的花名册记录里，于是团队无法被评审、版本化或共享，同一个「reviewer」每个会话都要重打一遍。定义把成员从调用里搬到磁盘上——每个成员一个 markdown 文件，放在 Lead 工作目录下的 `team/`，随项目一起提交——花名册则仍是运行时状态（ADR 0018）。
+
+**路径。** `<Lead 工作目录>/team/*.md`，由 `workingDirectory` 服务解析：`ctx.get('workingDirectory').ensure(leadAgent, signal)`（§5）。这与安装版 spawn seam 解析相对 `request.cwd` 用的是同一个服务、同一个方法，所以定义读到的目录，正是 `spawn_options.cwd` 相对解析的那个目录。该服务是可选的，与 `compaction` 一样用 `ctx.get` 读取；profile 没有挂载它、或它的 `ensure` 抛错，都是带类型的拒绝（`reason: "working-directory-unavailable"`），而不是猜一个目录。
+
+**文件。** 第 1 行 `---`、一段扁平 frontmatter、再一行 `---`，其后的 markdown 正文就是成员的提示词。可接受字段恰好是 `spawn_member` 本来就有的输入：`name` 与 `label` 必填，另有 `assignment`、`ephemeral`、`cwd`、`provider`、`model`、`reasoning_effort`、`max_tokens` 与 `agent_preset`。文件*名*不是身份——定义自己声明 `name`，它也正是 `spawn_member.definition` 查找用的键——调用上没有对应物的字段不在范围内。
+
+**子集是写下来的，不是估出来的。** `key: value`，一行一对，不允许缩进；值可以是裸值，或两端加引号，不解释任何转义；允许空行与 `#` 注释。嵌套、列表、块标量（`|`、`>`）、锚点与别名（`&`、`*`）、合并键（`<<`）、流式集合（`[...]`、`{...}`）、重复键、未知字段、无值键，以及缺少 `name`/`label`，都会连文件路径与行号一起被拒绝；未知字段的那句话还会列出可接受字段集。这里没有 YAML 库，因为 bundle 不导入 Node 内置之外的任何东西（ADR 0002）：本仓库的解析器就是规范，它不实现的写法一律拒绝，而不是被误读。
+
+**优先级：调用侧优先，且结果会说明这一点。** 传给 `spawn_member` 的每个字段都按字段覆盖定义里的值，`agent_options` 内部也一样；返回结果中的 `definition` 对象给出文件名、取自文件的字段（`from_file`）以及被调用替换掉的字段（`overridden`）。唯一的例外是 `prompt`：正文是成员的常驻提示词，调用里的 `prompt` 是这次的任务，所以调用文本追加在正文之后，`definition.prompt` 报成 `file` 或 `file+call`。文件里的东西绝不会被悄悄丢掉——「模型以为自己覆盖了定义、其实没有」正是这份回报要防的失败。
+
+**一个坏文件不会藏起其他文件。** 扫描收集能读的，并报告读不了的：成功 spawn 上的 `definition.problems`、拒绝上的 `problems`，每行是 `{path, line?, problem}`。同一个名字被两个文件声明时两边都不可用，因为悄悄挑一个会让另一个文件的修改不可见。名字未知时回答 `definition-not-found` 并带 `available`（同一次扫描能用的名字）；若目录里同时还有被拒绝的文件，则回答 `definition-invalid`，因为那名字可能就声明在里面。这与存下的任务遵循的规则相同（ADR 0017）：一条坏记录不能藏起其余记录。
+
+**上限是拒绝。** 单文件 16 KiB（`DEFINITION_FILE_MAX`），单次扫描 64 个文件（`DEFINITION_LIMIT`），绝不截断、绝不部分读取。大小上限按文件计，所以超大定义被拒绝而邻居照常可用；数量上限按目录计，所以超量目录整次扫描被拒绝，而不是只服务一个残缺子集。拒绝时不预留任何东西——不写成员记录、不启动子代理——所以修好文件重试仍用同一个名字。
+
+**接口只有一个参数。** `spawn_member.definition` 就是整个特性：没有创建/更新/删除工具，因为版本控制与编辑器才是让文件优于工具的原因，模型用自己的文件工具写这些文件。`spawn_member` 的结果 schema 是二分支 `oneOf`——成员行，或定义拒绝——因为拒绝是一种回答而不是宿主错误，这也正是 ADR 0016 对「被拒绝的启动」已经定下的规则。
+
 ## 5. 使用的 Harness 扩展点
 
 | 需求 | 机制 |
@@ -332,6 +352,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 | 得知某个子代理已停止 | `subagent/end`（一次运行结算时发布）以及 `agent/status` 的 `idle` 边沿；两者都不持久，所以临时成员清扫仍自带证据（§4.3.1、ADR 0013） |
 | 等待成员的实时状态 | 在插件自己的上下文里 `ctx.on('agent/status', ({ agent, status }))`，并按本花名册持有的子会话 id 过滤；该分发带作用域过滤，而未加作用域的监听者会被放行（§4.5） |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
+| 解析 Lead 的工作目录，以及成员定义读取的 `team/` | `ctx.get('workingDirectory').ensure(agent, signal)`——与 spawn seam 解析相对 `cwd` 用的是同一个服务与方法；该服务可选，所以没有它的 profile 会拒绝定义 spawn，而不是猜一个目录（§4.6、ADR 0018） |
 | 隐藏产物移不动的会话 | `ctx.workspaceRegistry.archiveSession`／`unarchiveSession`（可逆，不删除；退役与恢复的兜底分支） |
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
 | 补偿官方花名册名额 | 补丁旧花名册的 `maxMembers` getter 与 `spawn`（ADR 0004） |
@@ -346,4 +367,5 @@ Harness 通知是任何插件操作都无法阻止的事件：
 - **转发的目录、路由与 preset 由调用方决定，插件只负责转发。** 在 Harness 解析之前，插件无法判断某个 `cwd` 是否可用；在注册表查询之前，它也无法判断某个 preset id 是否存在，因此两处拒绝都是把 seam 的答案翻译成带类型的结果，而不是一个可能与 Host 判断不一致的预检（ADR 0016）。
 - **Harness API 漂移**——本文点到的每个 Service 都来自已安装的 asar，版本会变；一次 Harness 升级就能让本文作废，而本仓库什么都没改。安装版的子代理 seam 与公开源码树不是同一代：公开树有成员 `name` 和 `resolveName`，安装版没有。采信任何公开示例之前，先读安装版的 `lib/index.js`。
 - **交接质量取决于记录在案的职责与任务板上的行**——插件读不到官方任务板，也读不到前任的对话，因此继任者的交接书只能由记录与自有任务板合成。一个从未记录过 `assignment`、任务板上也没有未完成行的成员，交接出去的就只是角色与任务板指针，而不是摘要。
+- **成员定义是插件只读的文件。** 它无法判断一份定义是否过期、其提示词是否符合 Lead 心里的工作，也无法判断同一个工作目录下的 `team/` 是否被两个 Lead 共用；那是项目的版本控制要管的事，不是本插件的职责。它能保证的事情更窄、也更可核对：调用方能用的定义，恰好是调用那一刻 `team/` 下可读的那些 `.md` 文件；读不出来的文件会连路径与行号一起被拒绝，而不是只应用一半（§4.6、ADR 0018）。
 - **压缩是 profile 级的**——启用后端会改变该 profile 内每个会话的行为。这是把官方特性打开，不是自研代码，但它并不只作用于本插件的成员。
