@@ -614,7 +614,7 @@ function blockingNote(blocked, ids) {
  * operations the model calls anyway.
  *
  * The Harness has no completion event — an active child that finishes its turn produces no durable
- * change (§4.3 of `docs/architecture-en.md`) — so the sweep requires evidence this plugin recorded
+ * change (§1 of `docs/member-lifecycle-en.md`) — so the sweep requires evidence this plugin recorded
  * itself: the member is `active` and one-shot, carries `startedAt` (written when its activation
  * resolved, so a reservation that never published has none), and is no longer resident in the local live
  * registry. A member that never started is never swept, and neither is a running one. The installed
@@ -1228,7 +1228,7 @@ function spawnRefusal(error, { agentOptions, agentPreset }) {
  *   effective cap from the plugin config; the retirement half of a replacement enforces it, and it
  *   defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none. `lifetime` declares how long the member
  *   lives — `standing` (the default) or `one-shot` — and `ephemeral: true` is the pre-v0.25 spelling of
- *   `one-shot` (§4.3.1, ADR 0026). It is never inherited: not from a predecessor on a `replace`, and not
+ *   `one-shot` (§2 of `docs/member-lifecycle-en.md`, ADR 0026). It is never inherited: not from a predecessor on a `replace`, and not
  *   from a definition file, which cannot declare one at all. `cwd`, `agentOptions` and `agentPreset` are
  *   the tool's `spawn_options` fields;
  *   each one omitted means the member inherits the Lead's value (ADR 0016). `definition` names a member
@@ -2477,7 +2477,7 @@ export async function taskBoard({ table, leadSessionId, action, task_id, title, 
  * the Lead made when the member was created and only a spawn can change it, so this write leaves
  * `ephemeral` alone and instead invalidates the "it ran and stopped" evidence by dropping `startedAt`;
  * the next read that observes the child alive again re-stamps it, and until then a sweep cannot conclude
- * anything about a member that was just handed work (§4.3.1, ADR 0026). It also counts what it wrote —
+ * anything about a member that was just handed work (§2 of `docs/member-lifecycle-en.md`, ADR 0026). It also counts what it wrote —
  * one message, and one assignment change when one was recorded — which is the evidence
  * `list_members` advises on, and it counts them only on a one-shot member, because they exist for that
  * advice.

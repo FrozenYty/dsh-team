@@ -283,6 +283,132 @@ for (const document of documents) {
   }
 }
 
+// 7. In-repository references resolve.
+//
+// A citation that cannot be followed is a lie the reader only discovers by looking, and the reader usually
+// does not look. This repository has already shipped one: ADR 0025 was cited from about seventeen places
+// in roster.js, actions.js and docs/architecture-en.md before that ADR existed, and nothing noticed until a
+// survey grepped for it. Two mechanical forms are checked here:
+//
+//   - a document reference — `docs/<name>.md`, with or without -en/-zh, in prose or a link — must exist;
+//   - a section reference — §N, §N.M, §N.M.K — must resolve to a numbered heading in the document it
+//     points at.
+//
+// Which document a section reference points at is decided in this order, and the order is the rule:
+//   1. the document the same citation names. "`docs/architecture-en.md` §4.5" and "§4.5 of
+//      `docs/architecture-en.md`" both say it, and so does a continuation on the same line — "§4.5 and
+//      §4.5.2", "§4.2/§4.3/§4.4".
+//   2. for a bare §, the document it appears in, when that document has the heading. A document citing its
+//      own section is the common case and the strongest reading available; it is not a guess.
+//   3. otherwise the one English document at the top level of docs/ that has the heading, when exactly one
+//      does. That is what makes a bare "§4.3" in an ADR resolve, and what makes it fail when two documents
+//      both have a §4.3: an ambiguous citation is reported, never resolved by picking one.
+//   4. otherwise it fails.
+//
+// Deliberately out of scope, each for a reason:
+//   - PROGRESS.md and CHANGELOG.md are append-only history. An entry that cited §4.3 before the section was
+//     renamed is correct as of the commit that wrote it; re-checking history would force edits to a record
+//     that may not be rewritten, which costs more than the stale citation it would catch.
+//   - a section reference into a root document is checked as a document reference only. AGENTS.md numbers
+//     its points in prose ("§4.8" is the eighth point of §4) and its headings carry single numbers, so the
+//     heading test would call a correct citation wrong.
+//   - the six host modules ARE read: their comments cite these documents, they are current-state
+//     commentary rather than history, and there are seven section references and two document references
+//     between them today. scripts/ is not read — its `docs/` strings are patterns, not citations.
+const SECTION = '\\d+(?:\\.\\d+)*'
+const headingCache = new Map()
+const headingsOf = (relative) => {
+  if (headingCache.has(relative)) return headingCache.get(relative)
+  const text = existsSync(join(root, relative)) ? readFileSync(join(root, relative), 'utf8') : ''
+  const numbers = new Set()
+  for (const line of text.split(/\r?\n/)) {
+    const match = new RegExp(`^#{1,6}\\s+(${SECTION})[.\\s]`).exec(line)
+    if (match !== null) numbers.add(match[1])
+  }
+  headingCache.set(relative, numbers)
+  return numbers
+}
+// Where the qualified forms live; a bare § may only fall back to the English side, because a translated
+// document repeats every number the English one has and would make every fallback ambiguous.
+const sectionTargets = docNames.filter((name) => name.endsWith('-en.md')).map((name) => `docs/${name}`)
+const referenceSources = [
+  ...docNames.map((name) => `docs/${name}`),
+  ...readdirSync(join(root, 'docs', 'adr')).filter((name) => name.endsWith('.md')).map((name) => `docs/adr/${name}`),
+  'README.md', 'README-zh.md', 'AGENTS.md', 'CONTRIBUTING.md', 'PLAN.md',
+  ...hostModules,
+]
+const DOCUMENT = '`?((?:docs/)?[A-Za-z0-9._/+-]+\\.md)(?::\\d+(?:-\\d+)?)?`?'
+const qualifiedThenSection = new RegExp(`${DOCUMENT}\\s*[,;:]?\\s*§\\s*(${SECTION})`, 'g')
+const sectionThenQualified = new RegExp(`§\\s*(${SECTION})\\s*(?:of|in)\\s+${DOCUMENT}`, 'g')
+// The short form: the document's stem alone — "member-lifecycle §3", "handoff §2", "architecture §2.5".
+// It counts only when docs/<stem>-en.md exists, so ordinary prose ("the external review's §3", "see §4")
+// stays a bare reference instead of being read as a document nobody named.
+const shortThenSection = new RegExp(`(?<![\\w/-])([a-z][a-z0-9-]*)\\s+§\\s*(${SECTION})`, 'g')
+const anySection = new RegExp(`§\\s*(${SECTION})`, 'g')
+const CONTINUES = /^[\s,;、/]*(?:and|or|与|和|及|或)?[\s,;、/]*$/
+const resolveTarget = (token) => {
+  const cleaned = token.replace(/:\d+(?:-\d+)?$/, '')
+  if (cleaned.startsWith('docs/')) return cleaned
+  return existsSync(join(root, 'docs', cleaned)) ? `docs/${cleaned}` : cleaned
+}
+const checkSection = (file, target, section) => {
+  if (!existsSync(join(root, target))) {
+    fail(`${file}: cites ${target} §${section}, but ${target} does not exist`)
+    return
+  }
+  if (!target.startsWith('docs/')) return // a root document: its numbering is prose, not headings
+  if (!headingsOf(target).has(section)) fail(`${file}: ${target} has no §${section}`)
+}
+for (const file of referenceSources) {
+  const text = existsSync(join(root, file)) ? readFileSync(join(root, file), 'utf8') : ''
+  for (const line of text.split(/\r?\n/)) {
+    const qualified = []
+    for (const match of line.matchAll(qualifiedThenSection)) {
+      qualified.push({ start: match.index, end: match.index + match[0].length, section: match[2], target: resolveTarget(match[1]) })
+    }
+    for (const match of line.matchAll(sectionThenQualified)) {
+      qualified.push({ start: match.index, end: match.index + match[0].length, section: match[1], target: resolveTarget(match[2]) })
+    }
+    for (const match of line.matchAll(shortThenSection)) {
+      const stem = match[1]
+      if (!existsSync(join(root, 'docs', `${stem}-en.md`))) continue
+      qualified.push({ start: match.index, end: match.index + match[0].length, section: match[2], target: `docs/${stem}-en.md` })
+    }
+    for (const mark of qualified) checkSection(file, mark.target, mark.section)
+    for (const match of line.matchAll(anySection)) {
+      const at = match.index
+      if (qualified.some((mark) => at >= mark.start && at < mark.end)) continue
+      const section = match[1]
+      const previous = qualified.filter((mark) => mark.end <= at).pop()
+      if (previous !== undefined && CONTINUES.test(line.slice(previous.end, at))) {
+        checkSection(file, previous.target, section)
+        continue
+      }
+      if (headingsOf(file).has(section)) continue
+      const owners = sectionTargets.filter((candidate) => headingsOf(candidate).has(section))
+      if (owners.length === 1) continue
+      if (owners.length === 0) {
+        fail(`${file}: §${section} does not resolve — not a heading here, and no document under docs/ has it`)
+      } else {
+        fail(`${file}: §${section} is ambiguous — ${owners.join(' and ')} all have it; name the document`)
+      }
+    }
+    // A document reference must exist, whether it is backticked prose or a markdown link. A token with a
+    // capital in it is a pattern, not a citation — every real document is lowercase (CONTRIBUTING §5) —
+    // which is what keeps `docs/adr/NN-name.md` in the naming table from being read as a missing file.
+    for (const match of line.matchAll(/`(docs\/[A-Za-z0-9._/+-]+\.md)(?::\d+(?:-\d+)?)?`/g)) {
+      if (/[A-Z]/.test(match[1])) continue
+      if (!existsSync(join(root, match[1]))) fail(`${file}: cites ${match[1]}, which does not exist`)
+    }
+    for (const match of line.matchAll(/\]\(([^()\s]+\.md)\)/g)) {
+      const target = match[1]
+      if (target.includes('/') || target.startsWith('http')) continue
+      const base = file.includes('/') ? `${file.slice(0, file.lastIndexOf('/'))}/` : ''
+      if (!existsSync(join(root, base + target))) fail(`${file}: links to ${base}${target}, which does not exist`)
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error(`check failed: ${failures.length} problem(s)`)
   for (const failure of failures) console.error(`  - ${failure}`)

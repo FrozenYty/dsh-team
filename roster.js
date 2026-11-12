@@ -146,7 +146,7 @@ export const TASK_BODY_MAX = 2000
  *
  * The unit is the whole `tasks` array, `done` entries included, because the array is what the single-file
  * domain rewrite pays for on every spawn, retirement and task write. 200 is an order of magnitude above a
- * plausible handover backlog and two orders above the largest brief this plugin renders (5 tasks, §4.4),
+ * plausible handover backlog and two orders above the largest brief this plugin renders (5 tasks, `docs/handoff-en.md` §1),
  * so it is a safety bound rather than a working limit. It matches nothing else in the repository on
  * purpose: the label cap bounds one string, this bounds a list.
  */
@@ -419,7 +419,7 @@ export function planTask(roster, { title, owner, body }, source = 'task_board') 
 
 /**
  * The open tasks one member target owns, oldest first: what a replacement hands over and what a
- * retirement without a successor leaves unowned (§4.3, ADR 0017).
+ * retirement without a successor leaves unowned (§2 of `docs/task-board-en.md`, ADR 0017).
  * @param {object} roster - one Lead's roster.
  * @param {string} target - the model-facing target whose open tasks are wanted.
  * @returns {object[]} open tasks owned by that target.

@@ -115,6 +115,10 @@ folder names. Write commands relative to the repository root.
   `> Owner: @handle · Revisit when: <trigger>`. A trigger, not a date. An ADR is the exception: it
   carries a `## Revisit when` section at the end instead, so the header line is not repeated there.
 - **A decision that is expensive to reverse becomes an ADR**, not a paragraph in `PROGRESS.md`.
+- **Every citation resolves.** `scripts/check.mjs` follows each `docs/<name>.md` reference and each `§N` in
+  these documents and in the six host modules, and names the document and the section when the target is not
+  there; `PROGRESS.md` and `CHANGELOG.md` are exempt, because an entry that cited a section before it moved
+  is correct as of the commit that wrote it.
 
 ## 7. Definition of done
 
