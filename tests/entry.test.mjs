@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { apply } from '../index.js'
@@ -10,8 +13,11 @@ import { memoryTable } from './memory-table.mjs'
  * registered per agent. This is the layer the unit tests never entered: `actions.js` is called
  * directly by the other suites, so an authority or validation mistake that lives only in `index.js`
  * reaches the model and nothing else.
+ *
+ * `cwd` mounts the `workingDirectory` service, which is what a `definition` spawn resolves the `team/`
+ * directory from; omitting it is a profile without that service.
  */
-function harness({ tryMembership = () => undefined, listMembers = () => [], config, capture = false } = {}) {
+function harness({ tryMembership = () => undefined, listMembers = () => [], config, capture = false, cwd } = {}) {
   const table = memoryTable()
   const tools = new Map()
   const childTools = new Map()
@@ -61,7 +67,7 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
     storageDomain: { open: async () => ({ table: () => table, close: async () => {} }) },
-    get: () => undefined,
+    get: (name) => (name === 'workingDirectory' && cwd !== undefined ? { ensure: async () => cwd } : undefined),
     on: () => () => {},
     effect: (install) => {
       const dispose = install()
@@ -332,4 +338,30 @@ test('every answer conforms to the output schema its own tool declares', async (
   await answer('task_board', { action: 'list' })
   await answer('task_board', { action: 'update', task_id: task.task.id, status: 'done' })
   await answer('handoff_template', {})
+
+  // The definition layer is a second branch of this one result schema, so both answers it can give are
+  // checked against the declared schema: a member started from a file, and the typed refusal (ADR 0018).
+  const cwd = await mkdtemp(join(tmpdir(), 'dsh-team-entry-'))
+  await mkdir(join(cwd, 'team'), { recursive: true })
+  await writeFile(join(cwd, 'team', 'reviewer.md'), '---\nname: reviewer\nlabel: Check the diff\n---\nReview.\n')
+  const defined = harness({ cwd })
+  const spawnDefined = defined.tools.get('spawn_member')
+  const fromFile = await spawnDefined.execute({ definition: 'reviewer' }, { agent: defined.lead })
+  assertMatchesSchema(fromFile, spawnDefined.output.schema, 'spawn_member')
+  assert.equal(fromFile.target, 'reviewer')
+  assert.deepEqual(fromFile.definition.from_file, ['name', 'label', 'prompt'])
+  assert.deepEqual(defined.table.get('lead-1').members.map((member) => member.name), ['reviewer'])
+
+  const refused = await spawnDefined.execute({ definition: 'missing' }, { agent: defined.lead })
+  assertMatchesSchema(refused, spawnDefined.output.schema, 'spawn_member')
+  assert.equal(refused.started, false)
+  assert.equal(refused.reason, 'definition-not-found')
+  assert.equal(defined.table.get('lead-1').members.length, 1, 'a refusal reserves no member')
+
+  // A profile without the service: the working-directory refusal is the other branch of the same answer.
+  const unserviceable = harness()
+  const noService = await unserviceable.tools.get('spawn_member')
+    .execute({ definition: 'reviewer' }, { agent: unserviceable.lead })
+  assertMatchesSchema(noService, unserviceable.tools.get('spawn_member').output.schema, 'spawn_member')
+  assert.equal(noService.reason, 'working-directory-unavailable')
 })

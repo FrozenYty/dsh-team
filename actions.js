@@ -18,6 +18,7 @@
 
 import { join } from 'node:path'
 
+import { loadDefinition } from './definitions.js'
 import {
   HANDOFF_BRIEF_MAX,
   PHASE,
@@ -654,6 +655,70 @@ function startedWith({ cwd, agentOptions, agentPreset }) {
 }
 
 /**
+ * Apply one member definition to a spawn call, field by field, and say where each part came from.
+ *
+ * **The call wins.** Every field the model passed explicitly is used, and the definition's value for it
+ * is reported in `overridden` — a model that replaced the file's label but not its model sees exactly
+ * that. `prompt` is the one field the call cannot replace: the body is the member's standing prompt and
+ * the call's `prompt` is the task for this spawn, so the two are composed and the report's `prompt` says
+ * which happened. Nothing of the definition is dropped silently, which is the failure this report
+ * exists to prevent.
+ *
+ * The report is computed here, next to the merge, so the fields it claims cannot drift from the values
+ * the request is actually composed with.
+ * @param {object} definition - one parsed definition: `{name, path, prompt, fields}`.
+ * @param {object} call - the model's arguments, as `spawnMember` received them.
+ * @returns {{name?: string, label?: string, prompt: string, assignment?: string, ephemeral?: boolean,
+ *   cwd?: string, agentOptions?: object, agentPreset?: string, report: object}} the values to start
+ *   with, and the report the tool returns.
+ */
+function applyDefinition(definition, call) {
+  const file = definition.fields
+  const fromFile = []
+  const overridden = []
+  const take = (key, supplied, value) => {
+    if (supplied) {
+      if (file[key] !== undefined) overridden.push(key)
+      return value
+    }
+    if (file[key] === undefined) return undefined
+    fromFile.push(key)
+    return file[key]
+  }
+  const name = take('name', call.name !== undefined, call.name)
+  const label = take('label', call.label !== undefined, call.label)
+  const assignment = take('assignment', call.assignment !== undefined, call.assignment)
+  const ephemeral = take('ephemeral', call.ephemeral !== undefined, call.ephemeral)
+  const cwd = take('cwd', call.cwd !== undefined, call.cwd)
+  const agentPreset = take('agent_preset', call.agentPreset !== undefined, call.agentPreset)
+  const agentOptions = {}
+  for (const key of ['provider', 'model', 'reasoning_effort', 'max_tokens']) {
+    const supplied = call.agentOptions?.[key]
+    const value = take(key, supplied !== undefined, supplied)
+    if (value !== undefined) agentOptions[key] = value
+  }
+  // The body always leads: a definition that supplied the role is never thrown away by a task string.
+  fromFile.push('prompt')
+  return {
+    name,
+    label,
+    prompt: call.prompt === undefined ? definition.prompt : `${definition.prompt}\n\n${call.prompt}`,
+    assignment,
+    ephemeral,
+    cwd,
+    agentOptions: Object.keys(agentOptions).length === 0 ? undefined : agentOptions,
+    agentPreset,
+    report: {
+      name: definition.name,
+      path: definition.path,
+      prompt: call.prompt === undefined ? 'file' : 'file+call',
+      from_file: fromFile,
+      overridden,
+    },
+  }
+}
+
+/**
  * Translate a Harness refusal of one start into the plugin's typed-refusal style.
  *
  * Routed on `error.code`, the seam's stable machine-routable failure class, never on the message. The
@@ -741,14 +806,16 @@ function spawnRefusal(error, { agentOptions, agentPreset }) {
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
- *   name?: string, label: string, prompt: string, assignment?: string, replace?: string,
- *   ephemeral?: boolean, cwd?: string, agentOptions?: object, agentPreset?: string,
+ *   name?: string, label?: string, prompt?: string, assignment?: string, replace?: string,
+ *   ephemeral?: boolean, definition?: string, cwd?: string, agentOptions?: object, agentPreset?: string,
  *   signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the
  *   effective cap from the plugin config; the retirement half of a replacement enforces it, and it
  *   defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none. `ephemeral` records the member as
  *   one-shot (§4.3.1). `cwd`, `agentOptions` and `agentPreset` are the tool's `spawn_options` fields;
- *   each one omitted means the member inherits the Lead's value (ADR 0016).
- * @returns {Promise<object>} the member row the tool returns.
+ *   each one omitted means the member inherits the Lead's value (ADR 0016). `definition` names a member
+ *   definition under `team/` in the Lead's working directory: its fields fill whatever the call omitted,
+ *   and a definition that cannot be read is a typed refusal, not a throw (ADR 0018).
+ * @returns {Promise<object>} the member row the tool returns, or the definition refusal.
  */
 export async function spawnMember({
   ctx,
@@ -762,7 +829,8 @@ export async function spawnMember({
   prompt,
   assignment,
   replace,
-  ephemeral = false,
+  ephemeral,
+  definition,
   cwd,
   agentOptions,
   agentPreset,
@@ -770,6 +838,26 @@ export async function spawnMember({
   trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
   const caller = requireLiveLead('spawn_member', leadSessionId, leadAgent)
+  // The definition layer comes first, before the sweep and before any reservation: a call that names a
+  // file it cannot read must change nothing, and must not retire a finished member as a side effect of
+  // failing. A refusal is the tool's typed answer, not a thrown host error (ADR 0018, ADR 0016).
+  let defined
+  if (definition !== undefined) {
+    const loaded = await loadDefinition({ ctx, agent: caller, name: definition, signal })
+    if (loaded.refusal !== undefined) return { started: false, ...loaded.refusal }
+    const applied = applyDefinition(loaded.definition, { name, label, prompt, assignment, ephemeral, cwd, agentOptions, agentPreset })
+    name = applied.name
+    label = applied.label
+    prompt = applied.prompt
+    assignment = applied.assignment
+    ephemeral = applied.ephemeral
+    cwd = applied.cwd
+    agentOptions = applied.agentOptions
+    agentPreset = applied.agentPreset
+    // A broken file elsewhere in `team/` does not stop this spawn, and is still reported: that is the
+    // "one bad file never hides the others" rule (ADR 0018).
+    defined = { definition: loaded.problems.length === 0 ? applied.report : { ...applied.report, problems: loaded.problems } }
+  }
   const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const predecessor = replace === undefined
@@ -779,7 +867,7 @@ export async function spawnMember({
     throw new Error(`spawn_member: no member named "${replace}" in the roster, live or retired`)
   }
   const baseName = typeof name === 'string' && name.length > 0 ? name : predecessor?.name
-  if (baseName === undefined) throw new Error('spawn_member: name is required unless replace is given')
+  if (baseName === undefined) throw new Error('spawn_member: name is required unless replace or definition supplies one')
   const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'spawn_member')
   // A successor continues the predecessor's work, so it inherits the recorded assignment unless the
   // model records a different one. Without this, a brief would thin out one generation at a time.
@@ -834,6 +922,7 @@ export async function spawnMember({
       const value = {
         ...memberRow(ctx, record),
         ...swept,
+        ...defined,
         started: false,
         reason: refusal.reason,
         message: refusal.message,
@@ -872,7 +961,7 @@ export async function spawnMember({
     return withMember(current, active)
   })
   const settled = persisted.members.find((member) => member.memberId === planned.memberId) ?? active
-  const successor = memberRow(ctx, settled)
+  const successor = { ...memberRow(ctx, settled), ...defined }
   if (settled.phase === PHASE.retired) {
     // A retirement committed between the reservation and the activation. Draining happens here,
     // when the child finally publishes: the retire that ran earlier had no child to drain.

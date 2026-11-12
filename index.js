@@ -29,6 +29,12 @@
  * for the child Sessions on this Lead's roster, which the shipped service's `waitForChange` cannot see
  * (a member spawned through `ctx.subagents` is not in that service's journal).
  *
+ * A member's *definition* can live on disk instead of in the call: `spawn_member.definition` reads the
+ * flat-frontmatter markdown files under `team/` in the Lead's working directory, and every field the
+ * call also passes wins over the file's, which the result reports field by field (`definitions.js`,
+ * ADR 0018). The plugin reads those files and never writes one — version control and an editor are the
+ * better tool — and the roster stays runtime state.
+ *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as
  * `@deepseek-ai/dsh-tools` resolves from the bundle path and fails with ERR_MODULE_NOT_FOUND. Shipped
@@ -65,6 +71,7 @@ import {
   waitMembers,
 } from './actions.js'
 import { installProjectionFilter, installSlotCredit } from './host-hooks.js'
+import { DEFINITION_REFUSAL_REASONS } from './definitions.js'
 import {
   ASSIGNMENT_MAX,
   HANDOFF_TEMPLATE_MAX,
@@ -176,6 +183,78 @@ const CURRENT_HOLDER = {
   },
 }
 
+/**
+ * One file the definition scan could not use, named by path and — when the problem is a line of that
+ * file — by line. A row here never stops a spawn that names a definition the same scan did read, which
+ * is why it is reported in a result rather than thrown (ADR 0018).
+ */
+const DEFINITION_PROBLEM = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['path', 'problem'],
+  properties: {
+    path: { type: 'string' },
+    line: { type: 'integer' },
+    problem: { type: 'string' },
+  },
+}
+
+/**
+ * What a spawn that used a member definition reports about it: which file, where each field came from,
+ * and what the call overrode.
+ *
+ * This is the field that makes the precedence visible. A model that believes it overrode a definition's
+ * model and did not is the failure this exists to prevent, so `from_file` and `overridden` name the
+ * fields explicitly instead of leaving the caller to infer the merge from the result of a start.
+ */
+const DEFINITION_REPORT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'path', 'prompt', 'from_file', 'overridden'],
+  properties: {
+    // The name the file declares, which is also the key that was looked up.
+    name: { type: 'string' },
+    path: { type: 'string' },
+    // 'file' when the member starts on the definition's body alone, 'file+call' when this call's prompt
+    // was appended to it. The body is never replaced, so there is no third value.
+    prompt: { type: 'string', enum: ['file', 'file+call'] },
+    from_file: { type: 'array', items: { type: 'string' } },
+    overridden: { type: 'array', items: { type: 'string' } },
+    // Present only when the same scan refused another file: a broken definition beside a usable one.
+    problems: { type: 'array', items: DEFINITION_PROBLEM },
+  },
+}
+
+/**
+ * The answer to a spawn that named a definition this plugin could not use.
+ *
+ * It is a second branch of `spawn_member`'s result rather than a thrown error, because the model can act
+ * on it — spell the name differently, fix the file, or pass label and prompt instead — and because the
+ * alternative, a host error, is where this plugin's other refusals deliberately do not put that
+ * instruction (ADR 0016). Nothing has been reserved when it is returned: no member record is written and
+ * no child exists, so a retry after fixing the file reuses the same name.
+ */
+const DEFINITION_REFUSAL = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['started', 'reason', 'message'],
+  properties: {
+    started: { type: 'boolean', enum: [false] },
+    reason: { type: 'string', enum: DEFINITION_REFUSAL_REASONS },
+    // The name as the caller wrote it, absent only when the working directory itself could not be read.
+    definition: { type: 'string' },
+    // The `team` directory that was read, or the file that was refused.
+    path: { type: 'string' },
+    // The names the same scan could use, so a misspelling is correctable from this answer alone. It is
+    // called `available` and not `definitions` because the repository check reads a bare `definitions:` as
+    // the JSON Schema keyword; the id list mirrors the preset refusal's own `details.available`.
+    available: { type: 'array', items: { type: 'string' } },
+    // Every file the scan refused, by path and line.
+    problems: { type: 'array', items: DEFINITION_PROBLEM },
+    message: { type: 'string' },
+  },
+}
+
 const MEMBER_ROW = {
   type: 'object',
   additionalProperties: false,
@@ -228,6 +307,9 @@ const MEMBER_ROW = {
         agent_preset: { type: 'string' },
       },
     },
+    // Present only on a spawn that named a member definition: which parts came from the file and which
+    // the call overrode (ADR 0018).
+    definition: DEFINITION_REPORT,
     message: { type: 'string' },
   },
 }
@@ -555,15 +637,15 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'spawn_member',
-      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over. Pass ephemeral: true for one-shot work: the member retires itself through the normal retirement path once it has run and stopped, so a parallel fan-out leaves the roster without one retire_member call per member. This call first sweeps members already in that state and reports the count.',
+      description: 'Create one named team member as a continuable subagent, or replace an existing member in one call. Pass definition to start it from a member definition committed with the project instead of describing it here. Pass replace to retire that member and start its successor from a handoff brief: the successor is told what the predecessor was doing, that it is the successor, and where the unfinished work is; it is not given the predecessor\'s transcript. A successor keeps the base name with the next generation suffix unless you name it. Record an assignment so a later successor can take this member\'s work over. Pass ephemeral: true for one-shot work: the member retires itself through the normal retirement path once it has run and stopped, so a parallel fan-out leaves the roster without one retire_member call per member. This call first sweeps members already in that state and reports the count.',
       parameters: {
         type: 'object',
         additionalProperties: false,
-        required: ['label', 'prompt'],
+        required: [],
         properties: {
-          name: { type: 'string', description: 'Lowercase base name: 1-32 letters, digits or hyphens, starting with a letter. Required unless replace is given; with replace it defaults to the predecessor\'s base name, which yields the next generation.' },
-          label: { type: 'string', description: 'Short responsibility text shown in the roster.' },
-          prompt: { type: 'string', description: 'Complete initial task for the member. With replace it is appended after the handoff brief.' },
+          name: { type: 'string', description: 'Lowercase base name: 1-32 letters, digits or hyphens, starting with a letter. Required unless replace or definition supplies one; with replace it defaults to the predecessor\'s base name, which yields the next generation, and with definition it defaults to the name the file declares.' },
+          label: { type: 'string', description: 'Short responsibility text shown in the roster. Required unless definition supplies it.' },
+          prompt: { type: 'string', description: 'Complete initial task for the member. With replace it is appended after the handoff brief, and with definition it is appended after the definition\'s own prompt. Required unless definition supplies one.' },
           assignment: {
             type: 'string',
             maxLength: ASSIGNMENT_MAX,
@@ -576,6 +658,10 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           ephemeral: {
             type: 'boolean',
             description: 'Default false. True marks this member as one-shot: a lazy sweep at the start of list_members or spawn_member retires it through the normal retirement path once it has run and stopped, without a retire_member call. A member that never started, and one still running, are never swept. Message it again and the flag is cleared, because that message is a declaration it is not one-shot. list_members reports ephemeral: true on such a member.',
+          },
+          definition: {
+            type: 'string',
+            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under team/ in your working directory, with a flat frontmatter block declaring name and label and optionally assignment, ephemeral, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Write and version them with your own file tools. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
           },
           spawn_options: {
             type: 'object',
@@ -598,15 +684,22 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           },
         },
       },
-      output: { schema: MEMBER_ROW },
+      output: { schema: { oneOf: [MEMBER_ROW, DEFINITION_REFUSAL] } },
       async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'spawn_member')
         requireLead(ctx, caller, 'spawn_member')
-        if (typeof args.label !== 'string' || args.label.trim().length === 0) {
+        if (args.label !== undefined && (typeof args.label !== 'string' || args.label.trim().length === 0)) {
           throw new Error('spawn_member: label must be a non-empty string')
         }
-        if (typeof args.prompt !== 'string' || args.prompt.trim().length === 0) {
+        if (args.prompt !== undefined && (typeof args.prompt !== 'string' || args.prompt.trim().length === 0)) {
           throw new Error('spawn_member: prompt must be a non-empty string')
+        }
+        if (args.definition !== undefined && (typeof args.definition !== 'string' || args.definition.trim().length === 0)) {
+          throw new Error('spawn_member: definition must be a non-empty string')
+        }
+        if (args.definition === undefined) {
+          if (args.label === undefined) throw new Error('spawn_member: label is required unless definition is given')
+          if (args.prompt === undefined) throw new Error('spawn_member: prompt is required unless definition is given')
         }
         if (args.name !== undefined && (typeof args.name !== 'string' || args.name.trim().length === 0)) {
           throw new Error('spawn_member: name must be a non-empty string')
@@ -614,8 +707,8 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.replace !== undefined && (typeof args.replace !== 'string' || args.replace.length === 0)) {
           throw new Error('spawn_member: replace must be a non-empty string')
         }
-        if (args.name === undefined && args.replace === undefined) {
-          throw new Error('spawn_member: name is required unless replace is given')
+        if (args.name === undefined && args.replace === undefined && args.definition === undefined) {
+          throw new Error('spawn_member: name is required unless replace or definition supplies one')
         }
         if (args.assignment !== undefined && typeof args.assignment !== 'string') {
           throw new Error('spawn_member: assignment must be a string')
@@ -673,6 +766,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           assignment: args.assignment,
           replace: args.replace,
           ephemeral: args.ephemeral,
+          definition: args.definition,
           cwd: options?.cwd,
           agentOptions: options?.agent_options,
           agentPreset: options?.agent_preset,

@@ -84,6 +84,24 @@ export const TASK_LIMIT = 200
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
 
 /**
+ * Validate a base member name.
+ *
+ * The rule lives outside `planMember` because a member definition declares its own `name` and must be
+ * refused by the same rule the reservation would apply one call later (ADR 0018); duplicating the
+ * pattern would let a definition name a member the roster then rejects.
+ * @param {unknown} value - the model-supplied or file-declared base name.
+ * @param {string} source - operation name, so the thrown message names what refused.
+ * @returns {string} the base name.
+ */
+export function checkMemberName(value, source = 'planMember') {
+  if (typeof value !== 'string' || !NAME_PATTERN.test(value)) {
+    throw new Error(`${source}: member name "${String(value)}" must match ${String(NAME_PATTERN)}`)
+  }
+  if (value === 'lead') throw new Error(`${source}: member name "lead" is reserved for the root agent`)
+  return value
+}
+
+/**
  * Upper bound on a member's `assignment`, so one record cannot grow without limit. The assignment is
  * what a successor is briefed with, so it is a short statement of the work, not a transcript.
  */
@@ -568,10 +586,7 @@ export function currentHolderOf(roster, target) {
  *   written before this flag existed.
  */
 export function planMember(roster, baseName, label, assignment, ephemeral = false) {
-  if (!NAME_PATTERN.test(baseName)) {
-    throw new Error(`member name "${baseName}" must match ${String(NAME_PATTERN)}`)
-  }
-  if (baseName === 'lead') throw new Error('member name "lead" is reserved for the root agent')
+  checkMemberName(baseName, 'planMember')
   const trimmedLabel = checkLabel(label, 'planMember')
   const used = roster.members.filter((member) => member.name === baseName)
   const generation = used.reduce((highest, member) => Math.max(highest, member.generation), 0) + 1
