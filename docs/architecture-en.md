@@ -91,6 +91,12 @@ A short map, not a changelog: each release below names what it added and the sec
   retirement needs the person's words quoted back, a message re-opens a one-shot member instead of
   re-declaring it, and a definition file can no longer declare a lifetime at all (§4.2, §4.3.1, §4.3.3,
   §4.5, §4.6, ADR 0026).
+- **v0.25.1** — the consent gate narrows to what a standing member still carries: a recorded assignment, an
+  open row on this Lead's board, or evidence it was re-tasked. A standing member carrying none of the three
+  is housekeeping, which the Lead clears in one call on a stated `reason`; both refusals say which rule
+  stopped the call (`needs-confirmation` with `carries`, or `needs-reason` with `carries: []`), and the
+  re-task counters that the third carrier rests on are now written for every member (§4.2, §4.3.1, §4.4,
+  §4.5, ADR 0026).
 
 ### 2.1 Compaction is enabled
 
@@ -369,12 +375,14 @@ startedAt     ISO timestamp on a one-shot member: when its child was started. Th
               evidence the lazy sweep requires, so a reservation that never published is never swept.
               A message deletes it and a later read that observes the child resident writes it again,
               which is what keeps the evidence "an observation made after the last hand-off of work"
-messageCount  on a one-shot member only: how many messages it was sent after the spawn. Half of the
-              evidence `list_members` advises on — two or more is a member that is probably a standing
-              role (ADR 0026). Optional
-assignmentCount  on a one-shot member only: how many assignment changes were written for it after the
-              spawn, counted rather than inferred because `assignment` keeps only the last value.
-              The other half of the same advice. Optional
+messageCount  how many messages this member was sent after the spawn, written for **every** member (v0.25.1;
+              a one-shot member only before that). Its two readers differ: `list_members` advises on it for
+              a one-shot member — two or more is a member that is probably a standing role — and the
+              retirement gate reads it for any standing member, where two or more means the member was
+              re-tasked and is therefore not bare residue (ADR 0026). Optional
+assignmentCount  how many assignment changes were written for this member after the spawn, counted rather
+              than inferred because `assignment` keeps only the last value. Written and read for the same
+              two purposes as `messageCount`. Optional
 route         the provider and model the member was started on, and where that route came from:
               `{ source, provider?, model?, select_reason? }`. `source` is `caller` (the spawn call or its
               definition named the route), `plugin` (the plugin resolved and forwarded the Lead's current
@@ -638,7 +646,10 @@ observes the child resident again writes a fresh `startedAt`, and until then a s
 anything about a member that was just handed work. Its result says so (`reopened: true`) and reports the
 unchanged `lifetime`. This replaces ADR 0013 point 5, which cleared the flag and thereby made a one-shot
 member permanent by accident. The same write counts what it wrote — `messageCount`, and `assignmentCount`
-when an assignment changed — and those counters exist only on a one-shot member.
+when an assignment changed. Since v0.25.1 those counters are written for every member, not only a one-shot
+one, because the retirement gate reads them to tell a member that was handed work again and again from bare
+residue; what stays one-shot-only is the *advice* below, which corrects a declaration rather than describing
+a role.
 
 **A re-tasked one-shot member is advised on, never converted.** Two or more accepted messages, or two or more
 assignment changes, make the row carry `retasked: true` and a note saying the member is probably a standing
@@ -646,19 +657,42 @@ role and naming the call that declares it. The plugin does not act on its own co
 person's consent, only a spawn can change one, and the sweep does not spare the member because it was
 messaged twice.
 
-**A standing member's `retire_member` needs the person's words.** The call retires nothing and answers
-`retired: false, reason: 'needs-confirmation'`, carrying the `question` to put to the person, the
-`owns_tasks` it still holds, the `assignment` it carries and a `message` saying what to do next. The
-retirement happens on the next call, which passes `confirmed: "<their sentence>"`; the sentence is trimmed,
-echoed back into that result and therefore stays in the transcript. Nothing is written on the refusal — no
-tombstone, no drain, no un-owned work. A self-set boolean would ask nobody, which is what a model-only
-surface (ADR 0008) makes worthless. Two retirements never reach the gate at all, because neither is the
-model deciding to end a role: a one-shot member, whose declaration already was the person's prior consent,
-and a `replace`, which continues the role with a new holder. Both call the same protocol with
-`consentRequired` false. The gate itself skips two more, and for one reason: **a record that never became a
-role has nothing to consent to** — `retired` has no life left to end, and `failed` never started, so
-removing a reservation that never held a role is cleanup rather than ceremony. A `standing` member that
-actually ran is `active` while it lives, so it is unaffected: retiring it still needs the quoted words.
+**A standing member's `retire_member` needs the person's words — when that member carries something.** The
+gate protects the person's decision to end a *role*, not every act of housekeeping (v0.25.1), so it depends
+on what the member still carries. Three things count, and any one of them makes the ending a role-level
+decision:
+
+| Carrier | Where it is read | Why it makes the ending a decision about a role |
+|---|---|---|
+| a recorded `assignment` | the member's record | the role has a durable statement of what it was doing, which a person may still want kept |
+| at least one `open` row | this Lead's board | somebody still owes work this Lead is tracking, and retiring the owner would leave it unowned |
+| re-tasked at least `RETASK_MIN` times | `messageCount` / `assignmentCount` | the Lead has already handed this member work more than once, which is what using a role looks like |
+
+With a carrier, the call retires nothing and answers `retired: false, reason: 'needs-confirmation'`, carrying
+the `question` to put to the person, `carries` naming what it found, the `owns_tasks` it still holds, the
+`assignment` it carries and a `message` saying what to do next. The retirement happens on the next call,
+which passes `confirmed: "<their sentence>"`; the sentence is trimmed, echoed back into that result and
+therefore stays in the transcript. Nothing is written on the refusal — no tombstone, no drain, no un-owned
+work. A self-set boolean would ask nobody, which is what a model-only surface (ADR 0008) makes worthless.
+
+**With no carrier, it is housekeeping and the Lead may do it — on a stated `reason`.** A standing member with
+no assignment, no open row and no re-tasking is bare residue: a probe left behind, which nobody is still
+deciding about. That call retires in one step, asks nobody, and must pass a non-empty `reason`, which the
+tombstone keeps as `retireReason`; a call that states no reason answers
+`retired: false, reason: 'needs-reason'`, carries `carries: []`, and changes nothing. The successful result
+says in words that the member carried nothing and was removed as housekeeping, so the transcript shows the
+Lead acted alone and on what. A blank reason is refused like every other empty value in this plugin.
+
+Two retirements never reach the gate at all, because neither is the model deciding to end a role: a one-shot
+member, whose declaration already was the person's prior consent, and a `replace`, which continues the role
+with a new holder. Both call the same protocol with `consentRequired` false. The gate itself skips two more,
+and for the same reason: **a record that never became a role has nothing to consent to** — `retired` has no
+life left to end, and `failed` never started.
+
+So the refusal's two values answer two different questions, and a reader can tell them apart without parsing
+prose: `needs-confirmation` with a non-empty `carries` means a role with something behind it, and
+`needs-reason` with `carries: []` means residue that needs a sentence. `owns_tasks` and `assignment` keep
+their existing rule — present only when they exist — so an absent field still reads as "nothing there".
 
 **The sweep is lazy, and it has exactly two trigger points.** It runs at the start of `list_members` (the
 read where the model collects results) and `spawn_member` (the fan-out where the freed slots matter), and
@@ -738,12 +772,15 @@ What the table depends on:
 Retirement is a protocol, not a deletion, because a member's Session is durable and its work may be
 half-finished. What `retire_member` does, in the order the code does it:
 
-0. **Decide whether the model is allowed to do this at all.** A `standing` member's retirement is the
-   person's decision, so with `consentRequired` set — which is what the `retire_member` tool sets, and what
-   a replacement and the sweep leave unset — a call that carries no `confirmed` returns
-   `reason: 'needs-confirmation'` with the question to ask, and *nothing below runs*: no handover write, no
-   drain, no tombstone. The next call carries the person's sentence quoted, and step 1 proceeds with it
-   echoed into the result (§4.3.1, ADR 0026).
+0. **Decide whether the model is allowed to do this at all.** With `consentRequired` set — which is what the
+   `retire_member` tool sets, and what a replacement and the sweep leave unset — the gate asks about a
+   `standing` member only when it still carries something (an `assignment`, an open row, or a re-tasking),
+   and *nothing below runs* on a refusal: no handover write, no drain, no tombstone. A member that carries
+   something and has no `confirmed` returns `reason: 'needs-confirmation'` with the question to ask and
+   `carries` naming what stopped it, and the next call carries the person's sentence quoted. A member that
+   carries nothing is housekeeping: it retires on a non-empty `reason` alone, and a call with neither a
+   reason nor a confirmation returns `reason: 'needs-reason'`. Step 1 proceeds with the sentence or the
+   reason echoed into the result (§4.3.1, ADR 0026).
 1. **Record the reason.** A model-supplied `reason` is kept on the tombstone as `retireReason`.
 2. **Drain.** `ctx.subagents.drainChildren(lead, [childId])` stops the child and releases its activation
    slot and residency. A child that never published, or one that already settled, has nothing to drain;
@@ -858,9 +895,9 @@ agent and is treated as the Lead, so a failed projection cannot disable every to
 | `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `definition`, start it from a member definition committed with the project, whose fields fill whatever the call omitted (§4.6); with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `lifetime` declares how long the member lives — `standing` (the default) or `one-shot`; `ephemeral: true` is the pre-v0.25 spelling of `one-shot` — and it is this call's alone: never the predecessor's, never the file's (§4.3.1, ADR 0026). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default. A spawn that names no `agent_options` still runs on this Session's route: the plugin resolves the Lead's current `provider` and `model` and forwards them, so the member uses the API of the Session that started it, and `started_with.route_source` says whether the route came from the call (`caller`), was resolved by the plugin (`plugin`) or was inherited unresolved (`inherited`, with `route.select_reason` naming which fallback ran); `started_with` reports back what the plugin forwarded, not what the child resolved (§2.6, ADR 0024). A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error, and a definition that cannot be read is answered the same way (ADR 0016, ADR 0018). A one-shot member is retired by the sweep once it has run, stopped and owns no open task, and the call first sweeps any member already in that state (§4.3.1). |
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, the `lifetime` its spawn declared (`standing` or `one-shot`, with `ephemeral` beside it as the durable field), `retasked: true` and a `retasked_note` on a one-shot member handed work at least twice, the `route` the member was started on, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. When the Lead's own route can be read and differs from a member's recorded one, the row also carries `route_stale: true` and a `route_note` naming both routes and the one call that replaces the member (§2.6, ADR 0024). A read first sweeps one-shot members that have run, stopped and own no open task, and reports `swept` and `swept_targets` when it retired any — while a member the board's veto kept is reported through `blocked`, `blocking_tasks` and `blocking_note`, and `unowned`/`unowned_tasks` appear only if a row was created for a swept member in between (§4.3.1, §4.3.2, ADR 0026). It always carries `host_hooks`: `panel_filter`, `roster_filter` and `slot_credit` as `installed` or `absent`, `stripped_ids` and `tombstone_read_failed` while a filter is installed, and a `message` naming an absent hook, the service it needed and what that means for the shipped panel and `list_agents` (§2.4, ADR 0025). |
 | `wait_members` | One bounded wait on the live status of this Lead's members: it answers when a member's `agent/status` transitions (`idle` ⇄ `running`) or after the timeout, and reports the member and the status it entered. The timeout defaults to 30 s and is refused above 1 h; a roster with no `running` member and no `provisioning` reservation answers `no_progress` at once, because a blocked Lead cannot wake an idle member. It observes only post-call transitions and never wakes anyone (§4.5). |
-| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. A message never changes a lifetime: messaging a one-shot member re-opens it (the finished-evidence is dropped, and the result answers `reopened: true` with the unchanged `lifetime`), so it will not be swept until it has run and stopped again (§4.3.1, ADR 0026). A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
+| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. A message never changes a lifetime: messaging a one-shot member re-opens it (the finished-evidence is dropped, and the result answers `reopened: true` with the unchanged `lifetime`), so it will not be swept until it has run and stopped again (§4.3.1, ADR 0026). Every accepted message also counts itself on the member's record, for any member, because the retirement gate reads those counters (§4.2, §4.3.1). A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |
-| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. **A member whose lifetime is `standing` is not retired by this call alone**: it answers `retired: false, reason: 'needs-confirmation'` with the `question` to put to the person, the `owns_tasks` it still holds, its `assignment` and a `message` saying what to do next, and the retirement happens on the next call, which passes `confirmed` set to that person's sentence quoted verbatim — echoed back in the result. A one-shot member, a successor started by `spawn_member` with `replace`, and a record in `failed` (or already `retired`) are exempt, because none of them is a role being ended by this call (§4.3.1, ADR 0026). It is a retirement with no successor, so the member's open tasks lose their owner and the result names them in `unowned`/`unowned_tasks` (§4.3.2). |
+| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. **A `standing` member is not retired by this call alone when it still carries something** — an `assignment`, an `open` row, or a re-tasking: it answers `retired: false, reason: 'needs-confirmation'` with the `question` to put to the person, `carries` naming what it found, `owns_tasks`/`assignment` when it has them, and a `message` saying what to do next; the retirement happens on the next call, which passes `confirmed` set to that person's sentence quoted verbatim, echoed back in the result. **A `standing` member that carries nothing is the Lead's to clear on a stated `reason`**, and a call that states no reason answers `reason: 'needs-reason'` with `carries: []`. A one-shot member, a successor started by `spawn_member` with `replace`, and a record in `failed` (or already `retired`) are exempt, because none of them is a role being ended by this call (§4.3.1, ADR 0026). It is a retirement with no successor, so the member's open tasks lose their owner and the result names them in `unowned`/`unowned_tasks` (§4.3.2). |
 | `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, a pruned tombstone answers `reason: 'pruned'` without touching the workspace, and a refusal carries `current_holder` when another generation of the name is live. It assigns no work: `unowned`/`unowned_tasks` report the open rows still waiting for an owner (§4.3.2). |
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
 | `handoff_template` | Read, store or clear this Lead's handoff-brief shape: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to validate and store it, pass an empty string to clear it. The team file `team/team.md` wins while it exists, so a store or clear is refused with the file's path and the instruction to edit it; a broken file is reported by `file_problem` and does not shadow a usable stored template. A stored value that no longer passes validation is reported (`valid`, `problem`) and the composition falls back to the built-in (§4.7). |

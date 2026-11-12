@@ -106,20 +106,36 @@ function staleRouteNote(target, route, leadRoute) {
 }
 
 /**
+ * What a member's own counters prove about how often it was handed work, as short phrases.
+ *
+ * The evidence is counted rather than inferred, because `assignment` keeps only the last value and a
+ * message leaves no other trace. `RETASK_MIN` is the threshold for both signals: one follow-up is not
+ * evidence that a role is being used again (ADR 0026).
+ * @param {object} member - one stored member record.
+ * @returns {string[]} the signals that reached the threshold, empty when none did.
+ */
+function retaskSignals(member) {
+  const signals = []
+  if ((member.messageCount ?? 0) >= RETASK_MIN) signals.push(`${member.messageCount} messages`)
+  if ((member.assignmentCount ?? 0) >= RETASK_MIN) signals.push(`${member.assignmentCount} assignment changes`)
+  return signals
+}
+
+/**
  * The sentence `list_members` puts on a one-shot member that has been re-tasked, or undefined.
  *
  * A lifetime declaration is the person's prior consent, so the plugin never converts a member by itself:
  * it reports the evidence — accepted messages and assignment changes written after the spawn — and names
  * the one call that declares the other lifetime (ADR 0026). A member the Lead nudged once is not
- * evidence, which is why the threshold is two of either signal.
+ * evidence, which is why the threshold is two of either signal. The advice itself stays one-shot-only,
+ * because "this is probably a standing role" is only a correction for a member declared one-shot; the
+ * retirement gate reads the same counters for every member (see `carriedBy`).
  * @param {object} member - one stored member record.
  * @returns {string|undefined} the note, or undefined when the member is not a re-tasked one-shot.
  */
 function retaskAdvice(member) {
   if (member.ephemeral !== true) return undefined
-  const signals = []
-  if ((member.messageCount ?? 0) >= RETASK_MIN) signals.push(`${member.messageCount} messages`)
-  if ((member.assignmentCount ?? 0) >= RETASK_MIN) signals.push(`${member.assignmentCount} assignment changes`)
+  const signals = retaskSignals(member)
   if (signals.length === 0) return undefined
   return `This member was declared one-shot, but it has been re-tasked since: ${signals.join(' and ')}. A one-shot handed work again and again is evidence of a standing role, so it is probably not one — nothing converts it automatically, and it still retires on the next sweep once it has stopped and owns no open task. To keep it, declare that at the next spawn: spawn_member { replace: "${targetOf(member)}", label, prompt, lifetime: "standing" }.`
 }
@@ -1539,9 +1555,11 @@ export async function spawnMember({
  *   `consentRequired` is true on the model's own retirement decision — the `retire_member` tool — and
  *   false on the two internal retirements that are not a decision to end a role: a replacement continues
  *   the role with a new person, and the sweep only ever acts on a member that has already consented to
- *   leaving by being declared one-shot. With it set, the gate still asks nobody for a one-shot member or
- *   for a record in `retired` or `failed`, because none of the three is a role being ended. `confirmed` is
- *   the person's answer, quoted verbatim (ADR 0026).
+ *   leaving by being declared one-shot. With it set, the gate protects the person's decision to end a
+ *   *role*, not every act of housekeeping: it asks about a standing member only when that member still
+ *   carries something, and a bare one is the Lead's to clear on a stated `reason`. A one-shot member and a
+ *   record in `retired` or `failed` never reach it at all. `confirmed` is the person's answer, quoted
+ *   verbatim (ADR 0026).
  *
  *   There is no `successor` parameter on purpose. A replacement hands its work over itself, through
  *   `handOverTasks`, because it is the only caller that knows the successor and it must be able to do so
@@ -1579,16 +1597,29 @@ export async function retireMember({
   // The lifetime gate, before the handover write and before anything is drained or tombstoned: a refusal
   // leaves this retirement's own state untouched — the record, its open work and its artifact — so the
   // question can be answered and the call simply retried. (The adoption read above it is the reconciliation
-  // every roster operation performs, not part of this retirement.) A standing member's retirement is the
-  // person's decision, so the model has to carry their words back. Three cases ask nobody: a one-shot
-  // member, whose declaration was already the person's consent; and the two phases that never became a
-  // role — `retired` has no life left to end, and `failed` never started, so there is nothing to ask about
-  // and asking would turn cleanup into ceremony (ADR 0026).
+  // every roster operation performs, not part of this retirement.) The gate protects the person's decision
+  // to end a *role*, not every act of housekeeping, so it asks about a standing member only when that
+  // member still carries something: a recorded assignment, open work, or evidence it was handed work again
+  // and again (ADR 0026). Bare, idle residue is housekeeping — the Lead retires it in one call on a stated
+  // `reason`, which the tombstone keeps. Three cases never reach the gate at all: a one-shot member, whose
+  // declaration was already the person's consent, and the two phases that never became a role — `retired`
+  // has no life left to end, and `failed` never started.
   const lifespan = lifetimeOf(member)
   const quoted = typeof confirmed === 'string' ? confirmed.trim() : ''
+  const gaveReason = typeof reason === 'string' && reason.trim().length > 0
   const becameARole = member.phase !== PHASE.retired && member.phase !== PHASE.failed
-  if (consentRequired && becameARole && lifespan === LIFETIME.standing && quoted.length === 0) {
-    return consentRefusal(roster, member)
+  let housekeeping = false
+  if (consentRequired && becameARole && lifespan === LIFETIME.standing) {
+    const carried = carriedBy(roster, member)
+    if (carried.carries.length > 0) {
+      if (quoted.length === 0) return consentRefusal(member, carried)
+    } else if (!gaveReason) {
+      // Housekeeping is the Lead's to decide, but it still has to say why: the reason is what the
+      // tombstone keeps, so a later reader can tell why the residue was removed.
+      return reasonRefusal(member)
+    } else {
+      housekeeping = true
+    }
   }
 
   // The handover, and it is deliberately the first write: the work loses its owner in one mutation, before
@@ -1747,6 +1778,11 @@ export async function retireMember({
     // The consent is the person's sentence, so the answer quotes it back: the transcript then holds the
     // exact words this retirement was allowed on, which a boolean could never do (ADR 0026).
     value.message += ` It was retired on the person's words, quoted back here: "${quoted}".`
+  }
+  if (housekeeping) {
+    // The narrow half of the gate, said out loud: the Lead acted alone here, and the result is where that
+    // is visible rather than inferred from the absence of a question (ADR 0026).
+    value.message += ' It carried nothing — no recorded assignment, no open task, no evidence it was re-tasked — so it was removed as housekeeping on the reason you stated, not as a decision about a role.'
   }
   if (handover.length > 0) {
     value.message += ` Its ${handover.length} open ${handover.length === 1 ? 'task is' : 'tasks are'} now unowned: nobody will carry ${handover.length === 1 ? 'it' : 'them'} until a successor starts or an owner is assigned.`
@@ -1958,19 +1994,42 @@ function retargetNotice(roster, target) {
 }
 
 /**
- * The refusal a standing member's retirement answers with: everything needed to ask the person.
+ * What one standing member still carries, which is what decides whether ending it is a role-level decision.
+ *
+ * Three facts, each read from the record or the board, and each one the answer to "is there anything here
+ * a person would want a say in?": a recorded assignment (the durable statement of what the role was doing),
+ * open work on this Lead's board, and the counters that show it was handed work at least `RETASK_MIN`
+ * times. A member with none of the three is bare residue: a probe left behind, which the Lead may clear
+ * without asking anybody (ADR 0026).
+ * @param {object} roster - one Lead's roster.
+ * @param {object} member - the standing member being considered.
+ * @returns {{tasks: object[], retasked: string[], carries: string[]}} the evidence, and the phrases the
+ *   refusal reports it with. `carries` is empty exactly when the member is bare.
+ */
+function carriedBy(roster, member) {
+  const tasks = openTasksOf(roster, targetOf(member))
+  const retasked = retaskSignals(member)
+  const carries = []
+  if (typeof member.assignment === 'string' && member.assignment.length > 0) carries.push('a recorded assignment')
+  if (tasks.length > 0) carries.push(`${tasks.length} open ${tasks.length === 1 ? 'task' : 'tasks'}`)
+  if (retasked.length > 0) carries.push(`being re-tasked (${retasked.join(' and ')})`)
+  return { tasks, retasked, carries }
+}
+
+/**
+ * The refusal a standing member's retirement answers with, when that member still carries something.
  *
  * The plugin has no human surface (ADR 0008), so a boolean the model sets about itself would be worth
- * nothing. The refusal therefore hands back the three things the question needs — who the member is,
- * what it still carries, and the sentence to put to the person — and the retirement happens on the next
- * call, which must carry the person's answer quoted. A `confirmed: true` could not be checked; a quoted
- * sentence can, because it stays in the transcript (ADR 0026).
- * @param {object} roster - one Lead's roster.
+ * nothing. The refusal therefore hands back what the question needs — who the member is, what it still
+ * carries, and the sentence to put to the person — and the retirement happens on the next call, which must
+ * carry the person's answer quoted. A `confirmed: true` could not be checked; a quoted sentence can,
+ * because it stays in the transcript (ADR 0026).
  * @param {object} member - the standing member whose retirement is refused.
+ * @param {{tasks: object[], carries: string[]}} carried - what it carries, already read.
  * @returns {object} the refusal result.
  */
-function consentRefusal(roster, member) {
-  const owns = openTasksOf(roster, targetOf(member))
+function consentRefusal(member, carried) {
+  const owns = carried.tasks
   const work = owns.length === 0
     ? 'owns no open task right now'
     : `still owns ${owns.length} open ${owns.length === 1 ? 'task' : 'tasks'} on this board (${owns.map((task) => `"${task.title}"`).join(', ')})`
@@ -1980,10 +2039,33 @@ function consentRefusal(roster, member) {
     retired: false,
     reason: 'needs-confirmation',
     lifetime: LIFETIME.standing,
+    // The machine-readable form of the rule that stopped this call, beside the sentence that explains it:
+    // a reader can tell a role with work behind it from bare residue without parsing prose.
+    carries: carried.carries,
     question: `Retire the standing member "${targetOf(member)}" (${member.label})? It ${work}${recorded}. Retiring it moves its session to this Lead's trash and leaves any open work it owns unowned.`,
     ...(owns.length === 0 ? {} : { owns_tasks: owns.map((task) => task.id) }),
     ...(typeof member.assignment === 'string' ? { assignment: member.assignment } : {}),
-    message: `Nothing was retired. A standing member is a division of labour, so ending it is the person's decision rather than the model's. Ask the person the question above, then call retire_member again with confirmed set to their answer, quoted verbatim — that sentence is what this plugin treats as the consent. A one-shot member needs none of this.`,
+    message: `Nothing was retired. This standing member still carries something — ${carried.carries.join(', ')} — so ending it is a decision about a role rather than housekeeping. Ask the person the question above, then call retire_member again with confirmed set to their answer, quoted verbatim — that sentence is what this plugin treats as the consent. A standing member that carries nothing needs no confirmation, only a stated reason.`,
+  }
+}
+
+/**
+ * The refusal a bare standing member's retirement answers with when the call states no reason.
+ *
+ * This is the narrow half of the gate, and it is deliberately not a consent refusal: nothing about this
+ * member is a role-level decision, so there is nobody to ask. What the call owes is the reason, because the
+ * reason is the one thing the tombstone keeps about a removal that leaves no other trace (ADR 0026).
+ * @param {object} member - the bare standing member whose retirement is refused.
+ * @returns {object} the refusal result.
+ */
+function reasonRefusal(member) {
+  return {
+    target: targetOf(member),
+    retired: false,
+    reason: 'needs-reason',
+    lifetime: LIFETIME.standing,
+    carries: [],
+    message: `Nothing was retired. This standing member carries nothing — no recorded assignment, no open task, no evidence it was re-tasked — so removing it is housekeeping rather than a decision about a role, and this call needs no confirmation. State why with the reason parameter and it retires in one call; the reason is what the tombstone keeps, so a later reader can tell why the residue was cleared.`,
   }
 }
 
@@ -2431,22 +2513,24 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
   }
   if (typeof messageId === 'string') value.message_id = messageId
   const oneShot = member.ephemeral === true
-  if (recorded !== undefined || oneShot) {
+  // Every accepted message writes the record, and counts itself on **every** member, not only a one-shot
+  // one: the retirement gate reads `messageCount`/`assignmentCount` to tell a member handed work again and
+  // again from bare residue, and a standing member never had those counters written before v0.25.1, so the
+  // evidence for it would have been permanently empty (ADR 0026). `list_members` still shows the re-task
+  // advice on one-shot members only, because that advice is a correction for a declaration.
+  await updateRoster(table, leadSessionId, (current) => {
     // Rebuild from the record on disk, so a concurrent edit to another member survives and a tombstone
     // written while the message was in flight is not overwritten with a stale snapshot.
-    await updateRoster(table, leadSessionId, (current) => {
-      const base = current.members.find((candidate) => candidate.memberId === member.memberId) ?? member
-      const next = { ...base }
-      if (recorded !== undefined) next.assignment = recorded
-      if (next.ephemeral === true) {
-        delete next.startedAt
-        next.messageCount = (base.messageCount ?? 0) + 1
-        if (recorded !== undefined) next.assignmentCount = (base.assignmentCount ?? 0) + 1
-      }
-      return withMember(current, next)
-    })
-    if (recorded !== undefined) value.assignment = recorded
-  }
+    const base = current.members.find((candidate) => candidate.memberId === member.memberId) ?? member
+    const next = { ...base }
+    if (recorded !== undefined) next.assignment = recorded
+    next.messageCount = (base.messageCount ?? 0) + 1
+    if (recorded !== undefined) next.assignmentCount = (base.assignmentCount ?? 0) + 1
+    // Only a one-shot member has finished-evidence to invalidate; a standing member is never swept.
+    if (next.ephemeral === true) delete next.startedAt
+    return withMember(current, next)
+  })
+  if (recorded !== undefined) value.assignment = recorded
   if (oneShot) {
     value.reopened = true
     value.message += ' It is one-shot, and its lifetime is unchanged: the message re-opened it, so the next sweep leaves it alone until it has run and stopped again.'

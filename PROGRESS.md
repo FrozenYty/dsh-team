@@ -1696,3 +1696,62 @@
   unconditionally from `lifetimeOf`, which answers `standing` for any record without `ephemeral: true` — so
   the two paths that could have omitted it (an adopted member, a record older than v0.25.0) are exactly the
   two the new entry test covers, through the real tool rather than the operation.
+
+## 2026-11-12 — a standing member is asked about only when it carries something (v0.25.1)
+
+- **The live acceptance passed and then the owner widened the gate, in their own words.** *"我觉得我们这方面
+  不一定非要做的这么死，可以适当给Lead一些权限让他也能自动判断退役."* With what they had said before — *"如果我说
+  文档检查我们暂时不用做了，那就可以询问我的意见，然后退役掉他"* — the two statements draw one line: the gate
+  protects the person's decision to end a **role**, not every act of housekeeping. v0.25.0 refused every
+  standing record that became a role, which is stricter than the principle it invokes: asking about a probe
+  left behind is ceremony, which is exactly what the owner objected to.
+- **The rule now.** A standing member is asked about only when it carries something — a recorded
+  `assignment`, at least one `open` row on this Lead's board, or evidence it was re-tasked at least
+  `RETASK_MIN` times. A member carrying none of the three retires in one call on a non-empty `reason`, which
+  the tombstone keeps as `retireReason`; a call stating no reason answers
+  `retired: false, reason: 'needs-reason'` with `carries: []` and changes nothing. Both refusals say which
+  rule stopped the call, and the successful housekeeping retirement says so in words. No config field and no
+  third lifetime value: the narrowing is by what the member carries, so the rule is about the member rather
+  than about a profile's policy — a policy field is the next step if this is still too strict.
+- **One thing had to move outside the gate for the gate to work.** The third carrier is evidence the record
+  did not hold for a standing member: `message_member` counted only one-shot members, so a standing member's
+  `messageCount` was permanently zero and "was re-tasked" could never be true for the members this gate is
+  about. The counters are now written for every accepted message on every member. What stays one-shot-only
+  is the *advice* drawn from them on `list_members`, because "this is probably a standing role" corrects a
+  one-shot declaration; a standing member already is one. No stored field was added or renamed, so nothing
+  migrates.
+- **What deliberately did not change.** `lifetime` and its two values, the board veto, `blocked`/
+  `blocking_tasks`/`blocking_note`, the sweep's three conditions, the one-shot and `replace` paths, and the
+  `failed`/`retired` exemption. The sweep path was not touched at all, so `swept` still appears on a read
+  as well as on a spawn, and the same tests that pin it still pass (`list_members` is the read they use).
+- **The omission rule, kept rather than "fixed".** A consent refusal still omits `owns_tasks` and
+  `assignment` when the member has neither, because an omitted field reads as "nothing to report" while an
+  empty array would read as "checked, found none". The new `carries` field is the one exception and is
+  always present: on the housekeeping refusal it is `[]`, and that empty list is the *statement* that the
+  member carries nothing — it is the rule being applied, not a missing report. The two conventions are
+  documented at the field, in §4.3.1 and in ADR 0026 so a later reader does not "fix" either one.
+- **How this was verified.** `node --check` on the six host modules exits 0; `node scripts/check.mjs` prints
+  `check passed`; `node --test --test-isolation=none tests/*.test.mjs` is 212 tests, 212 passing. The five
+  cases the narrowing needed are in `tests/lifetime.test.mjs`: a bare standing member retires in one call and
+  the result says why; a bare one without a reason is refused (`needs-reason`, and a blank reason is not a
+  reason); and one case per carrier — assignment, an open row, and two accepted messages — each still
+  `needs-confirmation` with `carries` naming it. Widening the gate back to "every standing member" makes the
+  bare-member cases fail (verified before and after, with `tests/lifetime.test.mjs` hashed
+  `69C1F7DA94F593CA2C9175B6C53DD9D136CBD952295C9491897E33322A6FF42A` on both sides of the proof).
+- **One changelog gap, closed here rather than left standing.** `CHANGELOG.md` had no `[0.25.0]` section
+  although #48 shipped 0.25.0 and wrote its `PROGRESS.md` entry: the file landed in #47, after #48 was
+  written, and the section was not added when #48 rebased onto it. This PR adds both `[0.25.1]` and the
+  missing `[0.25.0]`, whose bullets are derived from the matching `PROGRESS.md` headings the way the file's
+  own header requires — including the v0.25.0 follow-up entry as a second bullet, the same way 0.12.0 keeps
+  its follow-up.
+- **Documents.** ADR 0026 gains *The gate narrows to what a member carries* (with the earlier, stricter
+  reading kept as the record), new rejected alternatives — a policy config field, a third lifetime value,
+  keying on the phase, an optional reason, counting assignments only — and the consequences; §4.3.1 carries
+  the carrier table and both refusal shapes, §4.2 the widened counters, §4.4 step 0 and the §4.5 rows the
+  narrowed rule; the Chinese pair matches. The README pair states the carrier rule in *Member lifetime* and
+  in the `retire_member` row. `PLAN.md` gains P4-14, ticked because this PR delivers it.
+- **What stays unverified.** No install and no `plugin_manager` call was made, and `scripts/check.mjs` never
+  loads the Harness. The live half is the owner's install check: a real bare standing member retired in one
+  call on a stated reason, a real refusal that names its carrier, and the `needs-reason` refusal appearing
+  in a live Session.
+- **Version.** `0.25.1`: the gate's scope is behaviour, and narrowing it is a patch rather than a feature.
