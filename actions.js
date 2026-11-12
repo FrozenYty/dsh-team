@@ -22,12 +22,14 @@ import { loadDefinition } from './definitions.js'
 import {
   HANDOFF_BRIEF_MAX,
   PHASE,
+  TASK_BODY_MAX,
   TASK_STATUS,
   TASK_TITLE_MAX,
   TRASH_STATE,
   adoptMember,
   checkAssignment,
   checkHandoffTemplate,
+  checkTaskBody,
   currentHolderOf,
   findByTarget,
   findAnyTarget,
@@ -159,9 +161,13 @@ const HANDOFF_TASK_LINE_MAX = 600
  * list would not stay short.
  *
  * Ids and titles both, because either alone is unusable: an id the successor cannot look up is a
- * reference it must ask about, and a title alone cannot be marked done. The board pointer sentence stays
- * in the brief's shape, so this line is an addition to it rather than a replacement — which is also what
- * keeps a Lead with no tasks byte-identical to the release before this one.
+ * reference it must ask about, and a title alone cannot be marked done. **Nothing else is carried — the
+ * body in particular, which is bounded for the board (`TASK_BODY_MAX`, 2000) and not for a cold child's
+ * prompt (ADR 0020).** One maximal body per row would blow the 600-character bound this line exists to
+ * stay inside, so the successor reads the bodies from `task_board` with `action: list`: the brief names
+ * the work, the board describes it. The board pointer sentence stays in the brief's shape, so this line
+ * is an addition to it rather than a replacement — which is also what keeps a Lead with no tasks
+ * byte-identical to the release before this one.
  * @param {object[]} tasks - the predecessor's open tasks, oldest first.
  * @returns {string|undefined} the line, or undefined.
  */
@@ -196,9 +202,9 @@ const BUILT_IN_HANDOFF = [
  *
  * The successor has no transcript of the predecessor and must not be handed one: it needs to know what
  * the work is, that it is the successor, and that the predecessor is gone. The work itself is stored as
- * task rows on this Lead's roster (P2-09, ADR 0017), and the open ones are named here by id and title,
- * bounded, so the successor does not have to ask for them; the pointer sentence stays for everything past
- * that bound.
+ * task rows on this Lead's roster (P2-09, ADR 0017), and the open ones are named here by id and title —
+ * never by body, which is what `task_board` answers for (ADR 0020) — bounded, so the successor does not
+ * have to ask for them; the pointer sentence stays for everything past that bound.
  *
  * A Lead may store a template that fixes this shape (`handoff_template`, ADR 0015). The built-in shape
  * is the default, and both go through the same interpolation, so "no template stored" is byte-identical
@@ -1569,10 +1575,12 @@ function refusalFor(roster, target) {
 function taskRow(task) {
   const row = { id: task.id, title: task.title, status: task.status }
   if (typeof task.owner === 'string') row.owner = task.owner
+  if (typeof task.body === 'string') row.body = task.body
   if (typeof task.created_at === 'string') row.created_at = task.created_at
   if (typeof task.updated_at === 'string') row.updated_at = task.updated_at
-  const problem = taskTitleProblem(task.title)
-  if (problem !== undefined) row.problem = problem
+  const problems = [taskTitleProblem(task.title), taskBodyProblem(task.body)]
+    .filter((problem) => problem !== undefined)
+  if (problems.length > 0) row.problem = problems.join('; ')
   return row
 }
 
@@ -1586,6 +1594,23 @@ function taskRow(task) {
 function taskTitleProblem(title) {
   if (typeof title !== 'string' || title.trim().length === 0) return 'title is not a non-empty string'
   if (title.length > TASK_TITLE_MAX) return `title is ${title.length} characters; the cap is ${TASK_TITLE_MAX}`
+  return undefined
+}
+
+/**
+ * What is unusable about one stored task body, or undefined when it renders fine.
+ *
+ * The body follows the same split as the title (ADR 0020): the write path refuses these
+ * (`checkTaskBody`), and the read path reports a stored value that predates the rule or was hand-edited.
+ * A body past the cap is still served — it is the row's own text, and dropping it would lose the
+ * acceptance criteria the field exists for — while the `problem` says why the row is over its bound.
+ * @param {unknown} body - the stored body.
+ * @returns {string|undefined} the problem.
+ */
+function taskBodyProblem(body) {
+  if (body === undefined) return undefined
+  if (typeof body !== 'string' || body.trim().length === 0) return 'body is not a non-empty string'
+  if (body.length > TASK_BODY_MAX) return `body is ${body.length} characters; the cap is ${TASK_BODY_MAX}`
   return undefined
 }
 
@@ -1642,20 +1667,28 @@ async function handOverTasks(table, leadSessionId, taskIds, owner) {
  * retires it, and a retirement without a successor leaves them unowned and says so (ADR 0017).
  *
  * One tool with an action enum rather than five tools: the surface is already eight names, the five
- * operations share one row shape and one refusal vocabulary, and each action carries at most two extra
+ * operations share one row shape and one refusal vocabulary, and each action carries at most three extra
  * fields. The enum is the only thing that selects a behaviour, so the schema stays readable to the model:
  * one string enum, and optional fields whose descriptions say which action reads them.
  *
  * An `owner` of `null` is how a caller states "nobody owns this now"; omitting the field leaves ownership
- * untouched. `release` is the named shorthand for exactly that, on a task that stays open. `delete`
- * removes the row in one call rather than requiring `done` first, because a task nobody needs is not a
- * lifecycle question.
+ * untouched. A `body` of `null` is the same statement about the task's text. `release` is the named
+ * shorthand for exactly that, on a task that stays open. `delete` removes the row in one call rather than
+ * requiring `done` first, because a task nobody needs is not a lifecycle question.
+ *
+ * **Every id-addressed write is built from the record as stored, inside the serialized mutation.** The
+ * read at the top of this function is a *snapshot used to state the premise*, never a row to write back:
+ * a handover that lands between the read and the write must not be undone by this call, so `update`
+ * applies only the fields it names to the row it finds, and `release`/`delete` — whose whole effect is to
+ * take something away — answer `changed: false` when the row's `status`/`owner` is no longer the one the
+ * call read. The re-read costs no schema change and asks the model to track no revision (ADR 0017 point 5,
+ * ADR 0020).
  *
  * @param {{table: object, leadSessionId: string, action: string, task_id?: string, title?: string,
- *   owner?: string|null, status?: string}} request
+ *   owner?: string|null, status?: string, body?: string|null}} request
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
-export async function taskBoard({ table, leadSessionId, action, task_id, title, owner, status }) {
+export async function taskBoard({ table, leadSessionId, action, task_id, title, owner, status, body }) {
   const roster = readRoster(table, leadSessionId)
   const source = `task_board: ${action}`
   /** The task an id-addressed action works on, or a refusal naming the id. */
@@ -1667,21 +1700,27 @@ export async function taskBoard({ table, leadSessionId, action, task_id, title, 
     if (task === undefined) throw new Error(`${source}: no task with the id "${task_id}"`)
     return task
   }
-  /** Resolve an owner handle to a stored target, refusing one no member holds. */
-  const resolveOwner = () => {
+  /**
+   * Resolve an owner handle to a stored target against the record the write will land on.
+   * `current` is passed in because the member list is part of the same record as the task: resolving it
+   * from the snapshot would let a member retired between the read and the write slip through.
+   */
+  const resolveOwner = (current) => {
     if (typeof owner !== 'string' || owner.length === 0) {
       throw new Error(`${source}: owner must be a non-empty member target, or null to leave the task unowned`)
     }
-    const member = findAnyTarget(roster, owner)
+    const member = findAnyTarget(current, owner)
     if (member === undefined) {
       throw new Error(`${source}: no member named "${owner}" in this roster; pass a target list_members reports, or null for no owner`)
     }
     return targetOf(member)
   }
-  /** The task action's own id-addressed write, so every mutation goes through one serialized update. */
-  const writeTask = (taskId, next) => updateRoster(table, leadSessionId, (current) => (
-    findTask(current, taskId) === undefined ? current : withTask(current, next)
-  ))
+  /** The row the mutation found, or a refusal naming the id — the same answer a vanished row gets. */
+  const storedTask = (current, taskId) => {
+    const task = findTask(current, taskId)
+    if (task === undefined) throw new Error(`${source}: no task with the id "${taskId}"`)
+    return task
+  }
 
   // Status is a task fact every action reads, so it is validated once, before the branch that consumes it.
   if (status !== undefined && typeof TASK_STATUS[status] !== 'string') {
@@ -1709,50 +1748,72 @@ export async function taskBoard({ table, leadSessionId, action, task_id, title, 
 
   if (action === 'create') {
     if (owner === null) throw new Error(`${source}: owner must be a member target or omitted, not null`)
+    if (body === null) throw new Error(`${source}: body must be a string or omitted, not null`)
     if (status !== undefined) throw new Error(`${source}: a new task is always open; set its status with update`)
-    const task = planTask(roster, { title, owner: undefined }, source)
-    if (owner !== undefined) task.owner = resolveOwner()
-    const persisted = await updateRoster(table, leadSessionId, (current) => withTask(current, task))
-    return {
+    let task
+    // The cap is checked against the record the write lands on, which is the only place both the current
+    // list and the new entry are known (ADR 0017 point 6).
+    const persisted = await updateRoster(table, leadSessionId, (current) => {
+      const planned = planTask(current, { title, owner: undefined, body }, source)
+      if (owner !== undefined) planned.owner = resolveOwner(current)
+      task = planned
+      return withTask(current, planned)
+    })
+    const value = {
       action,
       task: taskRow(findTask(persisted, task.id) ?? task),
       open: openTaskCount(persisted),
       message: 'Task created. A replacement hands its open tasks to the successor; a retirement without one leaves them unowned and reports their ids.',
     }
+    if (task.body !== undefined) {
+      value.message += ' The body travels with the row and the successor reads it from the board; a handover brief names the id and title only.'
+    }
+    return value
   }
 
   if (action === 'update') {
     const existing = requireTask()
-    if (status === undefined && owner === undefined) {
-      throw new Error(`${source}: nothing to change; pass status, owner, or both`)
+    if (status === undefined && owner === undefined && body === undefined) {
+      throw new Error(`${source}: nothing to change; pass status, owner or body`)
     }
-    const next = { ...existing }
-    if (status !== undefined) {
-      if (typeof TASK_STATUS[status] !== 'string') {
-        throw new Error(`${source}: status must be "open" or "done"`)
+    let outcome
+    const persisted = await updateRoster(table, leadSessionId, (current) => {
+      const stored = storedTask(current, existing.id)
+      const next = { ...stored }
+      if (status !== undefined) next.status = status
+      if (owner !== undefined) {
+        if (owner === null) delete next.owner
+        else next.owner = resolveOwner(current)
       }
-      next.status = status
-    }
-    if (owner !== undefined) {
-      if (owner === null) delete next.owner
-      else next.owner = resolveOwner()
-    }
-    if (next.status === existing.status && next.owner === existing.owner) {
+      if (body !== undefined) {
+        if (body === null) delete next.body
+        else next.body = checkTaskBody(body, source)
+      }
+      // Only the fields the call named are applied, so a row that moved on keeps everything it did not
+      // ask about. `stored` is the row as it is now; `next` differs from it by exactly what was named.
+      if (next.status === stored.status && next.owner === stored.owner && next.body === stored.body) {
+        outcome = { changed: false, task: stored }
+        return current
+      }
+      next.updated_at = new Date().toISOString()
+      outcome = { changed: true, task: next }
+      return withTask(current, next)
+    })
+    if (!outcome.changed) {
       return {
         action,
-        task: taskRow(existing),
+        task: taskRow(outcome.task),
         changed: false,
-        message: `Task ${existing.id} already has that status and owner; nothing was written.`,
+        message: `Task ${existing.id} already has that status, owner and body; nothing was written.`,
       }
     }
-    next.updated_at = new Date().toISOString()
-    const persisted = await writeTask(existing.id, next)
+    const row = findTask(persisted, existing.id) ?? outcome.task
     return {
       action,
-      task: taskRow(findTask(persisted, existing.id) ?? next),
+      task: taskRow(row),
       changed: true,
       open: openTaskCount(persisted),
-      message: next.status === TASK_STATUS.done
+      message: row.status === TASK_STATUS.done
         ? 'Task marked done: it no longer moves with a handover.'
         : 'Task updated.',
     }
@@ -1768,24 +1829,73 @@ export async function taskBoard({ table, leadSessionId, action, task_id, title, 
         message: `Task ${existing.id} is already unowned; nothing was written.`,
       }
     }
-    const next = { ...existing, updated_at: new Date().toISOString() }
-    delete next.owner
-    const persisted = await writeTask(existing.id, next)
+    let outcome
+    const persisted = await updateRoster(table, leadSessionId, (current) => {
+      const stored = storedTask(current, existing.id)
+      if (stored.owner === undefined) {
+        outcome = { changed: false, task: stored, taken: false }
+        return current
+      }
+      // The release says "the owner this call read no longer carries it". Once somebody else has taken
+      // the row over, writing the snapshot's owner away would undo the handover that gave it to them.
+      if (stored.owner !== existing.owner) {
+        outcome = { changed: false, task: stored, taken: true }
+        return current
+      }
+      const next = { ...stored, updated_at: new Date().toISOString() }
+      delete next.owner
+      outcome = { changed: true, task: next }
+      return withTask(current, next)
+    })
+    if (!outcome.changed) {
+      const ownerNow = outcome.task.owner
+      return {
+        action,
+        task: taskRow(outcome.task),
+        changed: false,
+        message: outcome.taken
+          ? `Task ${existing.id} is now owned by "${ownerNow}", not the "${existing.owner}" this call read; nothing was written. Release it again to un-own it.`
+          : `Task ${existing.id} is already unowned; nothing was written.`,
+      }
+    }
     return {
       action,
-      task: taskRow(findTask(persisted, existing.id) ?? next),
+      task: taskRow(findTask(persisted, existing.id) ?? outcome.task),
       changed: true,
       message: 'Task released: it is still open and now unowned, ready for the next member that should carry it.',
     }
   }
 
   const existing = requireTask()
-  const persisted = await updateRoster(table, leadSessionId, (current) => (
-    { ...current, tasks: tasksOf(current).filter((candidate) => candidate.id !== existing.id) }
-  ))
+  let outcome
+  const persisted = await updateRoster(table, leadSessionId, (current) => {
+    const stored = storedTask(current, existing.id)
+    if (stored.status !== existing.status || stored.owner !== existing.owner) {
+      // A delete would remove the row a handover just claimed, or one somebody just finished. Its effect
+      // is subtraction, so it acts only on the state it read and reports the one it found (ADR 0020).
+      outcome = { changed: false, task: stored }
+      return current
+    }
+    outcome = { changed: true }
+    return { ...current, tasks: tasksOf(current).filter((candidate) => candidate.id !== existing.id) }
+  })
+  if (!outcome.changed) {
+    const moved = []
+    if (outcome.task.status !== existing.status) moved.push(`status is now "${outcome.task.status}"`)
+    if (outcome.task.owner !== existing.owner) {
+      moved.push(outcome.task.owner === undefined ? 'it is now unowned' : `owner is now "${outcome.task.owner}"`)
+    }
+    return {
+      action,
+      task: taskRow(outcome.task),
+      changed: false,
+      message: `Task ${existing.id} changed since this call read it: ${moved.join(', ')}; nothing was deleted. Delete it again to remove it.`,
+    }
+  }
   return {
     action,
     deleted: existing.id,
+    changed: true,
     open: openTaskCount(persisted),
     message: 'Task deleted. A replacement can no longer hand it over; re-create it if the work is still owed.',
   }

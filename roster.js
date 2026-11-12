@@ -70,6 +70,18 @@ export const TASK_STATUS = {
 export const TASK_TITLE_MAX = 200
 
 /**
+ * Cap on a task body, refused rather than truncated, exactly like `TASK_TITLE_MAX` and `ASSIGNMENT_MAX`.
+ *
+ * The body is where a task states what its title cannot: what "done" means for it and where the
+ * predecessor stopped — the two things a successor is otherwise never told (ADR 0020). 2000 is twice
+ * `ASSIGNMENT_MAX`, because an assignment is one sentence about a member's current work while a body
+ * carries acceptance criteria and a stopping point, and it is eight times below the shipped board's
+ * 16384-character description, because this board is one JSON document per Lead whose whole array is
+ * rewritten by every spawn, retirement and task write (ADR 0017).
+ */
+export const TASK_BODY_MAX = 2000
+
+/**
  * Cap on the tasks one Lead's roster may hold, refused rather than truncated.
  *
  * The unit is the whole `tasks` array, `done` entries included, because the array is what the single-file
@@ -263,6 +275,27 @@ export function checkTaskTitle(value, source = 'task') {
 }
 
 /**
+ * Validate and normalize a task body.
+ *
+ * Throws rather than truncating, like `checkTaskTitle` and `checkAssignment`: a body the model did not
+ * write is one it cannot recognise as its own statement of the work. An empty or blank string is a value
+ * the write path refuses; the way to say "this task has no body" is `body: null` on `update`, which
+ * removes the field rather than storing nothing as text.
+ * @param {unknown} value - the model-supplied body.
+ * @param {string} source - operation name, so the thrown message names what refused.
+ * @returns {string} the body, trimmed.
+ */
+export function checkTaskBody(value, source = 'task') {
+  if (typeof value !== 'string') throw new Error(`${source}: body must be a string`)
+  const text = value.trim()
+  if (text.length === 0) throw new Error(`${source}: body must not be empty`)
+  if (text.length > TASK_BODY_MAX) {
+    throw new Error(`${source}: body is ${text.length} characters; the cap is ${TASK_BODY_MAX}`)
+  }
+  return text
+}
+
+/**
  * The tasks a roster record holds, always as an array.
  * A record written before P2-09 has no field at all, so "no tasks" is not a migration, it is the shape
  * every earlier release produced (ADR 0017).
@@ -299,12 +332,14 @@ export function withTask(roster, task) {
  * the current list and the new entry are known. Refused rather than truncated or silently dropped: a task
  * the model wrote is either stored or the call says why.
  * @param {object} roster - the Lead's current roster.
- * @param {{title: unknown, owner?: string}} request - the model-supplied title and optional owner.
+ * @param {{title: unknown, owner?: string, body?: string}} request - the model-supplied title, optional
+ *   owner and optional body.
  * @param {string} source - operation name, for the refusal message.
  * @returns {object} the task to store.
  */
-export function planTask(roster, { title, owner }, source = 'task_board') {
+export function planTask(roster, { title, owner, body }, source = 'task_board') {
   const text = checkTaskTitle(title, source)
+  const notes = body === undefined ? undefined : checkTaskBody(body, source)
   const tasks = tasksOf(roster)
   if (tasks.length >= TASK_LIMIT) {
     throw new Error(
@@ -317,6 +352,7 @@ export function planTask(roster, { title, owner }, source = 'task_board') {
     status: TASK_STATUS.open,
     created_at: new Date().toISOString(),
   }
+  if (notes !== undefined) task.body = notes
   if (typeof owner === 'string' && owner.length > 0) task.owner = owner
   return task
 }

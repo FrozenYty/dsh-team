@@ -199,18 +199,27 @@ test('task_board validates its action surface and forwards it to the operation',
     /owner must be a member target or null/,
   )
   await assert.rejects(
+    () => board.execute({ action: 'create', title: 'x', body: 7 }, { agent: lead }),
+    /body must be a string or null/,
+  )
+  await assert.rejects(
     () => board.execute({ action: 'create', title: 'x', status: 'later' }, { agent: lead }),
     /status must be "open" or "done"/,
   )
 
-  const created = await board.execute({ action: 'create', title: 'Finish the parser tests' }, { agent: lead })
+  const created = await board.execute({
+    action: 'create',
+    title: 'Finish the parser tests',
+    body: 'Done when the parser suite is green.',
+  }, { agent: lead })
   assert.equal(created.action, 'create')
   assert.equal(created.task.status, 'open')
-  assert.equal(table.get('lead-1').tasks.length, 1, 'the wrapper writes through to the roster record')
+  assert.equal(table.get('lead-1').tasks[0].body, 'Done when the parser suite is green.', 'the wrapper writes the body through')
   const listed = await board.execute({ action: 'list' }, { agent: lead })
   assert.deepEqual(listed.tasks, [created.task])
   const closed = await board.execute({ action: 'update', task_id: created.task.id, status: 'done' }, { agent: lead })
   assert.equal(closed.task.status, 'done')
+  assert.equal(closed.task.body, 'Done when the parser suite is green.', 'a write that names no body keeps it')
   const removed = await board.execute({ action: 'delete', task_id: created.task.id }, { agent: lead })
   assert.equal(removed.deleted, created.task.id)
   assert.equal(table.get('lead-1').tasks.length, 0)
@@ -324,7 +333,13 @@ test('every answer conforms to the output schema its own tool declares', async (
 
   const born = await answer('spawn_member', { name: 'reviewer', label: 'Reviewer', prompt: 'Review the parser.' })
   assert.equal(born.target, 'reviewer')
-  const task = await answer('task_board', { action: 'create', title: 'Recheck the curve', owner: 'reviewer' })
+  const task = await answer('task_board', {
+    action: 'create',
+    title: 'Recheck the curve',
+    owner: 'reviewer',
+    body: 'Done when the curve is rechecked against the shipped build. Stopped at the fixture.',
+  })
+  assert.equal(task.task.body, 'Done when the curve is rechecked against the shipped build. Stopped at the fixture.')
   await answer('list_members', {})
   const waited = await answer('wait_members', {})
   assert.equal(waited.no_progress, true, 'no member is live in this harness, so the wait reports it')
@@ -335,7 +350,18 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.equal(successor.transferred, 1)
   assert.equal(successor.predecessor_retired, true)
 
+  // A row carrying a body, a write that amends it and one that clears it: the field is declared by
+  // TASK_ROW, so every one of these answers is checked against the schema the tool declares (ADR 0020).
   await answer('task_board', { action: 'list' })
+  const amended = await answer('task_board', {
+    action: 'update',
+    task_id: task.task.id,
+    body: 'Done when the curve is rechecked. Stopped at the fixture rewrite.',
+  })
+  assert.equal(amended.task.owner, 'reviewer-g2', 'the handover owner survives an unrelated write')
+  assert.equal(amended.task.body, 'Done when the curve is rechecked. Stopped at the fixture rewrite.')
+  const cleared = await answer('task_board', { action: 'update', task_id: task.task.id, body: null })
+  assert.equal(cleared.task.body, undefined)
   await answer('task_board', { action: 'update', task_id: task.task.id, status: 'done' })
   await answer('handoff_template', {})
 

@@ -78,6 +78,7 @@ import {
   ASSIGNMENT_MAX,
   HANDOFF_TEMPLATE_MAX,
   PHASE,
+  TASK_BODY_MAX,
   TASK_TITLE_MAX,
   findByTarget,
   openRosterStore,
@@ -329,10 +330,14 @@ const MEMBER_ROW = {
 /**
  * One task on this Lead's board, as every `task_board` action that returns a row reports it.
  *
- * `problem` is present only on a stored task whose content no longer passes the read rules — a title over
- * the cap, or one that is not a non-empty string. The row is still served, because the storage facility
- * validates every record when the domain opens and a content rule enforced there would hide every roster
- * (ADR 0017).
+ * `body` is the task's own statement of what "done" means and where the predecessor stopped, present only
+ * on a row that has one; the handover brief deliberately carries the id and title only, so the successor
+ * reads the bodies from here (ADR 0020).
+ *
+ * `problem` is present only on a stored task whose content no longer passes the read rules — a title or a
+ * body over the cap, or one that is not a non-empty string. The row is still served, because the storage
+ * facility validates every record when the domain opens and a content rule enforced there would hide every
+ * roster (ADR 0017).
  */
 const TASK_ROW = {
   type: 'object',
@@ -341,6 +346,9 @@ const TASK_ROW = {
   properties: {
     id: { type: 'string' },
     title: { type: 'string' },
+    // The task's own text: acceptance criteria and the point the predecessor stopped at. Bounded and
+    // refused past the cap, never truncated; `update` with `body: null` clears it (ADR 0020).
+    body: { type: 'string' },
     status: { type: 'string', enum: ['open', 'done'] },
     // The member target that owns this task. Moving a task's owner is how a handover is represented, and
     // the field is absent when nobody owns the task.
@@ -375,9 +383,12 @@ const TASK_BOARD_VALUE = {
     // visible without a retirement result to read (P2-09, ADR 0017).
     unowned: { type: 'integer' },
     unowned_tasks: { type: 'array', items: { type: 'string' } },
-    // The task after a write: present on create and update, and on release. Absent on list and delete.
+    // The task after a write: present on create and update, and on release. A delete that found the row
+    // changed since it read it reports the row it kept instead of a deletion (ADR 0020).
     task: TASK_ROW,
-    // False when the same status and owner were already recorded, so a repeat write is visible as one.
+    // True when the board was written. False when the same status, owner and body were already recorded,
+    // or when release/delete found the row no longer in the state the call read — so a repeat write and a
+    // write overtaken by a handover are both visible as one.
     changed: { type: 'boolean' },
     // Present only on delete: the id that was removed.
     deleted: { type: 'string' },
@@ -1005,7 +1016,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'task_board',
-      description: 'This Lead\'s own work board: the tasks a replacement hands over. A task belongs to one Lead, lives on that Lead\'s roster record, and has an id, a title, a status (open or done) and an optional member owner. `create` adds one; `list` reads the whole board; `update` sets status and/or owner; `release` clears the owner; `delete` removes the row. The board is what makes a handover hand over work rather than a description of it: spawn_member with replace moves every open task of the predecessor to the successor and the successor\'s brief names them by id and title, while retire_member without a successor leaves them unowned and reports their ids. A `done` task never moves. There are deliberately no priorities, dependencies, comments, sub-tasks or due dates: this is a handover channel, not a project tracker.',
+      description: 'This Lead\'s own work board: the tasks a replacement hands over. A task belongs to one Lead, lives on that Lead\'s roster record, and has an id, a title, a body, a status (open or done) and an optional member owner. `create` adds one; `list` reads the whole board; `update` sets status, owner and/or body; `release` clears the owner; `delete` removes the row. The board is what makes a handover hand over work rather than a description of it: spawn_member with replace moves every open task of the predecessor to the successor and the successor\'s brief names them by id and title, while retire_member without a successor leaves them unowned and reports their ids. The body is where the task states what "done" means and where the predecessor stopped; the brief stays short on purpose, so a successor reads the bodies from this board. A board write never rewrites a field the call did not name, and a `release` or `delete` whose row changed since the call read it answers `changed: false` with the row it found instead of overwriting a handover. A `done` task never moves. There are deliberately no priorities, dependencies, comments, sub-tasks or due dates: this is a handover channel, not a project tracker.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1014,11 +1025,15 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           action: {
             type: 'string',
             enum: ['list', 'create', 'update', 'release', 'delete'],
-            description: 'What to do: list reads the board, create adds a task, update changes a task\'s status or owner, release clears its owner, delete removes it.',
+            description: 'What to do: list reads the board, create adds a task, update changes a task\'s status, owner or body, release clears its owner, delete removes it.',
           },
           title: {
             type: 'string',
             description: `create only: the task title, 1-${TASK_TITLE_MAX} characters. Refused past the cap, never truncated.`,
+          },
+          body: {
+            type: 'string',
+            description: `create or update: what "done" means for this task and where the work stopped — the acceptance criteria a successor cannot get from the title. 1-${TASK_BODY_MAX} characters, refused past the cap, never truncated. update accepts null to clear it.`,
           },
           owner: {
             type: 'string',
@@ -1056,6 +1071,9 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.owner !== undefined && args.owner !== null && typeof args.owner !== 'string') {
           throw new Error('task_board: owner must be a member target or null')
         }
+        if (args.body !== undefined && args.body !== null && typeof args.body !== 'string') {
+          throw new Error('task_board: body must be a string or null')
+        }
         if (args.status !== undefined && !['open', 'done'].includes(args.status)) {
           throw new Error('task_board: status must be "open" or "done"')
         }
@@ -1068,6 +1086,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           title: args.title,
           owner: args.owner,
           status: args.status,
+          body: args.body,
         })
       },
     })))
