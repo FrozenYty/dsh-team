@@ -132,6 +132,29 @@ const COMPACT_VALUE = {
   },
 }
 
+/** The `spawn_member.spawn_options.agent_options` value, used both as a parameter and as the report. */
+const AGENT_OPTIONS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    provider: { type: 'string', description: 'Provider id for the member\'s model requests. Omit to inherit the Lead\'s provider.' },
+    model: { type: 'string', description: 'Model id for the member\'s model requests: the place a cheaper or larger model is chosen for delegated work. Omit to inherit the Lead\'s model.' },
+    reasoning_effort: { type: 'string', description: 'Reasoning effort for the member\'s requests, where the model exposes one. Omit to inherit the Lead\'s effort, or let a changed provider or model resolve its own default.' },
+    max_tokens: { type: 'integer', minimum: 1, description: 'Output-token limit for the member\'s requests. Omit to inherit the Lead\'s limit.' },
+  },
+}
+
+/** The live holder of a stale target's name, reported beside a refusal (ADR 0016). */
+const CURRENT_HOLDER = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['target', 'generation'],
+  properties: {
+    target: { type: 'string' },
+    generation: { type: 'integer' },
+  },
+}
+
 const MEMBER_ROW = {
   type: 'object',
   additionalProperties: false,
@@ -157,6 +180,24 @@ const MEMBER_ROW = {
     // Present on a result whose sweep retired finished ephemeral members; absent otherwise.
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
+    // A spawn the Harness refused: no child exists, the record is `failed`, and `reason` says what the
+    // model can do about it. Absent on a start that happened.
+    started: { type: 'boolean' },
+    reason: {
+      type: 'string',
+      enum: ['unsupported-capability', 'preset-unavailable', 'preset-not-found', 'preset-invalid', 'unauthorized'],
+    },
+    // What the member was started with: only the `spawn_options` fields the caller supplied, so a
+    // plain spawn's result is unchanged and an applied model is never invisible (ADR 0016).
+    started_with: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        cwd: { type: 'string' },
+        agent_options: AGENT_OPTIONS_SCHEMA,
+        agent_preset: { type: 'string' },
+      },
+    },
     message: { type: 'string' },
   },
 }
@@ -185,6 +226,8 @@ const RETIRE_VALUE = {
     trash_path: { type: 'string' },
     // How many older artifacts the per-Lead trash cap removed in this same call; 0 in every other case.
     pruned: { type: 'integer' },
+    // Present when another generation of the stale target's name is live now; names that holder.
+    current_holder: CURRENT_HOLDER,
     // `already-retired` on the state matrix's no-op row; absent on the retirements that happened.
     reason: { type: 'string' },
     message: { type: 'string' },
@@ -205,6 +248,8 @@ const MESSAGE_VALUE = {
     assignment: { type: 'string' },
     // false when this message cleared an ephemeral member's one-shot flag (P4-01).
     ephemeral: { type: 'boolean' },
+    // Present when another generation of the stale target's name is live now; names that holder.
+    current_holder: CURRENT_HOLDER,
     message: { type: 'string' },
   },
 }
@@ -220,6 +265,8 @@ const RESTORE_VALUE = {
     // pruned (the retention cap removed the artifact), or not-retired for a refusal.
     reason: { type: 'string' },
     path: { type: 'string' },
+    // Present on a refusal when another generation of the stale target's name is live now.
+    current_holder: CURRENT_HOLDER,
     message: { type: 'string' },
   },
 }
@@ -233,6 +280,8 @@ const STOP_VALUE = {
     stopped: { type: 'boolean' },
     reason: { type: 'string', enum: ['retired', 'failed', 'missing'] },
     resident: { type: 'boolean' },
+    // Present on a refusal when another generation of the stale target's name is live now.
+    current_holder: CURRENT_HOLDER,
     message: { type: 'string' },
   },
 }
@@ -391,6 +440,25 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
             type: 'boolean',
             description: 'Default false. True marks this member as one-shot: a lazy sweep at the start of list_members or spawn_member retires it through the normal retirement path once it has run and stopped, without a retire_member call. A member that never started, and one still running, are never swept. Message it again and the flag is cleared, because that message is a declaration it is not one-shot. list_members reports ephemeral: true on such a member.',
           },
+          spawn_options: {
+            type: 'object',
+            additionalProperties: false,
+            description: 'Optional settings the member starts with. Omit the object, or any field in it, to inherit the Lead: an omitted member runs in the Lead\'s working directory, on the Lead\'s model and route, and with the Lead\'s tool set. What was applied is reported back in started_with, so a model chosen for a delegated task is never invisible. With replace, the successor starts with these options and the predecessor\'s record is unaffected.',
+            properties: {
+              cwd: {
+                type: 'string',
+                description: 'Working-directory path for the member, such as "/repo/worktrees/feature" or "packages/api". It is passed to the Harness exactly as written: a relative path resolves against the Lead\'s working directory, an absolute path outside the session\'s permission roots stays denied, and nothing is expanded or validated here. Omit to use the Lead\'s working directory.',
+              },
+              agent_options: {
+                ...AGENT_OPTIONS_SCHEMA,
+                description: 'Model settings for the member\'s requests. Omit the object, or any field in it, to inherit the Lead\'s value; a provider or model change without reasoning_effort lets the new route resolve its own default.',
+              },
+              agent_preset: {
+                type: 'string',
+                description: 'Id of an Agent Preset declared in this profile. It selects the member\'s prompt, persona and tools, which is the only way to start a restricted or read-only member: there is no per-call tool allow/deny. A preset id is not a path and preset directories are not scanned, so it must be an id the profile\'s bundle patches declare. Omit to inherit the Lead\'s preset and tool set.',
+              },
+            },
+          },
         },
       },
       output: { schema: MEMBER_ROW },
@@ -418,6 +486,42 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.ephemeral !== undefined && typeof args.ephemeral !== 'boolean') {
           throw new Error('spawn_member: ephemeral must be a boolean')
         }
+        const options = args.spawn_options
+        if (options !== undefined) {
+          if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+            throw new Error('spawn_member: spawn_options must be an object')
+          }
+          if (options.cwd !== undefined && (typeof options.cwd !== 'string' || options.cwd.trim().length === 0)) {
+            throw new Error('spawn_member: spawn_options.cwd must be a non-empty string')
+          }
+          const model = options.agent_options
+          if (model !== undefined) {
+            if (model === null || typeof model !== 'object' || Array.isArray(model)) {
+              throw new Error('spawn_member: spawn_options.agent_options must be an object')
+            }
+            for (const key of ['provider', 'model', 'reasoning_effort']) {
+              if (model[key] !== undefined && (typeof model[key] !== 'string' || model[key].trim().length === 0)) {
+                throw new Error(`spawn_member: spawn_options.agent_options.${key} must be a non-empty string`)
+              }
+            }
+            if (model.max_tokens !== undefined && (!Number.isSafeInteger(model.max_tokens) || model.max_tokens < 1)) {
+              throw new Error('spawn_member: spawn_options.agent_options.max_tokens must be a positive integer')
+            }
+            for (const key of Object.keys(model)) {
+              if (!['provider', 'model', 'reasoning_effort', 'max_tokens'].includes(key)) {
+                throw new Error(`spawn_member: spawn_options.agent_options has an unknown field "${key}"`)
+              }
+            }
+          }
+          if (options.agent_preset !== undefined && (typeof options.agent_preset !== 'string' || options.agent_preset.trim().length === 0)) {
+            throw new Error('spawn_member: spawn_options.agent_preset must be a non-empty string')
+          }
+          for (const key of Object.keys(options)) {
+            if (!['cwd', 'agent_options', 'agent_preset'].includes(key)) {
+              throw new Error(`spawn_member: spawn_options has an unknown field "${key}"`)
+            }
+          }
+        }
         const table = await store
         return await spawnMember({
           ctx,
@@ -432,6 +536,9 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           assignment: args.assignment,
           replace: args.replace,
           ephemeral: args.ephemeral,
+          cwd: options?.cwd,
+          agentOptions: options?.agent_options,
+          agentPreset: options?.agent_preset,
           signal: exec.signal,
           trashLimit,
         })
