@@ -763,3 +763,50 @@
   `spawn_member { replace: "<member>", … }` and look for `transferred` and for the ids in the brief.
 - **Version.** `0.13.0`, and this is the first release whose feature P2-07 was waiting for; P2-07's blocker
   is noted as cleared in `PLAN.md` and the row itself is still open.
+
+## 2026-11-12 — the drift audit: what `started_with` is, and three claims that did not match the tree (v0.13.1)
+
+- **A read-only audit of the documentation was run against the tree, and four findings were repaired.**
+  Every finding was re-checked against the code and the tests before anything changed, and the one wording
+  that was already true was left alone rather than "fixed" for consistency.
+- **`started_with` was documented as what the child got; it reports what the plugin forwarded.** Five
+  places said "applied" or "实际用了什么": the README pair, `docs/architecture-en.md` §4.5, its Chinese
+  pair, and the model-facing `spawn_options` description. `startedWith()` (`actions.js`) copies only the
+  fields the caller supplied and never reads the child's resolved options;
+  `tests/spawn-capabilities.test.mjs` pins that a relative `cwd` is echoed unresolved; ADR 0016 §6 already
+  said "forwards rather than reads back", and `README.md` already said "echoing exactly what was passed",
+  so the README contradicted itself. All five now say the field is a receipt for what the plugin
+  forwarded, not a confirmation of what the child resolved — a model id that is plausible but wrong is
+  still accepted and echoed, and fails on the child's first request — and the rule that omission inherits
+  is unchanged. The `index.js` change is description text only, which is why the version moves: v0.13.0 is
+  installed and this changes what a model reads.
+- **A false cross-reference inside an accepted ADR.** ADR 0014 §4 said ADRs 0004, 0005, 0006, 0010 and
+  0011 "still name the trash path under `~/.dsh/team-roster`". `git grep -n "dsh/team-roster" -- docs/adr`
+  returns 0004, 0010, 0011 and 0014 only: 0005 and 0006 cite the old HTTP route `/api/team-roster`
+  (`0005:37`, `0006:28-29`). The sentence now names 0004, 0010 and 0011, and says what 0005 and 0006
+  actually keep — the old route prefix. This corrects a factual claim inside the same sentence; the
+  decision itself is untouched, because an accepted ADR is closed.
+- **`AGENTS.md` carried the pre-claim framing.** §2 opened with what the shipped packages "lack" while
+  the settled sentence — `只是换人，不是换活。` / `Only the person changes, not the work.` — lived only in
+  the README pair and the locale files. An agent reads `AGENTS.md` first and it describes this same
+  project, so its opening now states the claim in its own prose: permission to let a member go, a roster
+  that shrinks as well as grows, retirement as a move into a trash the plugin controls.
+- **`reasoning_effort` was missing from the field list, and so was the one exception to inheritance.**
+  The README pair and `docs/architecture-en.md` §4.1 named the model settings as "a cheaper model,
+  another provider or a token limit"; `reasoning_effort` appeared only in ADR 0016, `PROGRESS.md` and
+  `index.js`. All four now name it (`provider`, `model`, `reasoning_effort`, `max_tokens`), and both
+  languages state the exception where the inheritance rule is stated: a changed provider or model
+  **without** `reasoning_effort` lets the new route resolve its own default instead of inheriting the
+  Lead's effort (`index.js` `AGENT_OPTIONS_SCHEMA`, `:150` and `:462`).
+- **How this change was verified.** `node scripts/check.mjs` passes after the last edit;
+  `node --check index.js actions.js roster.js trash.js host-hooks.js` exits clean;
+  `node --test --test-isolation=none tests/*.test.mjs` is 129 tests, 129 passing — no test was edited,
+  because the change is documentation except for one description string. The README pair was measured
+  rather than assumed: 14 `##` headings on each side and an equal, identical set of distinct backtick
+  identifiers on each side (112 before the change, 116 after, both sides equal in each state). The ADR 0014
+  sentence was re-checked against `git grep -n "dsh/team-roster" -- docs/adr` and matches it: 0004, 0010 and
+  0011 carry the path; 0005 and 0006 carry only the old route prefix.
+- **What stays unverified.** No install and no `plugin_manager` call was made: the bundle was not
+  reinstalled, so the new `spawn_options` description has not been seen by a live model, and the
+  `started_with` wording is a documentation claim about behaviour the unit tests already pin, not a new
+  observation. The model-facing `started_with` field itself is unchanged.
