@@ -1755,3 +1755,56 @@
   call on a stated reason, a real refusal that names its carrier, and the `needs-reason` refusal appearing
   in a live Session.
 - **Version.** `0.25.1`: the gate's scope is behaviour, and narrowing it is a patch rather than a feature.
+
+## 2026-11-13 — the pair check is a rule over docs/, not a list of pairs (v0.25.2)
+
+- **The defect was a list where a rule was claimed.** `scripts/check.mjs` held three hardcoded pairs, so a
+  new `docs/foo-en.md` whose `-zh.md` was never written was simply not in the list and the check said
+  nothing. The external review's third point named the live evidence: `docs/upstream-lifecycle-gap.md` is a
+  single-language document the check had never examined, and nobody could tell whether that was deliberate
+  or an oversight. Both readings were bad; the fix is to make the file declare itself either way.
+- **What replaced it.** The check now reads the top level of `docs/` and classifies every `*.md` there:
+  `name-en.md` must have `name-zh.md` (and the reverse), `name-en-zh.md` is one file carrying both
+  languages, `name.md` is deliberately single-language and listed with a reason, and `docs/adr/NN-name.md`
+  is out of scope because a decision is English-only and numbered. A file the rule cannot classify fails by
+  name, which is the property the list lacked: a new document cannot escape by not being added to it.
+- **Trap one, and why the suffix is not evidence.** `*-en-zh.md` also ends in `-zh.md`, so a naive reverse
+  scan calls a two-column glossary "missing an English version". It is matched first and then asserted by
+  content: the file must contain a CJK character **and** a real Latin word. The advance review's suggestion
+  was to assert it "contains a Chinese column"; asserting both languages is the part that can actually fail.
+- **Trap two: the exception is a list you must edit, on purpose.** The alternative was a naming convention
+  (no language suffix means single-language by choice), which reads well until someone drops a suffix to
+  pass the check without deciding anything — and it records the fact without the reason, so the next reader
+  is back to guessing. The allow-list records the reason next to the file, fails closed for anything not on
+  it, and refuses a stale entry: the list cannot outlive the document it describes. One entry today,
+  `upstream-lifecycle-gap.md`, because that document is the issue-ready statement of the gap addressed to the
+  English-language upstream tracker — a Chinese copy would be a second document to keep in step, not a
+  translation of it.
+- **Trap three: root documents were kept explicit.** The scan is scoped to `docs/`, which is what keeps it
+  away from `README-zh.md` (it ends in `-zh.md` too, and would otherwise read as "missing an English
+  version"). The README pair is checked by name, because `README.md` is the one English document without an
+  `-en` suffix, and the other root documents are single-language by the policy in `CONTRIBUTING.md` §6. The
+  root list is stated once and is also what the machine-path scan walks, so "which documents exist" and
+  "which documents are single-language" stay one question.
+- **CONTRIBUTING.md now states the rule** next to the existing document rules, including the four shapes and
+  why the allow-list beat the naming convention, so an author meets the rule before the check does.
+- **How this was verified.** `node scripts/check.mjs` prints `check passed`; `node --test
+  --test-isolation=none tests/*.test.mjs` is 212 tests, 212 passing (no test file was touched). The rule was
+  proved able to fail on all four branches, each failure naming its file: a temporary
+  `docs/zz-pair-probe-en.md` produced `has no docs/zz-pair-probe-zh.md`, and deleting it returned
+  `check passed`; the reverse probe `docs/zz-reverse-probe-zh.md` produced `has no docs/zz-reverse-probe-en.md`;
+  an undeclared `docs/zz-plain-probe.md` produced the "single-language document with no declaration"
+  refusal; a `docs/zz-both-en-zh.md` holding only English produced the "no Chinese text by content" refusal,
+  and the same file with a two-column table passed; and a temporary stale entry in the allow-list produced
+  "declared single-language but does not exist". Every probe was deleted, `docs/` holds exactly the five
+  files it started with, and `scripts/check.mjs` hashed
+  `A98F2B9F2BAE655F2E92DAC2AB442698A0F95436ECD4F9B05913FE90FB6FA4BB` before and after the probe session,
+  so the script was not left carrying a probe.
+- **Scope.** Only `scripts/check.mjs` and `CONTRIBUTING.md` changed in code and rule; no file under `docs/`
+  was created, edited, moved or deleted beyond the temporary probes, which is also why the parallel split of
+  `docs/` is unaffected and will be classified by the new rule as soon as it lands.
+- **What stays unverified.** Nothing about the plugin: this is a repository check, and `check.mjs` still
+  cannot prove the plugin activates. The rule has not yet met a `docs/` tree other than today's, so the
+  parallel split branch is its first real test; if it adds a document the rule cannot classify, the check
+  will say so by name and the entry belongs in the allow-list with its reason.
+- **Version.** `0.25.2`: a check that ignores new files is a promise the repository was not keeping.

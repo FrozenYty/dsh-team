@@ -89,6 +89,25 @@ append-only engineering narrative.
 
 Root files are single-language and change often; `docs/` files are bilingual and change rarely.
 
+**The pair rule is enforced by a scan, not by a list.** `scripts/check.mjs` reads the top level of `docs/`
+and classifies every `*.md` there, so a new document cannot escape the rule by not being added to a list.
+Four shapes exist, and a file the rule cannot classify fails by name:
+
+| Shape | What the check proves |
+|---|---|
+| `name-en.md` + `name-zh.md` | both halves exist, in either direction — a missing one is a failure naming the file |
+| `name-en-zh.md` | one file carrying both languages (a two-column glossary). It must contain Chinese text **and** English prose, because the suffix is a claim, not evidence |
+| `name.md` | deliberately single-language, **and listed in `SINGLE_LANGUAGE_DOCS` in `scripts/check.mjs` with the reason**. An undeclared one fails, and so does a listed one whose file is gone |
+| `docs/adr/NN-name.md` | out of scope: a decision is English-only and numbered, so it never pairs |
+
+The allow-list is the one way out, and it is a list you must edit on purpose: the reason is what tells the
+next reader that a single-language document was a decision rather than an oversight. A naming convention
+(no language suffix means single-language by choice) was considered and rejected — it records the fact
+without the reason, and dropping a suffix would pass the check without deciding anything.
+
+Root documents are outside that rule and handled explicitly in the same script: `README.md` is the one
+English document without an `-en` suffix, so the README pair is named rather than derived.
+
 **Nothing machine-specific goes into a shared document.** No absolute paths, no user names, no local
 folder names. Write commands relative to the repository root.
 

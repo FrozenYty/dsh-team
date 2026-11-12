@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.25.2] - 2026-11-13
+
+- The pair check is a rule over `docs/`, not a list of pairs.
+
 ## [0.25.1] - 2026-11-12
 
 - A standing member is asked about only when it carries something.
