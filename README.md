@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.20.0.
+- Current version: v0.21.1.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -313,6 +313,73 @@ Five things this bundle does not do, each decided rather than forgotten.
   sub-tasks or due dates (ADR 0017, ADR 0020). Dependencies would need a graph and an ordering rule, and a
   handover would then have to decide what to do with a task whose dependency is still open; that order
   stays the Lead's judgment. The board answers one question: what work does the successor carry now?
+
+## Costs and model routes
+
+**The suspicion this section answers.** After a relay provider was connected, the owner's own account was
+still billed, and this plugin's members were the obvious suspects. They are not: below is what this plugin
+chooses, what the Harness chooses for it, and the one component in this profile that follows an endpoint of
+its own instead of the session's route.
+
+### What chooses a member's model
+
+`spawn_member` forwards `spawn_options.agent_options` when — and only when — the caller supplies it. With no
+`spawn_options` the request is exactly `{ prompt, parent }`, and the plugin names no provider and no model
+(ADR 0016). Everything after that is the Harness:
+
+- **Inheritance is the parent's current route, not a creation-time snapshot.** The subagent seam reads
+  `provider`, `model` and `reasoningEffort` from the parent Session's latest logged request header, and falls
+  back to the parent Agent's creation options only while no request has been logged
+  (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-92`). A Lead that switched to the relay before
+  spawning hands the relay down; the older snapshot is the fallback, not the normal path.
+- **A member is not frozen to the model it started on.** That resolution runs at every spawn, so a member
+  started after a route change inherits the new route; the creation-time fallback covers only a parent that
+  has not sent a request yet (`:49-92`).
+- **A changed route drops the parent's effort**, so the selected model resolves its own default instead of
+  failing on an effort it never advertised (`:88-90`).
+
+The plugin's own work is forwarding what the caller named, and it deliberately does not force an explicit
+route on every spawn: the parent's `reasoningEffort` survives only while the route is unchanged (`:88-90`),
+and the shipped subagent tool's route preflight is not on this path
+(`@deepseek-ai/dsh-tool-subagent/lib/index.js:440-448`), so a forced effort the route does not support would
+fail the child's first request after the member is already recorded as started. The provider capability gate
+is the Harness's (`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`), and the Session route allowlist
+belongs to the shipped tool (`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`), which this plugin does not
+use.
+
+### No LLM call, and the compaction row follows the session
+
+The bundle makes no model call of its own: no Host module reaches `ctx.llm`, and no code path calls
+`prepareCall`. The row the patch enables, `compaction-basic`, resolves its summarization target as
+`configured ?? session.requestHeader().config ?? agent.options`
+(`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`) — the session's own route — so enabling it started
+no new billing in the measured profile.
+
+### The exception: web search pins its own endpoint
+
+`web_search` is not this plugin's, and it is the one component here that does not follow the session route.
+The base bundle's patch selects `searchProvider: deepseek-official`
+(`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`), and `dsh-web-search-deepseek` pins
+`https://api.deepseek.com/anthropic/v1` with `deepseek-v4-flash`
+(`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`) and sends there whatever the chat route is
+(`:319-320`). In the measured profile it produced 107 official requests, two of them after a session had
+already switched to the relay.
+
+**Why it cannot simply be pointed elsewhere.** That plugin requires retrieval to happen server-side: it reads
+`web_search_tool_result` blocks and throws `WEB_PROVIDER_ERROR` when there are none
+(`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:61-62`). A relay endpoint that speaks an Anthropic-shaped
+Messages API can still hand the search back: a direct test of the relay's `/v1/messages` answered 200 and,
+given the `web_search` tool, answered `stop_reason: "tool_use"` — the same rejected shape — while its
+`/anthropic/v1/messages` path answered 404.
+
+**The two honest options.** Disable that row (or the `web` row) in the profile, and no request leaves for
+that endpoint — search is simply not available; or point it at an endpoint that executes native search. One
+request tells them apart: send a Messages request carrying the `web_search` tool and read the answer. A
+`web_search_tool_result` block, or a finished turn with results, means the endpoint runs the search; a
+`tool_use` stop means it is asking the caller to run it, and this plugin rejects that answer.
+
+The boundary in one sentence: **the session's route governs every chat request; a component that pins its own
+endpoint is the exception, and this plugin is not one.**
 
 ## Requirements and compatibility
 

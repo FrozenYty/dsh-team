@@ -102,6 +102,12 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 **真正移入过产物**的那次退役还会在同一次调用里执行每个 Lead 的上限（§4.4 第 5 步、ADR 0011、ADR 0012）：这次移动正是回收站增长的唯一时刻，因此不存在定时清理，也不存在读取时清理。
 
+### 2.6 成本与模型路由
+
+插件不选模型。`spawn_member` 只在调用方提供时转发 `spawn_options.agent_options`（ADR 0016）；否则请求就是 `{ prompt, parent }`，由子代理 seam 从父会话最近一次记录的请求头解析子代理，只有在还没有记录过任何请求时才退回父 Agent 的创建选项（`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-92`）。因此继承是动态的——Lead 切换路由之后启动的成员继承新路由——而路由一变，seam 就会丢掉父会话的 effort（`:88-90`）。插件不强塞显式路由：父会话的 effort 只在路由没变时保留（`:88-90`），官方工具那条路由预检不在这条路径上（`@deepseek-ai/dsh-tool-subagent/lib/index.js:440-448`），能力门属于 provider（`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`），所以强塞一个该路由不支持的 effort，会在成员已经被记为启动之后才让子代理的第一条请求失败。Session 级路由白名单属于官方工具（`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`），本插件不使用它。
+
+bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行按会话自己的路由做摘要（`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`，§2.1）。实测到的例外在本插件之外，是网页搜索：基础 bundle 的补丁选中 `searchProvider: deepseek-official`（`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`），而 `dsh-web-search-deepseek` 钉死了自己的端点与模型（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`、`:319-320`），并要求回答里有 `web_search_tool_result`（`:61-62`）。任何会话路由都到不了它；profile 要么禁用那一行，要么把它指向真正执行原生搜索的端点。面向用户的说法在 README 双语版里。
+
 ## 3. 为什么不扩展官方花名册
 
 官方花名册是 Lead 会话只追加日志的折叠。成员相态为 `provisioning | active | failed`；投影拒绝任何离开终态的转换，而被拒绝的事件会记成永久 `failure`，使该 Lead 的 Team 服务失效。因此伪造一条“已退役”记录不会安全失败。`maxMembers` 检查的是一个永不收缩的列表，名字永不复用，上游重构也仍在延后删除。
@@ -123,7 +129,7 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 没有 `name` 字段，也没有 `resolveName`／`namesOf`。因此名字属于我们：插件生成一个 UUID `childId` 传给 `startActivation`，把 name→childId 的映射放在自己的花名册里——与官方 Team 的做法一致。并发上限是 `maxActiveSubagents`（默认 8），按子代理树、进程内计数；排空一个子代理解放它的名额。
 
-**request 的组合规则。** 插件发送 `{ prompt, parent }`，再加上模型通过 `spawn_member.spawn_options`（§4.5）点名的可选字段：`cwd`、`agentOptions` 与 `agentPreset`。任何一个字段省略，都表示该成员继承 Lead 的值；这里要记下唯一的例外，因为不写出来这条规则读起来像是绝对的：改了 `provider` 或 `model` 却没给 `reasoningEffort` 时，新路由解析自己的默认值，而不是继承 Lead 的 effort。什么都不传的 spawn 组合出的 request 与以前完全一样——有测试钉住这个对象。`cwd` 原样转发：seam 会把相对路径解析到父代理的 cwd 上（`resolveDirectory`），而子代理保留父代理的权限根，因此沙箱授权之外的目录仍会被拒绝；如果插件自己先解析路径，就会与 Host 的判断不一致。两个能力门属于 provider：`agentOptions` 需要 `provider.capabilities.agentOptions`，`agentPreset` 需要 `provider.capabilities.agentPreset`——进程内的 spawn/fork provider 为 true，所有外部后端为 false（其能力声明就是 `NO_START_CAPABILITIES`）——两者都在 manager 预留任何资源之前断言。有三个 Harness 事实塑造了这个接口，写在这里是因为读者不会预期它们：**没有按次调用的工具白/黑名单**，因此 `agentPreset` 是获得工具受限或只读成员的唯一途径，seam 也明确拒绝 `toolFilter`；**preset id 必须由 profile 的 bundle 补丁声明**，因为注册表既不扫描目录也不接受路径；**没有 worktree 字段**，worktree 是先 `ctx.worktrees.create(...)`、再把它的 `path` 当 `cwd` 传，而那个服务是可选的、实验性的，所以本插件不自己创建（ADR 0016）。
+**request 的组合规则。** 插件发送 `{ prompt, parent }`，再加上模型通过 `spawn_member.spawn_options`（§4.5）点名的可选字段：`cwd`、`agentOptions` 与 `agentPreset`。任何一个字段省略，都表示该成员继承 Lead 的值；这里要记下唯一的例外，因为不写出来这条规则读起来像是绝对的：改了 `provider` 或 `model` 却没给 `reasoningEffort` 时，新路由解析自己的默认值，而不是继承 Lead 的 effort。这里“继承 Lead 的值”指的是 Lead 当前的模型路由：每次 spawn 时从会话最近一次请求头解析，而不是 Lead Agent 创建时的选项（§2.6）。什么都不传的 spawn 组合出的 request 与以前完全一样——有测试钉住这个对象。`cwd` 原样转发：seam 会把相对路径解析到父代理的 cwd 上（`resolveDirectory`），而子代理保留父代理的权限根，因此沙箱授权之外的目录仍会被拒绝；如果插件自己先解析路径，就会与 Host 的判断不一致。两个能力门属于 provider：`agentOptions` 需要 `provider.capabilities.agentOptions`，`agentPreset` 需要 `provider.capabilities.agentPreset`——进程内的 spawn/fork provider 为 true，所有外部后端为 false（其能力声明就是 `NO_START_CAPABILITIES`）——两者都在 manager 预留任何资源之前断言。有三个 Harness 事实塑造了这个接口，写在这里是因为读者不会预期它们：**没有按次调用的工具白/黑名单**，因此 `agentPreset` 是获得工具受限或只读成员的唯一途径，seam 也明确拒绝 `toolFilter`；**preset id 必须由 profile 的 bundle 补丁声明**，因为注册表既不扫描目录也不接受路径；**没有 worktree 字段**，worktree 是先 `ctx.worktrees.create(...)`、再把它的 `path` 当 `cwd` 传，而那个服务是可选的、实验性的，所以本插件不自己创建（ADR 0016）。
 
 有两个 Harness 事实塑造了退役流程：
 
