@@ -1,0 +1,111 @@
+# Changelog
+
+What each released version of this bundle contained, newest first, in the shape
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) describes: one dated section per version, ISO
+dates, and a later release adds a section above an older one instead of rewriting it.
+
+`PROGRESS.md` remains the append-only engineering narrative — why the current state looks like this,
+what was measured, what was rejected. This file is the release-level summary of that narrative, and it
+defers to it rather than replacing it.
+
+Each bullet is the heading of the matching dated `PROGRESS.md` entry with the entry's version tag
+removed; everything else, including a `PLAN.md` task id, is kept as written. Sections exist only for
+versions that a `PROGRESS.md` heading names, so this file starts at `0.6.0`: the earlier narrative
+carries no version heading and stays in `PROGRESS.md`. Three cases that are not gaps in the record:
+
+- `0.23.0` has no section — the `0.24.0` entry records that `0.23.0` belongs to another branch in flight.
+- `0.13.2` is filed from an entry whose heading says `v0.13.0` while its own Version paragraph records
+  the release as `0.13.2`; the version the entry records wins here.
+- `0.12.0` has a second bullet: its follow-up entry stayed inside that release rather than becoming one
+  of its own, so it is kept in that release's section.
+
+A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
+
+## [0.24.0] - 2026-11-12
+
+- A host hook installs when its service exists, and says whether it did (P4-12).
+
+## [0.22.0] - 2026-11-12
+
+- A member runs on the API of the session that started it (P4-11).
+
+## [0.21.1] - 2026-11-12
+
+- The cost and route boundary, measured rather than suspected.
+
+## [0.21.0] - 2026-11-12
+
+- The shipped team panel lists this plugin's members (P4-10).
+
+## [0.20.0] - 2026-11-12
+
+- A member can read the work it owns, and the brief points at the right board (P4-09).
+
+## [0.19.0] - 2026-11-12
+
+- The team scope moves onto disk: the brief's shape is a team file.
+
+## [0.18.0] - 2026-11-12
+
+- A task carries a body, and a board write cannot undo a handover (P4-07).
+
+## [0.17.0] - 2026-11-12
+
+- A definition no longer outranks the record on a replace.
+
+## [0.16.0] - 2026-11-12
+
+- A member becomes a file on disk (P4-06).
+
+## [0.15.0] - 2026-11-12
+
+- The blocking wait comes back on this plugin's own surface (P2-15).
+
+## [0.14.1] - 2026-11-12
+
+- The tool surface is measured: the spawn, wait and task tools are gone, three agent-service tools remain.
+
+## [0.14.0] - 2026-11-12
+
+- The shipped team tool row is retired, the gap is written down, and the Status block is measured.
+
+## [0.13.2] - 2026-11-12
+
+- Answered a replacement with a result the host refused.
+
+## [0.13.1] - 2026-11-12
+
+- The drift audit: what `started_with` is, and three claims that did not match the tree.
+
+## [0.13.0] - 2026-11-12
+
+- The plugin owns the work, not only the member (P2-09).
+
+## [0.12.0] - 2026-11-12
+
+- Spawn capabilities, typed start refusals, and a refusal that names the current holder.
+- Did not activate, and a check now refuses that keyword.
+
+## [0.11.0] - 2026-11-11
+
+- The handoff brief's shape is a stored template per Lead.
+
+## [0.10.0] - 2026-11-11
+
+- The plugin is renamed dsh-team.
+
+## [0.9.0] - 2026-11-11
+
+- Ephemeral members retire themselves on a lazy sweep.
+
+## [0.8.0] - 2026-11-11
+
+- The trash cap is a config field, not a constant.
+
+## [0.7.0] - 2026-11-11
+
+- The trash is capped, and a pruned member says so.
+
+## [0.6.0] - 2026-11-11
+
+- Correctness audit fixes.

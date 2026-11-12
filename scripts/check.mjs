@@ -187,7 +187,7 @@ for (const [english, chinese] of pairs) {
 
 // 6. No machine-specific paths in shared documents.
 const documents = [
-  'README.md', 'README-zh.md', 'AGENTS.md', 'CONTRIBUTING.md', 'PLAN.md', 'PROGRESS.md',
+  'README.md', 'README-zh.md', 'AGENTS.md', 'CONTRIBUTING.md', 'PLAN.md', 'PROGRESS.md', 'CHANGELOG.md',
   ...readdirSync(join(root, 'docs')).filter((name) => name.endsWith('.md')).map((name) => `docs/${name}`),
   ...readdirSync(join(root, 'docs', 'adr')).filter((name) => name.endsWith('.md')).map((name) => `docs/adr/${name}`),
 ]

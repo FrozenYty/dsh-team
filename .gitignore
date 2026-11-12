@@ -14,3 +14,7 @@ desktop.ini
 
 # Logs and local captures.
 *.log
+
+# Git worktrees. The pattern is machine-local in effect, but it belongs in the tracked ignore file:
+# .git/info/exclude is not cloned, so a fresh clone reports every worktree's contents as untracked.
+.worktrees/

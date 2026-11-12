@@ -80,9 +80,12 @@ with a real side effect — see the README.
 
 | What | Where | Name |
 |---|---|---|
-| entry points and live state | repository root, uppercase | `README.md`, `README-zh.md`, `AGENTS.md`, `CONTRIBUTING.md`, `PLAN.md`, `PROGRESS.md`, `LICENSE` |
+| entry points and live state | repository root, uppercase | `README.md`, `README-zh.md`, `AGENTS.md`, `CONTRIBUTING.md`, `PLAN.md`, `PROGRESS.md`, `CHANGELOG.md`, `LICENSE` |
 | a design document | `docs/`, lowercase | `name-en.md` + `name-zh.md`, English as the source of truth |
-| a decision | `docs/adr/` | `NN-short-title.md`, two digits, never renamed |
+| a decision | `docs/adr/` | `NNNN-short-title.md`, four digits, zero-padded, never renamed |
+
+A release adds a `CHANGELOG.md` entry — the release-level summary — while `PROGRESS.md` stays the
+append-only engineering narrative.
 
 Root files are single-language and change often; `docs/` files are bilingual and change rarely.
 
