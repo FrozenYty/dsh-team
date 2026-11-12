@@ -50,6 +50,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why can a member read the work it owns, and why does the board keep one writer? | `docs/adr/0022-member-reads-its-work.md` | English |
 | Why does the shipped team panel list this plugin's members, and why is a retired one absent? | `docs/adr/0023-panel-overlay.md` | English |
 | Why does the plugin forward the Lead's model route, why never its effort, and why is a straggler flagged? | `docs/adr/0024-forward-the-lead-route.md` | English |
+| Why does a host hook install when its service exists, and why does `list_members` report whether it did? | `docs/adr/0025-host-hook-install.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
@@ -83,7 +84,7 @@ Harness disagree, the repository is wrong.
 | which source wins for a definition field on a replace, or what a file's `ephemeral` means for a successor | the definition matrix in `docs/architecture-en.md` §4.3.3, `actions.js`, `index.js`, ADR 0019 |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
-| the projection exits, or what the shipped team panel shows | `host-hooks.js`, `index.js`, `docs/architecture-en.md` §2.4, `README.md` + `README-zh.md`, ADR 0023 |
+| the projection exits, what the shipped team panel or the shipped `list_agents` read shows, or whether a host hook installs | `host-hooks.js`, `index.js`, `docs/architecture-en.md` §2.4, `README.md` + `README-zh.md`, ADR 0023, ADR 0025 |
 | what route a member starts on, which source wins, or whether a straggler is flagged | `actions.js`, `roster.js`, the tool schemas in `index.js`, `docs/architecture-en.md` §2.6, §4.1, §4.2 and §4.5, `README.md` + `README-zh.md`, ADR 0024 |
 | a document added, renamed or removed | this file and `INDEX-zh.md` |
 | the plugin's name or display title, or a patch row's `name` | `package.json`, `cordis.patch.yml`, `AGENTS.md`, `README.md` + `README-zh.md`, `docs/architecture-en.md` + `docs/architecture-zh.md`, a new ADR |

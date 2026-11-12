@@ -81,6 +81,10 @@ A short map, not a changelog: each release below names what it added and the sec
   `list_members` flags a member whose route is no longer the Lead's. Every failure to resolve is a
   recorded fallback, never a failed spawn, and `reasoningEffort` is never forwarded (§2.6, §4.2, §4.5,
   ADR 0024).
+- **v0.24** — the three host hooks install when the service they wrap exists rather than when the plugin
+  loads, so a row that activates before the Web layer no longer loses the feature for the life of the
+  process; the shipped `list_agents` read loses a retired member too; and `list_members` reports
+  `host_hooks`, so an absent hook is a typed answer (§2.4, §4.5, ADR 0025).
 
 ### 2.1 Compaction is enabled
 
@@ -143,19 +147,31 @@ re-creates them on the owned board (ADR 0017).
 
 ### 2.4 Host-side effects
 
-Two effects make a retirement visible to clients, make this plugin's members visible in the shipped team
-panel, and keep the shipped member budget usable. Both are capability-probed, both restore exactly what
-they replaced on plugin unload, and neither writes to the Lead Session (ADR 0004, ADR 0023).
+Three effects make a retirement visible to clients, make this plugin's members visible in the shipped team
+panel and the shipped `list_agents` tool, and keep the shipped member budget usable. Each is gated on the
+service it wraps through `ctx.inject`, so a service published *after* this plugin activates — the normal
+case for `sessionController`, which needs the Web layer — still gets its effect; each restores exactly what
+it replaced on plugin unload, and none writes to the Lead Session (ADR 0004, ADR 0023, ADR 0025).
 
 | Effect | Mechanism | Behaviour when the host shape is absent |
 |---|---|---|
-| Projection filter | wraps `sessionController.list` / `projections` / `control` / `follow`; strips retired ids from `subagentCatalog` and `agentTeam` frames, then appends this Lead's live members to the same `agentTeam` value | retirement still works; clients keep rendering the member and never see this plugin's |
-| Slot credit | replaces the legacy roster's `maxMembers` getter and wraps `spawn`, adding the retired count of the spawning Lead for the duration of that spawn | retirement still works; the shipped budget stays consumed |
+| Projection filter | wraps `sessionController.list` / `projections` / `control` / `follow`; strips retired ids from `subagentCatalog` and `agentTeam` frames, then appends this Lead's live members to the same `agentTeam` value | the hook waits for the service and reports `panel_filter: absent`; retirement still works, clients keep rendering the member and never see this plugin's |
+| Shipped roster read | replaces `agentTeams.listMembers`, synchronously dropping a row whose id is a retired child id, so the shipped `list_agents` tool answers without them | reports `roster_filter: absent`; `list_agents` keeps a retired member |
+| Slot credit | replaces the legacy roster's `maxMembers` getter and wraps `spawn`, adding the retired count of the spawning Lead for the duration of that spawn | reports `slot_credit: absent`; retirement still works, the shipped budget stays consumed |
 
-Both read retired records through a two-second cache that `retire_member` invalidates, and both are
-transparent to other plugins: same arguments, same return shape, and the payload is mutated rather than
-copied so a caller's reference stays valid. The overlay's live rows are read synchronously from the
-roster table, because they change with a spawn and a cache would only add a stale window.
+One tombstone set serves all three. `retire_member` and `restore_member` invalidate it in the call that
+writes the record, so a retirement cannot linger behind the two-second cache; a read that fails keeps the
+last good set in force and is reported as `tombstone_read_failed`, instead of emptying the set and serving
+every row as the first version did. The projection filter's live rows are read synchronously from the
+roster table, because they change with a spawn and a cache would only add a stale window; the shipped
+roster read does the same, because its caller maps the array without awaiting it and a cached or async
+answer would either be stale or change the method's return type.
+
+**The installed state is part of the tool surface.** `list_members` always answers `host_hooks`, declared
+in that tool's output schema, naming each hook as `installed` or `absent`, the number of tombstoned ids the
+installed filters are stripping (`stripped_ids`), whether the last tombstone read failed, and a `message`
+that names an absent hook and the service it needed. A hook that can never install is therefore a typed
+answer, not an empty panel with no explanation (ADR 0025).
 
 #### 2.4.1 The panel overlay: what a plugin may write, and what the panel reads
 
@@ -757,7 +773,7 @@ agent and is treated as the Lead, so a failed projection cannot disable every to
 | Tool | Behaviour |
 |---|---|
 | `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `definition`, start it from a member definition committed with the project, whose fields fill whatever the call omitted (§4.6); with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default. A spawn that names no `agent_options` still runs on this Session's route: the plugin resolves the Lead's current `provider` and `model` and forwards them, so the member uses the API of the Session that started it, and `started_with.route_source` says whether the route came from the call (`caller`), was resolved by the plugin (`plugin`) or was inherited unresolved (`inherited`, with `route.select_reason` naming which fallback ran); `started_with` reports back what the plugin forwarded, not what the child resolved (§2.6, ADR 0024). A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error, and a definition that cannot be read is answered the same way (ADR 0016, ADR 0018). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
-| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, the `route` the member was started on, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. When the Lead's own route can be read and differs from a member's recorded one, the row also carries `route_stale: true` and a `route_note` naming both routes and the one call that replaces the member (§2.6, ADR 0024). A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, the `route` the member was started on, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. When the Lead's own route can be read and differs from a member's recorded one, the row also carries `route_stale: true` and a `route_note` naming both routes and the one call that replaces the member (§2.6, ADR 0024). A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). It always carries `host_hooks`: `panel_filter`, `roster_filter` and `slot_credit` as `installed` or `absent`, `stripped_ids` and `tombstone_read_failed` while a filter is installed, and a `message` naming an absent hook, the service it needed and what that means for the shipped panel and `list_agents` (§2.4, ADR 0025). |
 | `wait_members` | One bounded wait on the live status of this Lead's members: it answers when a member's `agent/status` transitions (`idle` ⇄ `running`) or after the timeout, and reports the member and the status it entered. The timeout defaults to 30 s and is refused above 1 h; a roster with no `running` member and no `provisioning` reservation answers `no_progress` at once, because a blocked Lead cannot wake an idle member. It observes only post-call transitions and never wakes anyone (§4.5). |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |
@@ -971,6 +987,8 @@ for the template and would be a bug for the board.
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | make the shipped team panel list this plugin's live members | the same exits: append the four-field member row to the outgoing `agentTeam` value (ADR 0023) |
+| make the shipped `list_agents` read drop a retired member | replace `agentTeams.listMembers` with a synchronous wrapper over the same tombstone set (ADR 0025) |
+| run a host hook only once the service it wraps exists | `ctx.inject([service], callback)`: the callback installs, its returned disposer unwinds, and Cordis unloads/re-runs it when the service is replaced (ADR 0025) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
 | move a retired session aside | `ctx.get('sessionPersistence').stat(id).location.path` + a rename into the trash |
 

@@ -39,6 +39,7 @@
 - **v0.19**——团队作用域补上这套划分的另一半：成员定义旁边可以有一个可选的 `team/team.md`，正文就是交接书模板。生效模板依次取自该文件、记录里存下的模板、内置形状；读取形式会报告实际生效的来源，而文件存在时 `handoff_template` 的写入与清除都会被拒绝（§4.4、§4.5、§4.7、ADR 0021）。
 - **v0.20**——成员作用域拿到任务正文本就该有的那次读取：`list_my_tasks`，一件注册在成员 Agent 上的只读工具，只返回 `owner` 正好是该成员自己 target 的行。Lead 的工具集不变，工作板仍然只有一个写入者，而交接书里的 `{task_board}` 指针改为指向本插件自己的任务板与这件工具，而不是官方任务板（§4.4、§4.5、§4.5.2、ADR 0022）。
 - **v0.22**——成员用启动它的那个会话的 API 启动：`spawn_member` 解析 Lead 当前的 `provider` 与 `model` 并转发，把路由记在成员记录上，`list_members` 则标出路由已不再是 Lead 当前路由的成员。任何解析失败都是被记录下来的兜底，而不是一次失败的 spawn；`reasoningEffort` 从不转发（§2.6、§4.2、§4.5、ADR 0024）。
+- **v0.24**——三个宿主钩子改为在它们所包装的服务存在时才安装，而不是在插件加载时安装，因此一条早于 Web 层激活的行不会再让该能力在整个进程生命周期里丢失；官方 `list_agents` 读取也会丢掉已退役成员；`list_members` 报告 `host_hooks`，于是缺席的钩子是一个有类型的答案（§2.4、§4.5、ADR 0025）。
 
 ### 2.1 启用压缩
 
@@ -71,14 +72,17 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 ### 2.4 宿主侧效果
 
-两个效果让退役对客户端可见、让本插件的成员出现在官方团队面板里，并让官方的成员名额重新可用。两者都做能力探测、都在插件卸载时精确还原，且都不写 Lead 会话（ADR 0004、ADR 0023）。
+三个效果让退役对客户端可见、让本插件的成员出现在官方团队面板与官方 `list_agents` 工具里，并让官方的成员名额重新可用。每个效果都通过 `ctx.inject` 挂在自己所包装的服务上，所以在本插件激活**之后**才发布的服务——`sessionController` 就是常态，它需要 Web 层——仍然能装上；每个效果都在插件卸载时精确还原，且都不写 Lead 会话（ADR 0004、ADR 0023、ADR 0025）。
 
 | 效果 | 机制 | 宿主形状缺失时 |
 |---|---|---|
-| 投影过滤 | 包装 `sessionController.list`／`projections`／`control`／`follow`；先从 `subagentCatalog` 与 `agentTeam` 帧里摘掉已退役 id，再把该 Lead 的活成员追加到同一个 `agentTeam` 值上 | 退役仍生效；客户端仍显示该成员，但看不到本插件的成员 |
-| 名额补偿 | 替换旧花名册的 `maxMembers` getter 并包装 `spawn`，在一次 spawn 期间按发起 Lead 的退役数临时抬高上限 | 退役仍生效，官方名额仍被占用 |
+| 投影过滤 | 包装 `sessionController.list`／`projections`／`control`／`follow`；先从 `subagentCatalog` 与 `agentTeam` 帧里摘掉已退役 id，再把该 Lead 的活成员追加到同一个 `agentTeam` 值上 | 钩子等待服务，并报告 `panel_filter: absent`；退役仍生效，客户端仍显示该成员，但看不到本插件的成员 |
+| 官方花名册读取 | 替换 `agentTeams.listMembers`，同步丢掉 id 属于已退役子会话的行，于是官方 `list_agents` 工具不再返回它们 | 报告 `roster_filter: absent`；`list_agents` 仍显示已退役成员 |
+| 名额补偿 | 替换旧花名册的 `maxMembers` getter 并包装 `spawn`，在一次 spawn 期间按发起 Lead 的退役数临时抬高上限 | 报告 `slot_credit: absent`；退役仍生效，官方名额仍被占用 |
 
-两者都通过一个两秒缓存读取退役记录，`retire_member` 会主动使缓存失效；两者对其他插件透明：参数相同、返回形状相同，载荷是原地修改而不是复制，调用方持有的引用继续有效。覆盖层读取活成员则直接同步读花名册表：活成员会随 spawn 变化，缓存只会多出一段陈旧窗口。
+三个效果共用同一份退役 id 集合。`retire_member` 与 `restore_member` 在写记录的同一个调用里使它失效，所以退役不会卡在两秒缓存后面；读取失败时保留上一份可用的集合，并报告 `tombstone_read_failed`——第一版是清空集合、把所有行原样下发。投影过滤的活成员直接同步读花名册表：它们随 spawn 变化，缓存只会多出一段陈旧窗口；官方花名册读取同理，因为调用方不 await 就直接 `.map` 数组，缓存或异步都会让答案陈旧或改变返回类型。
+
+**装没装上属于工具表面的一部分。** `list_members` 总是返回 `host_hooks`，并在该工具的输出 schema 里声明：每个钩子是 `installed` 还是 `absent`、装上的过滤器当前摘掉多少个墓碑 id（`stripped_ids`）、上一次墓碑读取是否失败，以及一条 `message`，指出缺席的钩子和它需要的服务。于是一个永远装不上的钩子是一个有类型的答案，而不是一个没有解释的空面板（ADR 0025）。
 
 #### 2.4.1 面板覆盖层：插件可以在哪里写，面板又读什么
 
@@ -396,7 +400,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 | 工具 | 行为 |
 |---|---|
 | `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `definition` 时从随项目提交的成员定义启动，文件里的字段补齐调用省略的部分（§4.6）；带 `replace` 时，让继任者从交接书启动、把前任的未完成任务交给它，并在同一次调用里退役前任（§4.4、§4.3.2）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options`（`provider`、`model`、`reasoning_effort`、`max_tokens`）或 `agent_preset` 启动；省略的字段继承 Lead 的值——但改了 `provider` 或 `model` 却未给 `reasoning_effort` 时，新路由解析自己的默认值。一个 `agent_options` 都不给的 spawn 仍然跑在这个会话的路由上：插件解析 Lead 当前的 `provider` 与 `model` 并转发它们，因此成员用的是启动它的那个会话的 API，而 `started_with.route_source` 说明路由是调用方给的（`caller`）、插件解析并转发的（`plugin`），还是未解析而继承的（`inherited`，具体兜底原因记在 `route.select_reason`）；`started_with` 报告的是插件转发出去的内容，不是子代理解析出的结果（§2.6、ADR 0024）。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误；读不出来的成员定义也以同样的方式回答（ADR 0016、ADR 0018）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
-| `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、成员启动时的 `route`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。当 Lead 自己的路由读得出来、且与某个成员记录的路由不同时，该行还会带 `route_stale: true` 与一句 `route_note`，点出两条路由以及替换该成员的那一次调用（§2.6、ADR 0024）。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`——被清扫的成员留下未完成任务时，再加 `unowned`/`unowned_tasks`（§4.3.2）。 |
+| `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、成员启动时的 `route`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。当 Lead 自己的路由读得出来、且与某个成员记录的路由不同时，该行还会带 `route_stale: true` 与一句 `route_note`，点出两条路由以及替换该成员的那一次调用（§2.6、ADR 0024）。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`——被清扫的成员留下未完成任务时，再加 `unowned`/`unowned_tasks`（§4.3.2）。它总是带 `host_hooks`：`panel_filter`、`roster_filter` 与 `slot_credit` 各是 `installed` 还是 `absent`，过滤器装上时的 `stripped_ids` 与 `tombstone_read_failed`，以及一条 `message`，点出缺席的钩子、它需要的服务，以及这对官方面板和 `list_agents` 意味着什么（§2.4、ADR 0025）。 |
 | `wait_members` | 对这个 Lead 成员的实时状态做一次有界等待：某个成员的 `agent/status` 在 `idle` ⇄ `running` 之间变化时返回，或超时后返回，并报告是哪个成员、变成了什么。超时默认 30 秒，超过 1 小时即拒绝；若没有 `running` 成员也没有 `provisioning` 预留，则立刻回答 `no_progress`，因为被阻塞的 Lead 无法唤醒空闲成员。它只观察调用之后的变化，绝不唤醒任何人（§4.5）。 |
 | `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。给临时成员发消息会清掉它的标记，因此它不会被清扫。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。当该名字的另一个代次还活着时，拒绝还会带上 `current_holder` 并在消息里说明。 |
 | `stop_member` | 只取消目标当前轮，保留激活与收件箱；对已退役或已失败的目标按与 `message_member` 相同的带类型原因拒绝，并以同样方式携带 `current_holder`。 |
@@ -498,6 +502,8 @@ handoff_template again.
 | 隐藏产物移不动的会话 | `ctx.workspaceRegistry.archiveSession`／`unarchiveSession`（可逆，不删除；退役与恢复的兜底分支） |
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
 | 让官方团队面板列出本插件的活成员 | 同一组出口：把四字段成员行追加到即将发出的 `agentTeam` 值上（ADR 0023） |
+| 让官方 `list_agents` 读取丢掉已退役成员 | 用同步包装替换 `agentTeams.listMembers`，读同一份墓碑 id 集合（ADR 0025） |
+| 只在所包装的服务存在后才运行宿主钩子 | `ctx.inject([service], callback)`：回调负责安装、返回的 disposer 负责卸载，服务被替换时 Cordis 会卸载并重跑它（ADR 0025） |
 | 补偿官方花名册名额 | 补丁旧花名册的 `maxMembers` getter 与 `spawn`（ADR 0004） |
 | 把退役会话挪开 | `ctx.get('sessionPersistence').stat(id).location.path` + rename 进回收站 |
 

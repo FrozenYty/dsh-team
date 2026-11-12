@@ -100,7 +100,7 @@ that is a move rather than a deletion.
 | Tool | Behaviour |
 |---|---|
 | `spawn_member` | Start a named member as a continuable child, optionally from a member definition on disk with `definition`, or with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. A spawn that names no model starts the member on **this Session's current route**: the plugin resolves `provider` and `model` from the Session and forwards them, and `started_with.route_source` says whether the route came from the call, was resolved by the plugin, or was inherited unresolved. |
-| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, the `route` it was started on, live state, `compactable` and — while resident — context pressure. A member whose route is no longer the Lead's is marked `route_stale: true` with a `route_note` naming both routes and the call that replaces it. |
+| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, the `route` it was started on, live state, `compactable` and — while resident — context pressure. A member whose route is no longer the Lead's is marked `route_stale: true` with a `route_note` naming both routes and the call that replaces it. It also answers `host_hooks`: whether the panel filter, the `list_agents` filter and the slot credit installed, how many tombstoned ids they strip, and why one is absent. |
 | `wait_members` | Block this turn until a member's live status changes or a timeout expires, and report which member changed and into what. Bounded: 30 seconds by default, at most one hour. It answers `no_progress` at once when no member is running or provisioning, never wakes anyone, and does not wait for board writes or message processing. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
@@ -148,15 +148,20 @@ route and hands the predecessor's open work over in the same call (ADR 0009, ADR
 then leaves `list_members` as retired. There is deliberately no reroute tool: the work has to move with
 the person anyway.
 
-Two host-side effects run on the session-list exits, both capability-probed: the projections strip retired
-ids from `subagentCatalog` and `agentTeam` frames, so the top subagent picker and the built-in team panel
-stop rendering a retired member (no host source change, no Web rebuild); and the same `agentTeam` value
-gains this Lead's live members, so the shipped **成员** panel lists the members this plugin spawned, with
-a click opening each member's real chat. A retired member leaves that panel — it is not rendered as a row
-marked retired, because the panel's phase vocabulary has no such value. While a spawn runs, the shipped
-roster's effective `maxMembers` rises by that Lead's retired count, so one retirement buys back one slot.
-Separately, the patch enables the shipped `compaction-basic` row with `disabled: false`, so automatic
-compaction covers every agent in the process, subagents included.
+Three host-side effects make a retired member leave the built-in lists and this plugin's members appear in
+them. The projections strip retired ids from `subagentCatalog` and `agentTeam` frames at the session-list
+exits, so the **子智能体** picker and the built-in **成员** panel stop rendering a retired member (no host
+source change, no Web rebuild); the same `agentTeam` value gains this Lead's live members, so the panel
+lists the members this plugin spawned, with a click opening each member's real chat. A retired member
+leaves that panel — it is not rendered as a row marked retired, because the panel's phase vocabulary has no
+such value. The shipped roster read behind the `list_agents` tool drops the same retired ids. While a spawn
+runs, the shipped roster's effective `maxMembers` rises by that Lead's retired count, so one retirement
+buys back one slot. All three are gated on the service they wrap, so a profile that publishes
+`sessionController` after this plugin activates still gets the filter instead of losing it silently;
+`list_members` answers `host_hooks` with `installed`/`absent` per hook and the number of ids being
+stripped, so an absent hook is explained rather than guessed at (ADR 0025). Separately, the patch enables
+the shipped `compaction-basic` row with `disabled: false`, so automatic compaction covers every agent in
+the process, subagents included.
 
 ## In use
 
@@ -232,6 +237,11 @@ guessed either: a profile that mounts no `workingDirectory` service answers `sta
 keeps one file from being reported as a broken definition on every spawn (ADR 0021).
 
 ## The lifecycle
+
+**A member is a division of labour, not a task.** Retirement answers “this role is not needed any more”, never
+“this piece of work is finished”: a member that completed one piece of work may be needed again next round, so
+an idle member between rounds is not a candidate. When that is a judgement call rather than a decision already
+made, the Lead asks the person before retiring.
 
 | Step | Behaviour |
 |---|---|
@@ -426,11 +436,12 @@ endpoint is the exception, and this plugin is not one.**
 dependencies: it is linked into a profile and imports no `@deepseek-ai/*` package (ADR 0002), so what
 runs is this working tree. It reads the subagent seam (`startActivation`, `drainChildren`,
 `sendMessage`, `interrupt`, `listDescendants`), the shipped `agent-team` service (adoption and the
-membership test), `sessionController` (the projection filter and the panel overlay; a host without it is
-skipped), the token meter (context pressure), the storage-domain facility, and the agent registry with its
+membership test), `sessionController` (the projection filter and the panel overlay; a host that never
+publishes it reports `panel_filter: "absent"` instead of losing the hook silently), `agentTeams.listMembers`
+(the shipped `list_agents` read this plugin filters), the token meter (context pressure), the storage-domain facility, and the agent registry with its
 `agent/status` event (the wait). `compact_member` additionally needs a mounted compaction backend, which the patch's
-`compaction-basic` entry enables. The host-side effects are capability-probed: a Harness whose shape
-changed skips that effect rather than failing the load. A profile that does not mount the experimental
+`compaction-basic` entry enables. The host-side effects are capability-probed and each installs when the service it wraps exists: a Harness whose shape
+changed skips that effect and says so in `list_members`, rather than failing the load. A profile that does not mount the experimental
 team bundle has no `tool-agent-team` row for the patch to disable; the Loader warns about the missing
 target and skips that entry.
 
@@ -473,6 +484,9 @@ tree — there is no build step. Verification after installing is live calls, no
 
 - the patch row activates with `application: applied` and no warnings;
 - `list_members` is callable from a Lead session and reports context pressure for a resident member;
+- `list_members` answers `host_hooks` with `panel_filter`, `roster_filter` and `slot_credit` as
+  `"installed"` and a non-zero `stripped_ids` once this Lead has retired someone; a hook that never
+  installed reads `"absent"` and its `message` names the service it waited for;
 - `retire_member` returns `trashed: true` and a `trash_path` for a session that has an artifact;
 - `spawn_member` with `replace` returns `predecessor_retired: true` and a successor at the next
   generation; when the predecessor owned open tasks, the result also reports `transferred` with their ids,
@@ -491,7 +505,7 @@ tree — there is no build step. Verification after installing is live calls, no
   `list_agents`, `send_message` and `interrupt_agent`;
 - the shipped team panel's **成员** section lists a member started with `spawn_member`, an idle one reads
   未运行 (not running), a click opens its chat, and after `retire_member` the row is gone rather than
-  relabelled;
+  relabelled; the **子智能体** picker and the shipped `list_agents` tool lose the same retired member;
 - `include:compaction-basic` reports status `schema`, not `inactive`.
 
 ## Configuration
@@ -570,7 +584,7 @@ whole local gate.
 | `actions.js` | The roster operations behind the tools |
 | `roster.js`, `trash.js` | Durable roster (phases, name generations, adoption, migration) and the session trash with its restore and retention cap |
 | `definitions.js` | The `team/` layer: the flat-frontmatter parser, the member-definition scan and its caps, the team file's handoff template, and the working directory both are resolved from |
-| `host-hooks.js` | Projection filter (strip retired ids, add this plugin's live members to the team panel) and roster slot credit |
+| `host-hooks.js` | Projection filter (strip retired ids, add this plugin's live members to the team panel), shipped roster-read filter, roster slot credit, and the deferred install of all three |
 | `tests/`, `scripts/check.mjs` | Unit tests, and the repository checks CI runs |
 | `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `.github/` | The bundle, its CI workflow and templates |
 | `PLAN.md`, `PROGRESS.md`, `docs/` | Open tasks, the append-only change log, and the design documents (bilingual) with the ADRs |

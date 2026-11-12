@@ -35,7 +35,7 @@
 | 工具 | 行为 |
 |---|---|
 | `spawn_member` | 把成员作为一个可续跑的子代理启动，可用 `definition` 从磁盘上的成员定义启动，也可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。不点名任何模型时，成员跑在**本会话当前的路由**上：插件从会话解析 `provider` 与 `model` 并转发，`started_with.route_source` 说明路由来自调用、由插件解析，还是未解析而继承。 |
-| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、启动时的 `route`、实时状态、`compactable`，驻留时还有上下文压力。路由已不是 Lead 当前路由的成员会被标上 `route_stale: true`，并附一句 `route_note` 点出两条路由以及替换它的那次调用。 |
+| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、启动时的 `route`、实时状态、`compactable`，驻留时还有上下文压力。路由已不是 Lead 当前路由的成员会被标上 `route_stale: true`，并附一句 `route_note` 点出两条路由以及替换它的那次调用。它还会返回 `host_hooks`：面板过滤器、`list_agents` 过滤器与名额补偿各装没装上、它们正在剔除多少个墓碑 id，以及某个缺席的原因。 |
 | `wait_members` | 阻塞当前这一轮，直到某个成员的实时状态发生变化或超时到期，并报告是哪个成员、变成了什么。有界：默认 30 秒，最长一小时。没有成员处于 running 或 provisioning 时立刻回答 `no_progress`，绝不唤醒任何人，也不等待任务板写入或消息被处理。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
@@ -52,7 +52,7 @@
 
 **在模型切换之前启动的成员会一直留在旧路由上，而花名册会把它们点出来。** 活的成员无法被改路由：它的 provider 与 model 在启动时就写进了自己会话的请求头，之后发消息或唤醒都沿用它们。因此 `list_members` 会把每个成员记录在案的 `route` 与 Lead 当前路由比较，凡是不一致的就标上 `route_stale: true`，并附一句 `route_note` 点出两条路由。这个标记回答的就是「我的哪个成员还在用旧 API 计费」。**清掉它的办法是替换掉这个成员**：`spawn_member { replace: "<target>" }` 会在当前路由上启动继任者，并在同一次调用里接手前任的未完成工作（ADR 0009、ADR 0017），那条陈旧的行随后以 retired 离开 `list_members`。这里刻意没有 reroute 工具：人换了，工作本来也得跟着走。
 
-每次退役都在会话列表出口触发两项宿主侧效果，两者都带能力探测：投影先是从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；同一个 `agentTeam` 值随后还会追加该 Lead 的活成员，于是官方**成员**面板会列出本插件启动的成员，点击即可打开该成员真实的会话。已退役成员则是**离场**——面板不会把它留成一行并标注“已退役”，因为面板的相态词表里没有这个值。spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
+三个宿主侧效果让已退役成员离开内置列表，也让本插件的成员出现在其中。会话列表出口的投影会从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是**子智能体**选择器与内置**成员**面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；同一个 `agentTeam` 值随后还会追加该 Lead 的活成员，于是面板会列出本插件启动的成员，点击即可打开该成员真实的会话。已退役成员则是**离场**——面板不会把它留成一行并标注“已退役”，因为面板的相态词表里没有这个值。`list_agents` 工具背后的官方花名册读取也会丢掉同一批已退役 id。spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。三个效果都挂在自己所包装的服务上，因此在插件激活之后才发布 `sessionController` 的 profile 仍然能装上过滤器，而不是悄悄丢掉它；`list_members` 会返回 `host_hooks`，逐个报告 `installed`／`absent` 与正在剔除的 id 数，于是缺席的钩子有解释而不是靠猜（ADR 0025）。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 
 ## 用起来是什么样
 
@@ -100,6 +100,8 @@ You review changes. Report only findings that change behaviour, with the file an
 `team/team.md` 预留给团队作用域，不是成员定义：成员仍然可以在别的文件里声明 `name: team`，但这个文件名本身会被定义扫描跳过。这正是避免同一个文件在每次 spawn 时都被报成坏定义的原因（ADR 0021）。
 
 ## 生命周期
+
+**成员是一种分工，不是一件任务。** 退役回答的是“这个分工暂时不需要了”，而不是“这件活干完了”：刚做完一件事的成员，下一轮可能还要用，所以两轮之间闲置的成员不是退役对象。当这是需要判断的事、而不是已经定下的决定时，Lead 应当先问人再退役。
 
 | 步骤 | 行为 |
 |---|---|
@@ -171,7 +173,7 @@ bundle 自己不发起任何模型调用：没有任何 Host 模块碰 `ctx.llm`
 
 ## 运行要求与兼容性
 
-**运行**本 bundle 需要已安装的 Harness 以及它读取的官方包，而不是 npm 依赖：bundle 以链接方式装进 profile，且不导入任何 `@deepseek-ai/*` 包（ADR 0002），所以真正运行的就是这棵工作树。它读取子代理 seam（`startActivation`、`drainChildren`、`sendMessage`、`interrupt`、`listDescendants`）、官方 `agent-team` 服务（收养与成员判定）、`sessionController`（投影过滤与面板覆盖层；宿主没有这项就跳过）、token 计量（上下文压力）、存储域设施，以及智能体注册表与它的 `agent/status` 事件（等待）。`compact_member` 还需要已挂载的压缩后端，补丁里的 `compaction-basic` 条目会启用它。宿主侧效果都带能力探测：Harness 形状变了就跳过那项效果，而不是让加载失败。没有挂载实验性团队 bundle 的 profile 里没有 `tool-agent-team` 行可供补丁禁用；Loader 会就这个缺失目标告警，并跳过该条目。
+**运行**本 bundle 需要已安装的 Harness 以及它读取的官方包，而不是 npm 依赖：bundle 以链接方式装进 profile，且不导入任何 `@deepseek-ai/*` 包（ADR 0002），所以真正运行的就是这棵工作树。它读取子代理 seam（`startActivation`、`drainChildren`、`sendMessage`、`interrupt`、`listDescendants`）、官方 `agent-team` 服务（收养与成员判定）、`sessionController`（投影过滤与面板覆盖层；宿主从不发布它时报告 `panel_filter: "absent"`，而不是悄悄丢掉这个钩子）、`agentTeams.listMembers`（本插件要过滤的官方 `list_agents` 读取）、token 计量（上下文压力）、存储域设施，以及智能体注册表与它的 `agent/status` 事件（等待）。`compact_member` 还需要已挂载的压缩后端，补丁里的 `compaction-basic` 条目会启用它。宿主侧效果都带能力探测，并且各自在所包装的服务存在时才安装：Harness 形状变了就跳过那项效果，并在 `list_members` 里说明，而不是让加载失败。没有挂载实验性团队 bundle 的 profile 里没有 `tool-agent-team` 行可供补丁禁用；Loader 会就这个缺失目标告警，并跳过该条目。
 
 **开发**测试套件需要 Node 24 和 CI 钉住的那个 flag：`.github/workflows/ci.yml` 设置 `node-version: "24"`，并运行 `node --test --test-isolation=none tests/*.test.mjs`。这个 flag 不是可选项。Node 22 把它写作 `--experimental-test-isolation`，所以这个拼写本身就固定了大版本；而默认 runner 会为每个测试文件起一个进程，作者机器上的沙箱拒绝这种 spawn。CI 与本机跑同一条命令，所以本机通过的含义与 CI 通过相同。
 
@@ -200,13 +202,14 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 
 - 补丁行以 `application: applied` 激活，没有告警；
 - 在 Lead 会话里可以调用 `list_members`，驻留成员带上下文压力；
+- `list_members` 的 `host_hooks` 里，`panel_filter`、`roster_filter` 与 `slot_credit` 在装好后读出 `"installed"`，该 Lead 退役过成员后 `stripped_ids` 不为零；某个钩子从未装上时读出 `"absent"`，其 `message` 会点出它在等哪个服务；
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 与 `trash_path`；
 - `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；当前任有未完成任务时，结果还会用 `transferred` 报告数量与 id，继任者的交接书里也会点名它们；
 - `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致，并多一个 `route_source`；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
 - 在会话路由可读的 profile 里，不带选项的 `spawn_member` 返回 `started_with.route_source: "plugin"`，该成员自己会话的 `request/header` 记录着同一个 provider 与 model，`list_members` 的行也报出同一对值；在路由切换之前启动的成员，其行会被标上 `route_stale: true`，直到它被替换为止；
 - 没有成员在跑时 `wait_members` 回答 `no_progress`；用 `message_member` 唤醒某个成员后，它会在超时之内返回该成员的 target 与 `status: "idle"`；
 - Lead 的工具列表里有本插件的工具（含 `wait_members`），没有 `spawn_teammate`、官方的 `wait_agent` 或 `team_task_*` 工具，但仍有 `agent-team` 服务发布的三件：`list_agents`、`send_message`、`interrupt_agent`；
-- 官方团队面板的**成员**区列出用 `spawn_member` 启动的成员，空闲成员显示“未运行”，点击可打开它的会话；`retire_member` 之后该行消失，而不是被改标注；
+- 官方团队面板的**成员**区列出用 `spawn_member` 启动的成员，空闲成员显示“未运行”，点击可打开它的会话；`retire_member` 之后该行消失，而不是被改标注；**子智能体**选择器与官方 `list_agents` 工具也会同时丢掉这个已退役成员；
 - `include:compaction-basic` 的状态是 `schema`，而不是 `inactive`。
 
 ## 配置
@@ -253,7 +256,7 @@ Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面�
 | `actions.js` | 模型侧工具背后的花名册操作 |
 | `roster.js`、`trash.js` | 持久花名册（相态、代次命名、收养、迁移），以及带恢复与保留上限的会话回收站 |
 | `definitions.js` | `team/` 层：扁平 frontmatter 解析器、成员定义扫描及其上限、团队文件的交接书模板，以及两者解析所用的工作目录 |
-| `host-hooks.js` | 投影过滤（剔除已退役 id，并把本插件的活成员追加进团队面板）与花名册名额补偿 |
+| `host-hooks.js` | 投影过滤（剔除已退役 id，并把本插件的活成员追加进团队面板）、官方花名册读取过滤、名额补偿，以及这三者的延迟安装 |
 | `tests/`、`scripts/check.mjs` | 单元测试，以及 CI 会跑的仓库检查 |
 | `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`.github/` | bundle 本体、CI workflow 与模板 |
 | `PLAN.md`、`PROGRESS.md`、`docs/` | 待办任务、只追加的变更日志，以及双语的设计文档与 ADR |

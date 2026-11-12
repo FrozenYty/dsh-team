@@ -96,9 +96,16 @@ function toolHarness(ctx = fakeCtx()) {
       const dispose = install()
       return typeof dispose === 'function' ? dispose : () => {}
     },
+    // Cordis's dependency gate, modelled the way the entry harness models it: a service this harness
+    // carries runs the hook callback at once, and one it does not (here `sessionController`) leaves the
+    // hook absent and reported (ADR 0025).
+    inject: (names, callback) => {
+      if (names.every((name) => host.get(name) !== undefined)) callback()
+      return { then: () => {} }
+    },
     logger: { warn() {} },
   }
-  host.get = (name) => ctx.get(name)
+  host.get = (name) => (name === 'agentTeams' ? host.agentTeams : ctx.get(name))
   apply(host, undefined)
   return { tools, spawn: tools.get('spawn_member'), scoped }
 }

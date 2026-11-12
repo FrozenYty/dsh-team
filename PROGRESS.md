@@ -1519,3 +1519,83 @@
   child's Session ends up storing. The four frozen names in ADR 0014 and the three `cordis.patch.yml`
   entries were not touched.
 - **Version.** `0.22.0`: the route a member runs on is behaviour, not a comment.
+
+## 2026-11-12 — a host hook installs when its service exists, and says whether it did (P4-12, v0.24.0)
+
+- **The defect was a silent skip, not a bad rewrite.** `apply` called the two host installers once, each read
+  its service with `ctx.get` and returned `installed: false` when the service was not there yet, and the skip
+  logged nothing. A profile composes rows by service availability, so this bundle's row can activate before
+  the Web layer publishes `sessionController` (it needs the workspace registry, uploads and the gateway); the
+  projection filter was then never installed for the life of the process. The dispatcher reads the live
+  instance property per request, which is why a patch that lands is visible — this one never landed. The
+  shipped panel kept every retired member, listed none of this plugin's, and `list_agents` kept the retired
+  ones too. Nothing said why.
+- **The gate is `ctx.inject`, not a retry loop.** Each host effect is now a Cordis dependency-gated plugin:
+  the projection filter waits for `sessionController`, the shipped roster read and the slot credit wait for
+  `agentTeams`. The callback installs when the service appears, is unloaded and re-run when the service is
+  replaced, and its disposer unwinds the patch with this plugin's own fiber — so unload still restores every
+  method. The plugin's own `inject` array is unchanged: a hook is an effect, not a prerequisite for the
+  tools, and a headless profile simply reports it absent.
+- **One tombstone set, one invalidation, and a visible failure.** `createRetiredCache` holds the set every
+  hook strips; `retire_member` and `restore_member` invalidate it in the call that writes the record (both
+  were already calling `invalidate()`, and `tests/hook-install.test.mjs` now pins it). A read that throws no
+  longer empties the set — the last good set stays in force and `tombstone_read_failed` says it is stale.
+  Emptying the set was the second silent no-op: both lists came back full and nothing said so.
+- **The shipped `list_agents` read is filtered too.** `list_agents` calls
+  `agentTeams.listMembers(callingAgent(exec.agent, "list_agents"))` and maps the array directly
+  (`dsh-experimental-tool-agent-team/lib/index.js:321-327`); `agentTeams.listMembers` is the append-only Team
+  journal's view (`dsh-experimental-agent-team/lib/index.js:1496`, `lib/types/roster.js:103-134`). The
+  wrapper drops only the retired ids, keeps `lead` and every live row, and stays **synchronous** because the
+  shipped caller does `.map` without awaiting — an async wrapper would break the tool. It reads the same
+  tombstone set straight from the in-memory roster table, so it cannot be stale and needs no invalidation of
+  its own. `agentTeams` is not a remote-decorated service, so the shipped tool sees the patch; adoption in
+  this plugin also reads it, and a retired member is already on the roster, so dropping that row changes
+  nothing there.
+- **The outcome is part of the answer.** `list_members` always returns `host_hooks`, declared in its output
+  schema: `panel_filter`, `roster_filter` and `slot_credit` as `installed` or `absent`; `stripped_ids` and
+  `tombstone_read_failed` while a filter is installed; and a `message` naming an absent hook, the service it
+  waited for, and what that means for the two lists. This is what makes the next failure of this kind
+  self-reporting instead of another release.
+- **Retirement is a role decision, and the model-facing surface says so.** `retire_member`'s description now
+  states that a member is a division of labour rather than a task: finishing one piece of work is not a
+  reason to retire anyone, an idle member between rounds is not a candidate, and a judgement call asks the
+  person first. The README pair carries the same statement once, in the lifecycle section.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits 0; `node scripts/check.mjs` prints `check passed` after the last edit; and
+  `node --test --test-isolation=none tests/*.test.mjs` is 199 tests, 199 passing (189 before, plus six in the
+  new `tests/hook-install.test.mjs` and four in `tests/host-hooks.test.mjs`). The new suite covers a service
+  absent at load and published later (installs once), a service that never appears (`absent`, every tool
+  still works), a reload (no second wrap; one dispose restores every method and the shipped roster read),
+  the 37-row panel with five tombstones (32 rows, lead and every live row intact), a 36-entry catalog frame
+  (31), a failed tombstone read (reported, last set in force, recovered after the next good read), and the
+  retirement and restore invalidations. The main test was proved able to fail: with the `ctx.inject` blocks
+  replaced by the old immediate install, it fails at the `installed` assertion after the service appears
+  (`actual 'absent'`) and the reload test fails because the exit was never restored; restored, the suite is
+  green. `tests/hook-install.test.mjs` hashed
+  `5475F350969E23B2A8BF179287E8F4C3040702EE0A35791857FDB839C23A0BED` before and after that proof — the test
+  was never edited.
+- **Predicted panel counts for the current profile.** For the Lead Session whose store this was read from,
+  the roster holds **46** tombstoned child ids and 36 live ones. The projection checkpoint for that Session
+  carries 30 fold members, **22** of them tombstoned, so the panel's 37 rows are consistent with those 30
+  plus the lead row plus rows appended since the checkpoint. After the fix, every one of the 46 tombstoned
+  ids leaves both lists wherever it appears — the 22 checkpoint-proven rows are the ones to check first
+  (`survey-lifecycle`, `impl-panel`, `impl-session-scope`, `docs-readme`, `spike-messaging`,
+  `probe-spawn-caps`, …) — while `impl-config`, `impl-template`, `impl-spawn-caps`, `fix-docs`, `audit-drift`
+  and the `-g2` successors stay. Because the overlay adds this plugin's live members back, the **row count**
+  may barely move (about 37 either way); the identities are the check, not the number.
+- **Documents.** ADR 0025 records the decision (deferred gate, one tombstone set, the synchronous roster
+  read, the reported outcome, no hook is fatal); `docs/architecture-en.md` gains rewritten §2.4, a v0.24
+  delivery line, two §5 rows and the `list_members` row; the Chinese pair matches. The README pair gains the
+  three-effect paragraph, the `host_hooks` sentence on `list_members`, the requirements and install-check
+  lines, and the role-not-task sentence in the lifecycle section. The index pair registers ADR 0025;
+  `PLAN.md` gains P4-12, ticked because this PR delivers it.
+- **What stays unverified.** No install and no `plugin_manager` call was made, and `scripts/check.mjs` never
+  loads the Harness. The live install — `list_members` answering `host_hooks.panel_filter: "installed"`, and
+  the panel plus `list_agents` actually showing no retired member — is the owner's install check. The
+  `agentTeams.listMembers` patch is safe for both shipped callers (`list_agents`, and the disabled
+  `wait_agent`'s no-progress check, which only looks at active statuses) and for this plugin's adoption,
+  but only a real `list_agents` call proves it. The four frozen names in ADR 0014 and the three
+  `cordis.patch.yml` entries were not touched. The locale pair is unchanged: neither file holds a tool
+  description, and `scripts/check.mjs` still reports the same two keys per language.
+- **Version.** `0.24.0`: a host hook that never installed was a release-level lie; 0.23.0 belongs to another
+  branch in flight.
