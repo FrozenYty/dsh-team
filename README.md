@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.14.0.
+- Current version: v0.14.1.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -37,6 +37,13 @@ directory did not, on purpose (ADR 0014).
   member, `spawn_member` with `replace` answering `transferred: 1` with the task id and the predecessor
   retired, the successor's brief naming that id and title, and `retire_member` with no successor answering
   `unowned: 1` with the id.
+- **The tool surface, measured live** (v0.14.0, `listTools` read immediately before and after the
+  install): the shipped row is retired, so `spawn_teammate`, `wait_agent` and the `team_task_*` tools are
+  gone from a Lead's list and calling one answers `unknown tool`, while this plugin's `spawn_member` and
+  `task_board` remain. Three tools are still there, and this patch cannot remove them: `list_agents`,
+  `send_message` and `interrupt_agent` come from the `agent-team` *service* row, which the bundle keeps
+  mounted because adoption, the membership test and the projection filter read it. `wait_agent` remains
+  the one tool with no equivalent here; the replacement for it is under **Model-facing only** below.
 - **Two failures only a live install could show**, each one line, each fixed inside the release that had
   it and each now covered: v0.12.0's bundle installed and did not activate until a schema keyword was
   removed (same version; `scripts/check.mjs` now refuses that keyword), and v0.13.0's replacement answered
@@ -45,9 +52,8 @@ directory did not, on purpose (ADR 0014).
 - **Unit-tested only**, with no live profile having exercised them: the write-time `label` and
   `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
   operations overlap; that a member still running is never swept; the exact request a spawn with no
-  `spawn_options` composes; the task board's write-time caps and the transfer-matrix cells a live run did
-  not reach; and, since v0.14.0, the changed tool surface itself — that the shipped roster tools are
-  absent from a Lead's list and these nine replace them, which needs the owner's install and `listTools`.
+  `spawn_options` composes; and the task board's write-time caps and the transfer-matrix cells a live run
+  did not reach.
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -201,8 +207,9 @@ tree — there is no build step. Verification after installing is live calls, no
   and the successor's brief names them;
 - `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed, or
   `started: false` with a `reason` when the profile's provider or preset registry refuses it;
-- a Lead's tool list contains this plugin's tools and none of `spawn_teammate`, `send_message`,
-  `list_agents`, `interrupt_agent`, `wait_agent` or the shipped `team_task_*` tools;
+- a Lead's tool list contains this plugin's tools, no `spawn_teammate`, `wait_agent` or `team_task_*` tool,
+  and the three the `agent-team` service still publishes: `list_agents`, `send_message` and
+  `interrupt_agent`;
 - `include:compaction-basic` reports status `schema`, not `inactive`.
 
 ## Configuration
@@ -239,14 +246,16 @@ work in use, so it was removed rather than repaired (ADR 0008). `list_members` i
 covers the shipped roster's members and every child spawned with the shipped `subagent` tools, and the
 other six tools address any row it returns.
 
-The shipped team tool row is disabled by the patch (P2-07), so a Lead's tool list is this plugin's own
-nine tools: `spawn_teammate`, `send_message`, `list_agents`, `interrupt_agent`, `wait_agent` and the
-shipped `team_task_*` tools are gone. Each has an equivalent here — `spawn_member`, `message_member`,
-`list_members`, `stop_member` and `task_board` — except `wait_agent`: there is no blocking wait, so a Lead
-re-reads `list_members` for live state and uses `message_member` to wake a member it needs, and reads
-`inactive` as "no turn is executing", never as "finished". The shipped roster's *service* stays mounted
-(the `agent-team` row), which is why `list_members` still reports the members it created; only its tools
-are gone.
+The shipped team tool row is disabled by the patch (P2-07), so the roster calls a Lead has are this
+plugin's own nine tools. The row's `spawn_teammate`, `wait_agent` and `team_task_*` tools are gone —
+calling one now answers `unknown tool` — and every one of them has an equivalent here (`spawn_member`,
+`message_member`, `list_members`, `stop_member`, `task_board`) except `wait_agent`: there is no blocking
+wait, so a Lead re-reads `list_members` for live state and uses `message_member` to wake a member it
+needs, and reads `inactive` as "no turn is executing", never as "finished". Three tools remain, and the
+patch cannot remove them: `list_agents`, `send_message` and `interrupt_agent` are published by the shipped
+`agent-team` *service* row, which stays mounted because adoption, the membership test and the projection
+filter read it. `list_members` still reports the members the shipped roster created, and that is the same
+service at work; what is gone is the shipped row's own tool set.
 
 ## Development
 

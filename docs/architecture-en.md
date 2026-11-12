@@ -58,8 +58,10 @@ A short map, not a changelog: each release below names what it added and the sec
 - **v0.13** — the plugin owns the work, not only the member: a task board on the Lead's roster record,
   a replacement that hands the predecessor's open tasks to the successor, and a retirement without a
   successor that leaves them unowned and names them (§4.2, §4.3.2, §4.4, §4.5, ADR 0017).
-- **v0.14** — the two model-facing surfaces stop coexisting: the bundle patch disables the shipped
-  `tool-agent-team` row, so this plugin's own tools are the whole surface a Lead has (§1, §2.3, §4.5, §6).
+- **v0.14** — the shipped team tool row is retired: the bundle patch disables `tool-agent-team`, so the
+  row's `spawn_teammate`, `wait_agent` and `team_task_*` tools stop being registered and this plugin's own
+  tools serve the Lead. Three model-facing tools the kept `agent-team` service publishes — `list_agents`,
+  `send_message`, `interrupt_agent` — remain (§1, §2.3, §4.5, §6).
 
 ### 2.1 Compaction is enabled
 
@@ -105,11 +107,14 @@ generation 1 is the bare base name; generation 2 and later is `<base>-g<N>`, so 
 collides with a retired name. Spawning the same base name after a retirement is the replace operation:
 `probe-a` retired, `probe-a-g2` started, both recorded.
 
-The shipped team roster and this roster no longer present two surfaces: since v0.14.0 the patch disables
-the shipped `tool-agent-team` row (P2-07), so `list_agents` and that row's other tools are absent from a
-Lead's tool list, and `list_members` is the only list. The shipped roster's *service* is still mounted,
-which is why `list_members` still reports the members it created — as well as every adopted descendant and
-every member this plugin spawned.
+The shipped team roster and this roster no longer present two sets of spawn, wait and task tools: since
+v0.14.0 the patch disables the shipped `tool-agent-team` row (P2-07), so `spawn_teammate`, `wait_agent` and
+the `team_task_*` tools are absent from a Lead's tool list, and `list_members` is the only list. The
+shipped roster's *service* is still mounted, which is why `list_members` still reports the members it
+created — as well as every adopted descendant and every member this plugin spawned — and why the three
+model-facing tools that service publishes, `list_agents`, `send_message` and `interrupt_agent`, are still
+in that list: disabling the service row would take adoption, the membership test and the projection filter
+with it.
 
 The **work** never coexisted: since v0.13.0 the tasks a replacement hands over are rows on this Lead's own
 board (`task_board`), stored beside the roster record, and the plugin's handover no longer reads or points
@@ -576,12 +581,14 @@ stored preference must not change as a side effect of creating a member (ADR 001
 tool rather than five for the same reason in reverse: five names would triple the surface for one row shape
 (ADR 0017), and its two jobs — the board and the handover — reach the model as one vocabulary.
 
-The shipped roster tools are disabled by the bundle patch (P2-07, v0.14.0), and this plugin's tools are
-the whole model-facing surface; the patch entry itself states what it removes and what it costs
-(`cordis.patch.yml`). Every shipped tool has an equivalent here except `wait_agent`, which has none: there
-is no blocking wait, so a Lead re-reads `list_members` and wakes a member with `message_member`, reading
-`inactive` as "no turn is executing". The `agent-team` service row stays mounted, because adoption and the
-projection filter read it.
+The shipped roster's spawn, wait and task tools are disabled by the bundle patch (P2-07, v0.14.0) —
+`spawn_teammate`, `wait_agent` and the `team_task_*` tools — and this plugin's tools are the roster surface
+a Lead acts through; the patch entry itself states what it removes and what it costs
+(`cordis.patch.yml`). Three tools the shipped `agent-team` service publishes stay in the list:
+`list_agents`, `send_message` and `interrupt_agent`, because disabling that service row would take
+adoption, the membership test and the projection filter with it. Every tool the disabled row owned has an
+equivalent here except `wait_agent`, which has none: there is no blocking wait, so a Lead re-reads
+`list_members` and wakes a member with `message_member`, reading `inactive` as "no turn is executing".
 
 #### 4.5.1 Adoption is the control surface
 
@@ -625,9 +632,10 @@ and still retirable.
 - **No in-app view.** The roster is visible to the model through `list_members` only; there is no
   Settings page. The host's own subagent pickers still render what they always did, minus retired ids
   (ADR 0008).
-- **The shipped roster is still the source of the members it created.** Its tools are disabled (P2-07),
-  but its service is not, because adoption and the projection filter need it: `list_members` reports those
-  members, and this plugin keeps their tombstones.
+- **The shipped roster is still the source of the members it created.** Its spawn, wait and task tools are
+  disabled (P2-07), but its service is not, because adoption and the projection filter need it:
+  `list_members` reports those members, this plugin keeps their tombstones, and the service's three
+  model-facing tools (`list_agents`, `send_message`, `interrupt_agent`) stay registered.
 - **The shipped task board is out of reach.** A Lead's work lives on the owned board (§4.3.2); rows on the
   shipped board are not readable from this plugin, and the tools that could read them were disabled in
   v0.14.0. A retirement neither transfers nor un-owns them: a Lead that wants them re-creates them on
