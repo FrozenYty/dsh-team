@@ -154,7 +154,7 @@ export const HANDOFF_BRIEF_MAX = 2000
 
 /**
  * The named fields a stored template may interpolate: the successor's target, the predecessor's target,
- * its label, the assignment recorded for it, and the pointer to the shared team task board. A token
+ * its label, the assignment recorded for it, and the pointer to the Lead's own task board. A token
  * outside this set is a typo (`{asignment}`) that would otherwise reach a child as literal text, so it is
  * refused when the template is stored. `{assignment}` is the one required placeholder — a brief without
  * it tells a successor its predecessor's role and where the work is, but not what the work was.

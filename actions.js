@@ -120,16 +120,19 @@ export function memberRow(ctx, member) {
 /**
  * What a brief says about the work when the predecessor's record carries no assignment.
  *
- * The task board is a separate repository: this plugin reads stored task rows and reports them on the
- * brief (see `inheritedTasksLine`), but it never verifies them against the record, because a brief is not
- * a reviewer (ADR 0017).
+ * The pointer sentence below is kept word for word, "shared team task board" included, because P2-09's
+ * contract is that a member with no tasks starts from a byte-identical brief: it is pinned by a test, and
+ * the successor follows the sentence by asking the Lead or reading the board (`task_board`) anyway. What
+ * the plugin owns is the board the sentence means — the shipped board the words were originally written
+ * about is not read by this plugin and is not migrated (§4.3.2, ADR 0017).
  */
 const UNRECORDED_ASSIGNMENT = 'not recorded; take it from the shared team task board'
 
 /**
  * The pointer a successor follows to the work it inherited: the task board under the predecessor's name.
  * The board is not copied and not duplicated, because the rows may already have changed and the child
- * pays for every word.
+ * pays for every word. Since P2-09 that board is this Lead's own (§4.2) — the open rows a replacement hands
+ * over are named in full, bounded, by `inheritedTasksLine`; this sentence is what remains for the rest.
  * @param {string} target - the predecessor's model-facing target.
  * @returns {string} the sentence the brief points with.
  */

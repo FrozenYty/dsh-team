@@ -806,7 +806,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           template: {
             type: 'string',
             maxLength: HANDOFF_TEMPLATE_MAX,
-            description: 'The template to store, or an empty string to clear it. Placeholders: {successor} and {predecessor} (their targets), {label} (the predecessor\'s role), {assignment} (what it was doing; required, or the successor is not told what it inherited) and {task_board} (the pointer to the shared team task board). An unknown placeholder is refused. The successor\'s own prompt is always appended after the rendered template.',
+            description: 'The template to store, or an empty string to clear it. Placeholders: {successor} and {predecessor} (their targets), {label} (the predecessor\'s role), {assignment} (what it was doing; required, or the successor is not told what it inherited) and {task_board} (the pointer to this Lead\'s own task board). An unknown placeholder is refused. The successor\'s own prompt is always appended after the rendered template.',
           },
         },
       },

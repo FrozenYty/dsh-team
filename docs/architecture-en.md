@@ -481,12 +481,13 @@ characters, so a record cannot grow without limit.
 
 **Replace.** `spawn_member` with `replace: <target>` composes a short, self-contained prompt for the
 successor: the successor's name, the predecessor's target and label, the recorded assignment, the fact
-that the predecessor is gone, and a pointer to the shared team task board under the predecessor's name.
-The board is not copied and not duplicated. It then runs steps 2–6 on the predecessor. **The successor
-starts first and the predecessor is retired second, in the same call**: a failed start leaves the
-predecessor untouched and live, and a failed retirement returns `predecessor_retired: false` with the
-reason, so one more `retire_member` call recovers it. A target already retired is accepted, and its
-tombstone supplies the brief. ADR 0009 records the ordering and why the alternatives were rejected.
+that the predecessor is gone, its open tasks by id and title, and a pointer to the Lead's own task board
+under the predecessor's name. The board's rows are handed over, not copied and not duplicated. It then
+runs steps 2–6 on the predecessor. **The successor starts first and the predecessor is retired second, in
+the same call**: a failed start leaves the predecessor untouched and live, and a failed retirement returns
+`predecessor_retired: false` with the reason, so one more `retire_member` call recovers it. A target
+already retired is accepted, and its tombstone supplies the brief. ADR 0009 records the ordering and why
+the alternatives were rejected; ADR 0017 records the handover itself.
 
 **A successor starts with the options the caller names for it.** `spawn_options` applies to a
 replacement exactly as it does to a plain spawn; the predecessor's live record and its eventual
