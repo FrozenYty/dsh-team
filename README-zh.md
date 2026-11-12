@@ -14,7 +14,7 @@
 
 ## 状态
 
-- 当前版本：v0.20.0。
+- 当前版本：v0.21.1。
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
@@ -135,6 +135,34 @@ You review changes. Report only findings that change behaviour, with the file an
 - **官方的 `agent-team` 服务行保持挂载。** 收养、成员判定与投影过滤都要读它，所以补丁不能把它禁用——而这项服务自己也发布三件面向模型的工具：`list_agents`、`send_message`、`interrupt_agent`，它们因此仍留在 Lead 的工具列表里。补丁退役的是官方**工具**行（`tool-agent-team`）；移除那三件会连服务、连同本插件的收养一起带走（ADR 0017）。
 - **被剪除的墓碑无法恢复。** 成功移入产物的那次退役会执行每个 Lead 的回收站上限，删掉超出的最旧条目。墓碑保留 `trashPath`，状态记为 `trashState: pruned`，但字节已经不在，因此 `restore_member` 以 `reason: "pruned"` 拒绝，且绝不调用工作区（ADR 0011）。长期存续的团队若需要超过 20 份可恢复会话，请提前调大上限。
 - **任务板是交接通道，不是项目跟踪器。** 一条任务只有 id、标题、一段有上限的正文、`open`/`done` 和可选的 owner，刻意没有优先级、依赖、评论、子任务与截止日期（ADR 0017、ADR 0020）。依赖尤其如此：它需要一张图和一条排序规则，而交接还得决定“依赖仍未完成的任务怎么办”；这个先后顺序留给 Lead 判断。任务板只回答一个问题：继任者现在扛着什么。
+
+## 成本与模型路由
+
+**这一节要回答的怀疑。** 接上中转供应商之后，所有者自己的账户仍在计费，本插件的成员看起来就是嫌疑人。并不是：下面写清楚本插件选择什么、Harness 替它选择什么，以及这份 profile 里唯一一个不看会话路由、自己钉死端点的组件。
+
+### 谁来选成员的模型
+
+`spawn_member` 只在调用方提供时转发 `spawn_options.agent_options`；不带 `spawn_options` 时，请求就是 `{ prompt, parent }`，插件不指定任何 `provider` 与 `model`（ADR 0016）。此后的一切由 Harness 决定：
+
+- **继承的是父会话当前的模型路由，而不是创建时的快照。** 子代理 seam 从父会话最近一次记录的请求头里取 `provider`、`model` 与 `reasoningEffort`，只有在还没有记录过任何请求时才退回父 Agent 的创建选项（`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-92`）。Lead 先切到中转再 spawn，成员拿到的就是中转路由；那个旧快照是退路，不是常规路径。
+- **成员不会冻结在启动时的模型上。** 同一套解析在每次 spawn 时都执行，因此路由改动之后启动的成员继承新路由；创建时的退路只覆盖“还没发过请求”的父会话（`:49-92`）。
+- **路由一变，seam 就会丢掉父会话的 effort**，让选中的模型解析自己的默认值，而不是带着它从未声明过的 effort 去失败（`:88-90`）。
+
+插件自己的活，就是把调用方点名的那几项转发出去。它刻意不在每次 spawn 时强塞一条显式路由：父会话的 `reasoningEffort` 只在路由没变时才会保留（`:88-90`），而官方 subagent 工具那条路由预检并不在这条路径上（`@deepseek-ai/dsh-tool-subagent/lib/index.js:440-448`），所以强塞一个该路由并不支持的 effort，会在成员已经被记为启动之后，让子代理的第一条请求失败。真正会拒绝它的是 provider 一侧的能力门（`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`）；Session 级的路由白名单属于官方工具（`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`），本插件不使用它。
+
+### 没有模型调用，压缩行走会话自己的路由
+
+bundle 自己不发起任何模型调用：没有任何 Host 模块碰 `ctx.llm`，也没有任何代码路径调用 `prepareCall`。补丁启用的那一行 `compaction-basic`，摘要目标是 `configured ?? session.requestHeader().config ?? agent.options`（`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`），也就是会话自己的路由；因此在实测的 profile 里，启用它没有带来新的计费。
+
+### 例外：网页搜索钉死了自己的端点
+
+`web_search` 不属于本插件，而它是这里唯一不看会话路由的组件。基础 bundle 的补丁选中 `searchProvider: deepseek-official`（`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`），而 `dsh-web-search-deepseek` 把端点和模型钉成 `https://api.deepseek.com/anthropic/v1` 与 `deepseek-v4-flash`（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`），无论聊天路由是什么都发往那里（`:319-320`）。在实测的 profile 里，它产生了 107 次官方请求，其中两次发生在某个会话已经切到中转之后。
+
+**为什么不能简单地改指别处。** 那个插件要求检索在服务端完成：它读取 `web_search_tool_result` 块，一个都没有就抛 `WEB_PROVIDER_ERROR`（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:61-62`）。一个提供 Anthropic 形状 Messages API 的中转端点照样可能把搜索退回给调用方：直接测中转的 `/v1/messages`，它返回 200，但在带上 `web_search` 工具时回答 `stop_reason: "tool_use"`——正是那个会被拒绝的形状；而它的 `/anthropic/v1/messages` 路径返回 404。
+
+**两条诚实的出路。** 要么在 profile 里禁用那一行（或 `web` 行），不再有请求发往那个端点，搜索就此不可用；要么把它指向真正执行原生搜索的端点。区分两者的测试只有一次请求：带 `web_search` 工具发一条 Messages 请求，读它的回答。出现 `web_search_tool_result` 块，或者一个带回结果的正常结束，说明端点自己在跑搜索；以 `tool_use` 停下，说明它是在让调用方去跑，而本插件会拒绝这种回答。
+
+边界就一句话：**会话的路由管住每一个聊天请求；自己钉死端点的组件是例外，本插件不属于这一类。**
 
 ## 运行要求与兼容性
 

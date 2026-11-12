@@ -204,6 +204,29 @@ A retirement that actually moved an artifact in also enforces the per-Lead cap i
 step 5, ADR 0011, ADR 0012): the move is the one moment the trash grows, so nothing is swept on a timer
 and nothing is swept on a read.
 
+### 2.6 Costs and model routes
+
+The plugin chooses no model. `spawn_member` forwards `spawn_options.agent_options` only when the caller
+supplies it (ADR 0016); otherwise the request is `{ prompt, parent }` and the subagent seam resolves the child
+from the parent Session's latest logged request header, falling back to the parent Agent's creation options
+only while no request has been logged (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-92`).
+Inheritance is therefore dynamic — a member spawned after the Lead switched routes inherits the new route —
+and the seam drops the parent's effort once the route changed (`:88-90`). The plugin does not force an explicit
+route: the parent's effort survives only while the route is unchanged (`:88-90`), the shipped tool's route
+preflight is not on this path (`@deepseek-ai/dsh-tool-subagent/lib/index.js:440-448`), and the capability gate
+is the provider's (`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`), so a forced effort the route does not
+support would fail the child's first request after the member is already recorded as started. The Session
+route allowlist belongs to the shipped tool (`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`), which this
+plugin does not use.
+
+The bundle makes no LLM call, and the `compaction-basic` row it enables summarises on the session's own route
+(`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`, §2.1). The measured exception is web search,
+outside this plugin: the base bundle's patch selects `searchProvider: deepseek-official`
+(`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`), and `dsh-web-search-deepseek` pins its endpoint and model
+(`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`, `:319-320`) and requires a
+`web_search_tool_result` answer (`:61-62`). No session route reaches it; a profile either disables that row or
+points it at an endpoint that executes native search. The user-facing statement is in the README pair.
+
 ## 3. Why the shipped roster is not extended
 
 The shipped roster is a fold over the Lead Session's append-only event log. Member phases are
@@ -240,7 +263,9 @@ subagent tree and process-local; draining a child releases its slot.
 through `spawn_member.spawn_options` (§4.5): `cwd`, `agentOptions` and `agentPreset`. Every field omitted
 means the member inherits the Lead's value, and one exception is recorded here because the rule reads as
 total without it: a changed `provider` or `model` without `reasoningEffort` lets the new route resolve its
-own default rather than inheriting the Lead's effort. A spawn that names none composes exactly the request
+own default rather than inheriting the Lead's effort. Here the Lead's value is the Lead's current route —
+resolved at each spawn from the Session's latest logged request header, not from the options the Lead Agent
+was created with (§2.6). A spawn that names none composes exactly the request
 it always did — a test pins the exact object. `cwd` is forwarded verbatim: the seam resolves a relative
 path against the parent's cwd (`resolveDirectory`), and a child keeps the parent's permission roots, so a
 directory outside the sandbox grant stays denied; a plugin that pre-resolved the path would disagree with

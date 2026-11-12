@@ -1382,3 +1382,61 @@
   new row appears on the next `list`/`projections`/`follow` read or `control` frame. The four frozen names
   in ADR 0014 and the three `cordis.patch.yml` entries were not touched.
 - **Version.** `0.21.0`: the shipped panel's content changes, which is behaviour, not a comment.
+
+## 2026-11-12 — the cost and route boundary, measured rather than suspected (v0.21.1)
+
+- **The report this answers.** After the owner connected a relay provider, their own account was still
+  billed, and this plugin's members were the suspects. A read-only investigation of the installed Harness and
+  of the profile's session logs found the opposite: nothing here chooses a route on its own, and the one
+  component that does is web search, outside this plugin. No behaviour changed; this release is the record
+  and the documentation of that boundary.
+- **The plugin forwards, the Harness resolves.** `spawn_member` sends `spawn_options.agent_options` only when
+  the caller supplies it (ADR 0016). With none, the request is `{ prompt, parent }`, and
+  `@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-92` resolves the child from the parent Session's
+  latest logged request header — `provider`, `model`, `reasoningEffort`, then `maxTokens` and the requested
+  fields — falling back to `parent.options` only while no request has been logged. The creation-time snapshot
+  a reader may have seen is that fallback, not the normal path: inheritance runs per spawn, so a member
+  started after the Lead moved to the relay inherits the relay.
+- **A changed route drops the parent's effort** (`:88-90`), which is why `spawn_member` is unchanged on
+  purpose. Forcing an explicit route would put an effort the route may not support on a child whose member
+  record is already written, and the shipped tool's preflight that would catch it is not on this path
+  (`@deepseek-ai/dsh-tool-subagent/lib/index.js:440-448`). The capability gate is the provider's
+  (`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`), and the Session route allowlist belongs to the shipped
+  tool (`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`), which this plugin does not use.
+- **The machine evidence agreed.** Across the 57 session logs the investigation read (the directory held 60
+  when this entry was written), every child Session mirrored its parent's route in both directions: 15
+  children, the official-route ones at `seq 1394`, `1503` and `1994` — all before their parent switched at
+  `seq 3495` — and the relay children at `seq 6664` and `7119`.
+- **No LLM call, and compaction follows the session.** No Host module in this repository reaches `ctx.llm`,
+  and no code path calls `prepareCall`. The `compaction-basic` row the patch enables resolves
+  `configured ?? session.requestHeader().config ?? agent.options`
+  (`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`), the session's own route, so enabling it started
+  no new billing.
+- **The exception is web search, and it is not this plugin's to change.** The base bundle's patch selects
+  `searchProvider: deepseek-official` (`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`), and
+  `dsh-web-search-deepseek` pins `https://api.deepseek.com/anthropic/v1` and `deepseek-v4-flash`
+  (`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`, `:319-320`). It produced 107 official requests,
+  two of them after a session had switched to the relay. Repointing it is not a config edit: it requires a
+  `web_search_tool_result` block and throws `WEB_PROVIDER_ERROR` without one (`:61-62`); a direct test of the
+  relay's `/v1/messages` answered 200 with `stop_reason: "tool_use"` when handed the `web_search` tool — the
+  shape that plugin rejects — while its `/anthropic/v1/messages` path answered 404. The owner's options are to
+  disable that row or to use an endpoint that executes native search.
+- **No ADR, and why.** The boundary is an observation, not a decision: nothing was built, rejected in code, or
+  made expensive to reverse. The one decision nearby — forward only what the caller supplies, never force a
+  route — is ADR 0016's, and that ADR already records that the plugin reports what it forwarded rather than
+  reading the child's resolved options. A new ADR would restate it and lend a measurement the authority of a
+  decision.
+- **Documents.** The README pair gains "Costs and model routes" / “成本与模型路由” with three subsections:
+  what chooses a member's model, no LLM call and the compaction row, and the web-search exception with the
+  two honest options and the request that separates them. `docs/architecture-en.md` §2.6 and its Chinese pair
+  state the same facts compactly, §4.1 now says what "inherits the Lead's value" resolves to, and the README
+  Status block is advanced to v0.21.1 — it still read v0.20.0 while `package.json` said 0.21.0.
+- **How this was verified.** `node scripts/check.mjs` prints `check passed` after the last edit;
+  `node --test --test-isolation=none tests/*.test.mjs` is 176 tests, 176 passing. Bilingual parity is
+  unchanged: README headings 19/19 before and 23/23 after, architecture headings 25/25 before and 26/26
+  after, and the locale-key and pair checks inside `check.mjs` pass before and after.
+- **What stays the owner's decision.** Which of the two web-search options to take, and whether to install.
+  No install, no `plugin_manager` call and no new live call was made for this release; the log figures are
+  what the running profile had already written.
+- **Version.** `0.21.1`: documentation of a measured boundary, with the Status block's version line changed
+  alongside `package.json`.
