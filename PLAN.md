@@ -132,6 +132,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   `ctx.subagents.listDescendants`, `memberRow` adds `child_id`, the Settings panel and its bridge are
   deleted in the same change (ADR 0008), and the suite covers adoption with fakes. A live install is
   the owner's decision.
+- [x] **P2-15** Restore a blocking wait on this plugin's own surface (`wait_members`, v0.15.0).
+  Done when a Lead can block inside one turn until one of its members changes live state or a bounded
+  timeout expires, the wait reports what changed, it observes only changes that happen after the call
+  starts, it never wakes a member, it refuses a non-Lead caller and an out-of-range timeout, and a roster
+  with nothing running answers `no_progress` instead of blocking.
+  Delivered: one tool, `wait_members`, on the Harness's own `agent/status` event (`idle` ⇄ `running`),
+  filtered by this Lead's roster child ids — not on the shipped `agentTeams.waitForChange`, which is
+  notified from that same event but only for an agent its own membership test resolves, and a member
+  spawned through `ctx.subagents` is not in its journal (`dsh-experimental-agent-team`
+  `lib/types/roster.js:75-79`; its observer is `lib/index.js:1477-1480`). The timeout defaults to 30 s and
+  is refused above 1 h; the description and the README state what it does not wait for. The live
+  subscription is the owner's install check.
 - [x] **P4-03** Retention: bound the session trash and the tombstone list.
   Done when a documented policy exists for `~/.dsh/team-roster/trash` and for tombstones whose Lead
   Session no longer exists, and running it twice leaves the same state.
