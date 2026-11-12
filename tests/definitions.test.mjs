@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { spawnMember } from '../actions.js'
+import { listMembers, messageMember, spawnMember, taskBoard } from '../actions.js'
 import { DEFINITION_DIR, DEFINITION_FILE_MAX, DEFINITION_LIMIT, parseDefinition } from '../definitions.js'
 import { apply } from '../index.js'
 import { readRoster } from '../roster.js'
@@ -357,4 +357,246 @@ test('a definition that is not declared lists the names that are', async () => {
   const missing = await spawnMember(call(fakeCtx({ cwd: bare }), memoryTable(), { definition: 'reviewer' }))
   assert.equal(missing.reason, 'definition-not-found')
   assert.deepEqual(missing.available, [])
+})
+
+/**
+ * A definition whose `assignment` is the role's standing sentence — true of the job, not of what any one
+ * incumbent is doing. On a replacement it is the value that must lose to the predecessor's recorded
+ * assignment: a file that silently replaced it would brief each successor with the job instead of the
+ * work, which is the defect v0.17.0 fixes (ADR 0019).
+ */
+const STANDING_ASSIGNMENT = `---
+name: reviewer
+label: Check the diff
+assignment: Keep the parser green
+---
+Review the diff and report only findings that change behaviour.
+`
+
+/** The same role, declared one-shot: the file's `ephemeral` applies on a replace too (ADR 0019). */
+const ONE_SHOT = `---
+name: reviewer
+label: Check the diff
+assignment: Keep the parser green
+ephemeral: true
+---
+Review the diff and report only findings that change behaviour.
+`
+
+/** The definition's other start options: cwd, model route and preset, all of them the role's. */
+const ROLE_OPTIONS = `---
+name: reviewer
+label: Check the diff
+cwd: packages/adapter
+provider: cheap-provider
+model: cheap-model
+max_tokens: 4096
+agent_preset: reader
+---
+Review the diff and report only findings that change behaviour.
+`
+
+/** One definition-backed spawn's record, by base name and generation. */
+const recordNamed = (table, name, generation) => readRoster(table, 'lead-1').members
+  .find((member) => member.name === name && member.generation === generation)
+
+/** Start the predecessor every replacement test works from: a recorded assignment, no definition. */
+const recordedPredecessor = (ctx, table) => spawnMember(call(ctx, table, {
+  name: 'reviewer',
+  label: 'Check the diff',
+  prompt: 'Start on the parser.',
+  assignment: 'Finish the parser unit tests.',
+}))
+
+test('a replacement inherits the recorded assignment, not the definition\'s standing sentence', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', STANDING_ASSIGNMENT)
+  const ctx = fakeCtx({ cwd })
+  const table = memoryTable()
+  await recordedPredecessor(ctx, table)
+
+  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
+
+  assert.equal(successor.target, 'reviewer-g2')
+  // ADR 0009's inheritance, which the file's standing sentence must not defeat: the successor is
+  // briefed with what the predecessor was doing, not with the role the file describes.
+  assert.equal(successor.assignment, 'Finish the parser unit tests.')
+  assert.equal(successor.definition.assignment, 'predecessor', 'the answer says which assignment won and where it came from')
+  assert.ok(!successor.definition.from_file.includes('assignment'), 'the file supplied none of the winner')
+  const brief = ctx.started.at(-1).prompt[0].text
+  assert.match(brief, /Finish the parser unit tests\./)
+  assert.ok(!brief.includes('Keep the parser green'), 'the standing sentence never reaches a successor')
+  assert.equal(recordNamed(table, 'reviewer', 2).assignment, 'Finish the parser unit tests.', 'the record carries it too')
+  assert.equal(recordNamed(table, 'reviewer', 1).assignment, 'Finish the parser unit tests.', 'the tombstone keeps what it was doing')
+})
+
+test('an assignment on the replace call wins over both the record and the definition', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', STANDING_ASSIGNMENT)
+  const ctx = fakeCtx({ cwd })
+  const table = memoryTable()
+  await recordedPredecessor(ctx, table)
+
+  const successor = await spawnMember(call(ctx, table, {
+    replace: 'reviewer',
+    definition: 'reviewer',
+    assignment: 'Rewrite the parser for the new grammar.',
+  }))
+
+  assert.equal(successor.assignment, 'Rewrite the parser for the new grammar.')
+  assert.equal(successor.definition.assignment, 'call')
+  assert.ok(successor.definition.overridden.includes('assignment'), 'the file declared one and the call replaced it')
+  assert.ok(!successor.definition.from_file.includes('assignment'))
+  assert.equal(recordNamed(table, 'reviewer', 2).assignment, 'Rewrite the parser for the new grammar.')
+  // The brief describes the predecessor, so its assignment line is still the predecessor's record — and
+  // the call's assignment is what a *later* successor of this member will be briefed with.
+  const brief = ctx.started.at(-1).prompt[0].text
+  assert.match(brief, /What it was doing: Finish the parser unit tests\./)
+  assert.ok(!brief.includes('Keep the parser green'))
+})
+
+test('a definition assignment applies when the predecessor recorded none', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', STANDING_ASSIGNMENT)
+  const ctx = fakeCtx({ cwd })
+  const table = memoryTable()
+  await spawnMember(call(ctx, table, {
+    name: 'reviewer',
+    label: 'Check the diff',
+    prompt: 'Start on the parser.',
+  }))
+
+  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
+
+  assert.equal(successor.assignment, 'Keep the parser green', 'nothing to inherit, so the file describes the work')
+  assert.equal(successor.definition.assignment, 'file')
+  assert.ok(successor.definition.from_file.includes('assignment'))
+  // The brief describes the predecessor, which recorded nothing, so its fallback sentence is honest —
+  // the successor's own assignment is the file's standing one, held on its record.
+  assert.match(ctx.started.at(-1).prompt[0].text, /not recorded; take it from the shared team task board/)
+  assert.equal(recordNamed(table, 'reviewer', 2).assignment, 'Keep the parser green')
+})
+
+test('a fresh spawn from a definition still takes the file\'s assignment, and reports it', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', STANDING_ASSIGNMENT)
+  const ctx = fakeCtx({ cwd })
+
+  const born = await spawnMember(call(ctx, memoryTable(), { definition: 'reviewer' }))
+
+  assert.equal(born.assignment, 'Keep the parser green', 'no replace, so nothing changed for a fresh spawn')
+  assert.equal(born.definition.assignment, 'file')
+  assert.ok(born.definition.from_file.includes('assignment'))
+})
+
+test('the file\'s ephemeral applies on a replace, and the sweep then orphans the work it inherited', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', ONE_SHOT)
+  const ctx = fakeCtx({ cwd })
+  const table = memoryTable()
+  await recordedPredecessor(ctx, table)
+  const task = await taskBoard({
+    table,
+    leadSessionId: 'lead-1',
+    action: 'create',
+    title: 'Recheck the curve',
+    owner: 'reviewer',
+  })
+
+  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
+
+  // The file describes the role, so a replace starts the role — including its one-shot nature.
+  assert.equal(successor.target, 'reviewer-g2')
+  assert.equal(successor.ephemeral, true)
+  assert.equal(successor.assignment, 'Finish the parser unit tests.', 'the inheritance still wins the assignment')
+  assert.equal(successor.transferred, 1, 'the predecessor\'s work moved to the successor first')
+  assert.equal(typeof recordNamed(table, 'reviewer', 2).startedAt, 'string', 'the sweep has its evidence')
+
+  // The consequence the matrix states plainly: a one-shot successor retires itself once its turn ends,
+  // and the work it just inherited loses its owner (ADR 0017) unless the Lead messages it first.
+  const after = await listMembers(call(ctx, table))
+  assert.equal(after.swept, 1)
+  assert.deepEqual(after.swept_targets, ['reviewer-g2'])
+  assert.equal(after.unowned, 1)
+  assert.deepEqual(after.unowned_tasks, [task.task.id])
+  assert.equal(recordNamed(table, 'reviewer', 2).phase, 'retired')
+  const board = await taskBoard({ table, leadSessionId: 'lead-1', action: 'list' })
+  assert.equal(board.tasks.find((row) => row.id === task.task.id).owner, undefined)
+})
+
+test('the file\'s cwd and model fields apply on a replace; the predecessor\'s start options are not inherited', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', ROLE_OPTIONS)
+  const ctx = fakeCtx({ cwd })
+  const table = memoryTable()
+  await spawnMember(call(ctx, table, {
+    name: 'reviewer',
+    label: 'Check the diff',
+    prompt: 'Start on the parser.',
+    assignment: 'Finish the parser unit tests.',
+    cwd: 'packages/legacy',
+    agentOptions: { model: 'predecessor-model' },
+  }))
+
+  await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
+
+  // The file describes the role's environment; the predecessor's own start options are not on its
+  // record, so they cannot be inherited and the file is what supplies these fields.
+  assert.equal(ctx.started.at(-1).cwd, 'packages/adapter')
+  assert.deepEqual(ctx.started.at(-1).agentOptions, {
+    provider: 'cheap-provider',
+    model: 'cheap-model',
+    maxTokens: 4096,
+  })
+  assert.equal(ctx.started.at(-1).agentPreset, 'reader')
+
+  // ... and every one of them is still the call's to override, field by field.
+  const overridden = await spawnMember(call(ctx, table, {
+    replace: 'reviewer-g2',
+    definition: 'reviewer',
+    cwd: 'packages/call',
+    agentOptions: { model: 'call-model' },
+  }))
+  assert.equal(ctx.started.at(-1).cwd, 'packages/call')
+  assert.deepEqual(ctx.started.at(-1).agentOptions, {
+    provider: 'cheap-provider',
+    model: 'call-model',
+    maxTokens: 4096,
+  })
+  assert.equal(ctx.started.at(-1).agentPreset, 'reader')
+  assert.ok(overridden.definition.overridden.includes('cwd'))
+  assert.ok(overridden.definition.overridden.includes('model'))
+  assert.deepEqual(overridden.started_with, {
+    cwd: 'packages/call',
+    agent_options: { provider: 'cheap-provider', model: 'call-model', max_tokens: 4096 },
+    agent_preset: 'reader',
+  })
+})
+
+test('a message replaces the assignment and clears the ephemeral flag a definition set', async () => {
+  const { cwd, write } = await workspace()
+  await write('reviewer.md', ONE_SHOT)
+  const ctx = fakeCtx({ cwd })
+  const table = memoryTable()
+  await recordedPredecessor(ctx, table)
+  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
+  assert.equal(successor.ephemeral, true)
+
+  // A message is where the definition stops speaking: it is not read again, and the two fields it
+  // owned — the assignment and the one-shot flag — are the call's from here on (ADR 0013, ADR 0019).
+  const messaged = await messageMember(call(ctx, table, {
+    target: 'reviewer-g2',
+    message: 'The parser moved on; take the cache change.',
+    assignment: 'Review the cache change.',
+  }))
+  assert.equal(messaged.sent, true)
+  assert.equal(messaged.ephemeral, false)
+  assert.equal(messaged.assignment, 'Review the cache change.')
+  const record = recordNamed(table, 'reviewer', 2)
+  assert.equal(record.ephemeral, undefined)
+  assert.equal(record.assignment, 'Review the cache change.')
+
+  const listed = await listMembers(call(ctx, table))
+  assert.equal(listed.swept, undefined, 'the message declared it is not one-shot')
+  assert.equal(listed.members.find((member) => member.target === 'reviewer-g2').phase, 'active')
 })

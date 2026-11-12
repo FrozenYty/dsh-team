@@ -664,15 +664,24 @@ function startedWith({ cwd, agentOptions, agentPreset }) {
  * which happened. Nothing of the definition is dropped silently, which is the failure this report
  * exists to prevent.
  *
+ * **`assignment` has one more source, and it outranks the file on a replace.** A successor continues the
+ * predecessor's work, so the assignment recorded on the predecessor is what it inherits (ADR 0009), and
+ * a definition file — whose `assignment` is the role's standing sentence — must not defeat that. The
+ * order is: the call's assignment, then the predecessor's recorded one, then the file's, which applies
+ * only when there is nothing to inherit. The report's `assignment` names which of the three won, so the
+ * merge is visible rather than inferred (ADR 0019).
+ *
  * The report is computed here, next to the merge, so the fields it claims cannot drift from the values
  * the request is actually composed with.
  * @param {object} definition - one parsed definition: `{name, path, prompt, fields}`.
  * @param {object} call - the model's arguments, as `spawnMember` received them.
+ * @param {object|undefined} predecessor - the member a `replace` names, when there is one; its recorded
+ *   assignment is the only value a successor inherits from it.
  * @returns {{name?: string, label?: string, prompt: string, assignment?: string, ephemeral?: boolean,
  *   cwd?: string, agentOptions?: object, agentPreset?: string, report: object}} the values to start
  *   with, and the report the tool returns.
  */
-function applyDefinition(definition, call) {
+function applyDefinition(definition, call, predecessor) {
   const file = definition.fields
   const fromFile = []
   const overridden = []
@@ -687,7 +696,25 @@ function applyDefinition(definition, call) {
   }
   const name = take('name', call.name !== undefined, call.name)
   const label = take('label', call.label !== undefined, call.label)
-  const assignment = take('assignment', call.assignment !== undefined, call.assignment)
+  // A stored assignment is a non-empty string; an older or hand-edited record that holds an empty one
+  // has nothing to inherit, exactly as `planMember` already treats it.
+  const inherited = typeof predecessor?.assignment === 'string' && predecessor.assignment.length > 0
+    ? predecessor.assignment
+    : undefined
+  let assignment
+  let assignmentSource
+  if (call.assignment !== undefined) {
+    assignment = call.assignment
+    assignmentSource = 'call'
+    if (file.assignment !== undefined) overridden.push('assignment')
+  } else if (inherited !== undefined) {
+    assignment = inherited
+    assignmentSource = 'predecessor'
+  } else if (file.assignment !== undefined) {
+    assignment = file.assignment
+    assignmentSource = 'file'
+    fromFile.push('assignment')
+  }
   const ephemeral = take('ephemeral', call.ephemeral !== undefined, call.ephemeral)
   const cwd = take('cwd', call.cwd !== undefined, call.cwd)
   const agentPreset = take('agent_preset', call.agentPreset !== undefined, call.agentPreset)
@@ -699,6 +726,15 @@ function applyDefinition(definition, call) {
   }
   // The body always leads: a definition that supplied the role is never thrown away by a task string.
   fromFile.push('prompt')
+  const report = {
+    name: definition.name,
+    path: definition.path,
+    prompt: call.prompt === undefined ? 'file' : 'file+call',
+    from_file: fromFile,
+    overridden,
+  }
+  // Absent when no assignment applies at all: there is then no winner to name.
+  if (assignmentSource !== undefined) report.assignment = assignmentSource
   return {
     name,
     label,
@@ -708,13 +744,7 @@ function applyDefinition(definition, call) {
     cwd,
     agentOptions: Object.keys(agentOptions).length === 0 ? undefined : agentOptions,
     agentPreset,
-    report: {
-      name: definition.name,
-      path: definition.path,
-      prompt: call.prompt === undefined ? 'file' : 'file+call',
-      from_file: fromFile,
-      overridden,
-    },
+    report,
   }
 }
 
@@ -814,7 +844,9 @@ function spawnRefusal(error, { agentOptions, agentPreset }) {
  *   one-shot (§4.3.1). `cwd`, `agentOptions` and `agentPreset` are the tool's `spawn_options` fields;
  *   each one omitted means the member inherits the Lead's value (ADR 0016). `definition` names a member
  *   definition under `team/` in the Lead's working directory: its fields fill whatever the call omitted,
- *   and a definition that cannot be read is a typed refusal, not a throw (ADR 0018).
+ *   its `assignment` yields to the predecessor's recorded one on a `replace` (the call's assignment
+ *   still wins over both), and a definition that cannot be read is a typed refusal, not a throw
+ *   (ADR 0018, ADR 0019).
  * @returns {Promise<object>} the member row the tool returns, or the definition refusal.
  */
 export async function spawnMember({
@@ -840,12 +872,29 @@ export async function spawnMember({
   const caller = requireLiveLead('spawn_member', leadSessionId, leadAgent)
   // The definition layer comes first, before the sweep and before any reservation: a call that names a
   // file it cannot read must change nothing, and must not retire a finished member as a side effect of
-  // failing. A refusal is the tool's typed answer, not a thrown host error (ADR 0018, ADR 0016).
-  let defined
+  // failing. A refusal is the tool's typed answer, not a thrown host error (ADR 0018, ADR 0016). Loading
+  // is the pure half — resolving the directory and reading the file — and the merge runs below, after
+  // the predecessor is known, because what a successor inherits lives on that record (ADR 0019).
+  let loaded
   if (definition !== undefined) {
-    const loaded = await loadDefinition({ ctx, agent: caller, name: definition, signal })
+    loaded = await loadDefinition({ ctx, agent: caller, name: definition, signal })
     if (loaded.refusal !== undefined) return { started: false, ...loaded.refusal }
-    const applied = applyDefinition(loaded.definition, { name, label, prompt, assignment, ephemeral, cwd, agentOptions, agentPreset })
+  }
+  const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
+  const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
+  const predecessor = replace === undefined
+    ? undefined
+    : roster.members.find((member) => targetOf(member) === replace)
+  if (replace !== undefined && predecessor === undefined) {
+    throw new Error(`spawn_member: no member named "${replace}" in the roster, live or retired`)
+  }
+  let defined
+  if (loaded !== undefined) {
+    const applied = applyDefinition(
+      loaded.definition,
+      { name, label, prompt, assignment, ephemeral, cwd, agentOptions, agentPreset },
+      predecessor,
+    )
     name = applied.name
     label = applied.label
     prompt = applied.prompt
@@ -858,19 +907,13 @@ export async function spawnMember({
     // "one bad file never hides the others" rule (ADR 0018).
     defined = { definition: loaded.problems.length === 0 ? applied.report : { ...applied.report, problems: loaded.problems } }
   }
-  const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
-  const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-  const predecessor = replace === undefined
-    ? undefined
-    : roster.members.find((member) => targetOf(member) === replace)
-  if (replace !== undefined && predecessor === undefined) {
-    throw new Error(`spawn_member: no member named "${replace}" in the roster, live or retired`)
-  }
   const baseName = typeof name === 'string' && name.length > 0 ? name : predecessor?.name
   if (baseName === undefined) throw new Error('spawn_member: name is required unless replace or definition supplies one')
   const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'spawn_member')
   // A successor continues the predecessor's work, so it inherits the recorded assignment unless the
-  // model records a different one. Without this, a brief would thin out one generation at a time.
+  // model records a different one. Without this, a brief would thin out one generation at a time. A
+  // definition's own `assignment` has already lost here when the predecessor had one to inherit (ADR
+  // 0019), so this fallback only serves the inline path.
   const planned = planMember(roster, baseName, label, recorded ?? predecessor?.assignment, ephemeral === true)
   if (predecessor !== undefined) planned.predecessor = predecessor.memberId
   const successorTarget = targetOf(planned)

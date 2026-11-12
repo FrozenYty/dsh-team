@@ -164,8 +164,13 @@ quoted value loses its quotes without any escape being interpreted.
 
 **The call wins, and the result says so.** Every field passed to `spawn_member` overrides the file's, and
 the answer's `definition` object names the file, what came from it (`from_file`) and what you overrode
-(`overridden`). The one field the call cannot replace is `prompt`: the body is the member's standing
-prompt and the call's `prompt` is appended after it, which `definition.prompt` reports as `file+call`.
+(`overridden`). Two fields have a source the call is not. `prompt` is the one the call cannot replace: the
+body is the member's standing prompt and the call's `prompt` is appended after it, which
+`definition.prompt` reports as `file+call`. And on a `replace` the assignment recorded on the predecessor
+outranks the file's, because a successor inherits the work and not the role — the file's applies only when
+the predecessor recorded none — and `definition.assignment` reports which of `call`, `predecessor` or
+`file` won. The file's `cwd`, model route and preset do apply to a successor; the predecessor's are not
+inherited, because they are start options and not record fields (ADR 0019).
 
 **One bad file does not hide the others.** A malformed definition is reported by path and line in
 `definition.problems` on an otherwise successful spawn, and the valid definitions still work. A name
@@ -231,6 +236,12 @@ the sweep retired nobody.
 
 Messaging an ephemeral member clears the flag: sending it work again is a declaration that it is not
 one-shot after all, and without that rule a sweep could eat work a just-delivered message meant to keep.
+
+**A definition can make a successor one-shot.** `ephemeral: true` in the file applies on a `replace` too,
+because the file describes the role and a replacement starts that role. The consequence is the one to
+know before using it: the successor retires itself at the end of its turn, and the tasks the replacement
+just handed to it become unowned — the sweep reports them in `unowned` and `unowned_tasks`. Message the
+successor once to clear the flag, or pass `ephemeral: false` on the replace call (ADR 0019).
 
 ## Limits and deliberate omissions
 
