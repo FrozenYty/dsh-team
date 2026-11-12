@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.25.0.
+- Current version: v0.25.1.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -78,10 +78,11 @@ directory did not, on purpose (ADR 0014).
   being set, cleared and never guessed; and the lifetime layer (v0.25.0) — the declared lifetime and its
   refusal, the three sweep conditions, the board's veto and the ids it reports, the consent gate through the
   real `retire_member` tool both ways, a message re-opening a one-shot member without re-declaring it, the
-  retask advice, and the two record fields the advice counts. A live start from a definition, a live
-  team-file read, a live `list_my_tasks` call from inside a member, the route on a real child's own
-  `request/header`, and a live sweep and consent refusal are the owner's install check (ADR 0018, ADR 0021,
-  ADR 0022, ADR 0024, ADR 0026).
+  retask advice, and the two record fields the advice counts — narrowed in v0.25.1 to what a member carries,
+  with a case per carrier and the bare member that retires on a stated reason or is refused `needs-reason`
+  without one. A live start from a definition, a live team-file read, a live `list_my_tasks` call from
+  inside a member, the route on a real child's own `request/header`, and a live sweep and consent refusal
+  are the owner's install check (ADR 0018, ADR 0021, ADR 0022, ADR 0024, ADR 0026).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -108,7 +109,7 @@ that is a move rather than a deletion.
 | `wait_members` | Block this turn until a member's live status changes or a timeout expires, and report which member changed and into what. Bounded: 30 seconds by default, at most one hour. It answers `no_progress` at once when no member is running or provisioning, never wakes anyone, and does not wait for board writes or message processing. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. A message never changes a lifetime: messaging a one-shot member re-opens it (its finished-evidence is dropped, and the result says `reopened: true` with the unchanged `lifetime`), so the next sweep leaves it alone until it has run and stopped again. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
-| `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. **A member whose lifetime is `standing` is not retired by one call**: it answers `retired: false, reason: "needs-confirmation"` with the question to put to the person, and retires on the next call, which carries their answer in `confirmed`, quoted verbatim. A one-shot member, and a successor a replacement installs, need no confirmation. |
+| `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. **What one call may do depends on what the standing member still carries**: with a recorded assignment, an open row or evidence it was re-tasked, it answers `retired: false, reason: "needs-confirmation"`, names what it found in `carries`, and retires on the next call carrying the person's answer in `confirmed`, quoted verbatim; with none of the three it is housekeeping, and a non-empty `reason` retires it in one call — a call that states no reason answers `reason: "needs-reason"`. A one-shot member, and a successor a replacement installs, need no confirmation. |
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to store it, pass an empty string to return to the built-in. A `team/team.md` in the Lead's project wins while it exists, so a store or clear is refused with that file's path and the instruction to edit it. |
@@ -319,17 +320,29 @@ working; passing both is accepted when they agree and refused when they do not. 
 `lifetime` on every row.
 
 **A standing member is never retired automatically.** It is not eligible for the sweep however long it
-idles, and `retire_member` will not end it on the model's say-so: the first call retires nothing and answers
-`retired: false, reason: "needs-confirmation"` with a `question` to put to the person, the open tasks it
-still owns (`owns_tasks`) and the assignment it carries. Put that question to them, then call again with
-`confirmed` set to their answer **quoted verbatim** — their sentence, not a paraphrase and not a boolean,
-because this plugin has no human surface of its own (ADR 0008), so a flag the model sets about itself asks
-nobody. The quoted sentence is echoed back into the result, where it stays in the transcript. A one-shot
-member is exempt, because declaring it one-shot was the person's prior consent, and so is a successor a
-replacement installs, because a replacement continues the role rather than ending it. A record that never
-became a role is exempt too: one in `failed` never started, and one already `retired` has no life left to
-end, so removing it is cleanup rather than a question. A member that actually ran stays `active`, so
-retiring it still needs the quoted words.
+idles. Whether `retire_member` needs the person's words depends on what the member still carries, because
+the gate protects the person's decision to end a *role*, not every act of housekeeping:
+
+- It **carries something** — a recorded `assignment`, an `open` task on this Lead's board, or evidence it
+  was handed work at least twice — and then the first call retires nothing and answers
+  `retired: false, reason: "needs-confirmation"`, naming what it found in `carries` and giving you the
+  `question` to put to the person (with `owns_tasks` and `assignment` when it has them). Put that question
+  to them, then call again with `confirmed` set to their answer **quoted verbatim** — their sentence, not a
+  paraphrase and not a boolean, because this plugin has no human surface of its own (ADR 0008), so a flag
+  the model sets about itself asks nobody. The quoted sentence is echoed back into the result, where it
+  stays in the transcript.
+- It **carries nothing** — no assignment, no open row, never re-tasked — and then it is bare residue, and
+  housekeeping is yours: pass a non-empty `reason` and it retires in one call, asking nobody. The result
+  says in words that it carried nothing and was removed as housekeeping. A call that states no reason
+  answers `retired: false, reason: "needs-reason"` and changes nothing — the
+  reason is what the tombstone keeps, so a later reader can tell why the residue was cleared.
+
+A one-shot member needs no confirmation, because declaring it one-shot was the person's prior consent, and
+so does a successor a replacement installs, because a replacement continues the role rather than ending it.
+A record that never became a role is exempt too: one in `failed` never started, and one already `retired`
+has no life left to end. Nothing here adds a config switch or a third lifetime value: the narrowing is by
+what the member in front of the call carries, so the rule is about the member rather than about a profile's
+policy.
 
 **One-shot is the fan-out case.** The plugin receives no completion event, so the sweep that retires such a
 member runs at the start of `list_members` and `spawn_member`, and it requires three things at once: the

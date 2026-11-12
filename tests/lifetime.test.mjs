@@ -420,8 +420,14 @@ test('a record that never became a role needs no confirmation, and one that did 
   assert.equal(memberNamed(table, 'broken').phase, PHASE.retired)
 
   // A standing member that actually ran is `active` while it lives, so the quoted words are still required
-  // — the narrow exemption must not leak into the case consent exists for.
-  await spawnMember(call(ctx, table, { name: 'keeper', label: 'Hold the line', prompt: 'Stay.' }))
+  // — the narrow exemption must not leak into the case consent exists for. It is given an assignment so it
+  // carries something: a bare one is housekeeping under v0.25.1's narrower gate, which its own test covers.
+  await spawnMember(call(ctx, table, {
+    name: 'keeper',
+    label: 'Hold the line',
+    prompt: 'Stay.',
+    assignment: 'Keep the release green.',
+  }))
   const refused = await retireMember(asTool(ctx, table, { target: 'keeper' }))
   assert.equal(refused.retired, false)
   assert.equal(refused.reason, 'needs-confirmation')
@@ -431,8 +437,9 @@ test('a record that never became a role needs no confirmation, and one that did 
   // The boundary the exemption must not cross, and the reconciliation that decides which side a
   // reservation falls on. A reserved record whose child published is reconciled to `active` — it is a role
   // now, so it is asked about; one whose child never published is reconciled to `failed`, which is the
-  // case above and needs no words.
-  const published = planMember({ leadSessionId: 'lead-1', members: readRoster(table, 'lead-1').members }, 'pending', 'Pending', undefined)
+  // case above and needs no words. The assignment keeps this cell about the phase rather than about the
+  // gate's carrier rule, which is decided on its own.
+  const published = planMember({ leadSessionId: 'lead-1', members: readRoster(table, 'lead-1').members }, 'pending', 'Pending', 'Carry the reservation.')
   await updateRoster(table, 'lead-1', (current) => ({ ...current, members: [...current.members, published] }))
   ctx.wake(published.childId)
   const provisioned = await retireMember(asTool(ctx, table, { target: 'pending' }))
@@ -444,6 +451,122 @@ test('a record that never became a role needs no confirmation, and one that did 
   const tidied = await retireMember(asTool(ctx, table, { target: 'stranded' }))
   assert.equal(tidied.retired, true, 'a reservation that never published a child is `failed`, so it is cleanup')
   assert.equal(Object.hasOwn(tidied, 'question'), false)
+})
+
+// ---------------------------------------------------------------------------------------------
+// The gate protects a role-level decision, not every act of housekeeping (v0.25.1).
+// ---------------------------------------------------------------------------------------------
+
+test('a standing member that carries nothing retires in one call, and the result says why', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await spawnMember(call(ctx, table, { name: 'probe', label: 'Probe the cache', prompt: 'Start.' }))
+
+  const done = await retireMember(asTool(ctx, table, {
+    target: 'probe',
+    reason: 'Left over from yesterday\'s probe; nothing owed.',
+  }))
+  assert.equal(done.retired, true, 'bare residue is the Lead\'s to clear')
+  assert.equal(done.lifetime, LIFETIME.standing)
+  assert.equal(Object.hasOwn(done, 'question'), false, 'nobody is asked about housekeeping')
+  assert.match(done.message, /carried nothing — no recorded assignment, no open task, no evidence it was re-tasked/)
+  assert.match(done.message, /housekeeping on the reason you stated/)
+  assert.equal(memberNamed(table, 'probe').phase, PHASE.retired)
+  assert.equal(
+    memberNamed(table, 'probe').retireReason,
+    'Left over from yesterday\'s probe; nothing owed.',
+    'the reason is what the tombstone keeps, which is why the call must state it',
+  )
+})
+
+test('a bare standing member is refused when the call states no reason', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await spawnMember(call(ctx, table, { name: 'probe', label: 'Probe', prompt: 'Start.' }))
+
+  const refused = await retireMember(asTool(ctx, table, { target: 'probe' }))
+  assert.equal(refused.retired, false)
+  assert.equal(refused.reason, 'needs-reason')
+  assert.equal(refused.lifetime, LIFETIME.standing)
+  assert.deepEqual(refused.carries, [], 'the empty list is the statement: it carries nothing')
+  assert.equal(Object.hasOwn(refused, 'question'), false, 'this half of the gate asks nobody')
+  assert.match(refused.message, /State why with the reason parameter/)
+  assert.equal(memberNamed(table, 'probe').phase, PHASE.active, 'the refusal changed nothing')
+  assert.deepEqual(ctx.drained, [], 'and drained nothing')
+
+  // A blank reason is not a reason either — the same rule as every other cap in this plugin.
+  const blank = await retireMember(asTool(ctx, table, { target: 'probe', reason: '   ' }))
+  assert.equal(blank.reason, 'needs-reason')
+  assert.equal(memberNamed(table, 'probe').phase, PHASE.active)
+})
+
+test('a standing member that carries something is still asked about, whatever it carries', async () => {
+  // A recorded assignment is the durable statement of what the role was doing.
+  {
+    const table = memoryTable()
+    const ctx = fakeCtx()
+    await spawnMember(call(ctx, table, {
+      name: 'writer',
+      label: 'Write the docs',
+      prompt: 'Go.',
+      assignment: 'Keep the docs green.',
+    }))
+    const refused = await retireMember(asTool(ctx, table, { target: 'writer', reason: 'Tidying up.' }))
+    assert.equal(refused.reason, 'needs-confirmation', 'a reason does not replace consent')
+    assert.deepEqual(refused.carries, ['a recorded assignment'], 'and the refusal names what stopped it')
+    assert.equal(refused.assignment, 'Keep the docs green.')
+    assert.equal(Object.hasOwn(refused, 'owns_tasks'), false, 'a field it has nothing for is omitted, not empty')
+  }
+
+  // An open row is work someone still owes this Lead.
+  {
+    const table = memoryTable()
+    const ctx = fakeCtx()
+    await spawnMember(call(ctx, table, { name: 'runner', label: 'Run the suite', prompt: 'Go.' }))
+    const task = await ownTask(table, 'runner', 'Finish the parser tests')
+    const refused = await retireMember(asTool(ctx, table, { target: 'runner', reason: 'Tidying up.' }))
+    assert.equal(refused.reason, 'needs-confirmation')
+    assert.deepEqual(refused.carries, ['1 open task'])
+    assert.deepEqual(refused.owns_tasks, [task.id])
+  }
+
+  // Being handed work twice with nothing else to show for it is the third kind of carrier.
+  {
+    const table = memoryTable()
+    const ctx = fakeCtx()
+    await spawnMember(call(ctx, table, { name: 'prober', label: 'Probe the cache', prompt: 'Go.' }))
+    await messageMember(call(ctx, table, { target: 'prober', message: 'One more round.' }))
+    await messageMember(call(ctx, table, { target: 'prober', message: 'And one more.' }))
+    const refused = await retireMember(asTool(ctx, table, { target: 'prober', reason: 'Tidying up.' }))
+    assert.equal(refused.reason, 'needs-confirmation', 'a member used twice is a role, not residue')
+    assert.deepEqual(refused.carries, ['being re-tasked (2 messages)'])
+  }
+})
+
+test('the re-task counters are written for a standing member too, which is what the gate reads', async () => {
+  const table = memoryTable()
+  const ctx = fakeCtx()
+  await spawnMember(call(ctx, table, { name: 'prober', label: 'Probe the cache', prompt: 'Go.' }))
+  await messageMember(call(ctx, table, { target: 'prober', message: 'One more round.' }))
+  const once = memberNamed(table, 'prober')
+  assert.equal(once.messageCount, 1, 'a standing member has no startedAt, but it does have a count')
+  assert.equal(Object.hasOwn(once, 'startedAt'), false, 'and the one-shot evidence is left alone')
+
+  // One message is not re-tasking, so the member is still bare residue.
+  const done = await retireMember(asTool(ctx, table, { target: 'prober', reason: 'Nothing owed after one nudge.' }))
+  assert.equal(done.retired, true)
+  assert.equal(Object.hasOwn(done, 'question'), false)
+
+  // The advice on a row stays one-shot-only: a standing member is not told it is "probably standing".
+  const table2 = memoryTable()
+  const ctx2 = fakeCtx()
+  await spawnMember(call(ctx2, table2, { name: 'keeper', label: 'Hold the line', prompt: 'Stay.' }))
+  await messageMember(call(ctx2, table2, { target: 'keeper', message: 'One more round.' }))
+  await messageMember(call(ctx2, table2, { target: 'keeper', message: 'And one more.' }))
+  const listed = await listMembers(call(ctx2, table2))
+  const row = listed.members.find((candidate) => candidate.target === 'keeper')
+  assert.equal(row.lifetime, LIFETIME.standing)
+  assert.equal(Object.hasOwn(row, 'retasked'), false, 'the advice corrects a one-shot declaration, not a role')
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -526,10 +649,11 @@ test('a re-tasked one-shot member is flagged as probably standing, and is never 
   assert.match(third.retasked_note, /2 assignment changes/)
   assert.equal(memberNamed(table, 'probe').ephemeral, true)
 
-  // The counters exist only where the advice does: a standing member's record is untouched by a message.
+  // The counters are written for every member, because the retirement gate reads them; what stays
+  // one-shot-only is the advice drawn from them, asserted in its own test below this one.
   await spawnMember(call(ctx, table, { name: 'keeper', label: 'Hold the line', prompt: 'Stay.' }))
   await messageMember(call(ctx, table, { target: 'keeper', message: 'Still there?' }))
-  assert.equal(Object.hasOwn(memberNamed(table, 'keeper'), 'messageCount'), false)
+  assert.equal(memberNamed(table, 'keeper').messageCount, 1)
 })
 
 // ---------------------------------------------------------------------------------------------

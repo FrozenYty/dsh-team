@@ -420,3 +420,23 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   test fail (verified before and after, with the test file's SHA-256 unchanged). The live sweep and a live
   consent refusal are the owner's install check.
 
+- [x] **P4-14** The consent gate asks only when a standing member still carries something (v0.25.1).
+  Done when `retire_member` refuses a standing member without quoted words only if that member has a
+  recorded `assignment`, owns at least one `open` row on this Lead's board, or shows the `retasked` evidence;
+  a standing member with none of the three retires in one call on a stated `reason`; a call stating no
+  reason is refused as `needs-reason`; both refusals name the rule that stopped them;
+  and no config field or third lifetime value is added.
+  Delivered (ADR 0026 gains *The gate narrows to what a member carries* and keeps the earlier, stricter
+  reading as its record, per the owner's decision after live acceptance): `carriedBy` reads the three
+  carriers from the record and the board, the gate branches on it and returns either the consent refusal
+  (now carrying `carries`) or a new reason refusal, and a housekeeping retirement says so in its result.
+  The third carrier needed one change outside the gate: `message_member` counted only one-shot members, so a
+  standing member's counters were permanently zero and "was re-tasked" could never be true — they are now
+  written for every accepted message on every member, while the `list_members` advice built from them stays
+  one-shot-only. `lifetime`, the veto, `blocked`/`blocking_tasks`, the sweep's three conditions and the
+  `failed` exemption are unchanged, and the sweep path was not touched, so `swept` still appears on a read as
+  well as on a spawn. `tests/lifetime.test.mjs` covers all five required cases; widening the gate back to
+  "every standing member" makes the bare-member cases fail (verified before and after, with the test file's
+  SHA-256 `69C1F7DA94F593CA2C9175B6C53DD9D136CBD952295C9491897E33322A6FF42A` on both sides). The live
+  refusal and the live housekeeping retirement are the owner's install check.
+
