@@ -20,8 +20,10 @@
  * (`task_board`, ADR 0017): the retirement half re-addresses the predecessor's open tasks to the
  * successor in the same write, and the brief names them by id and title. A Lead that replaces members
  * repeatedly can fix the brief's shape once with `handoff_template` (ADR 0015); the built-in shape is
- * what a Lead that never stores one gets. The shipped team tool row is disabled by the bundle patch
- * (P2-07), so these tools are the whole model-facing surface.
+ * what a Lead that never stores one gets. The shipped team *tool* row is disabled by the bundle patch
+ * (P2-07), so the spawn, wait and task tools it published are gone; its *service* row stays mounted for
+ * adoption and the projection filter, and that service is model-facing itself, so `list_agents`,
+ * `send_message` and `interrupt_agent` remain in a Lead's tool list beside these tools.
  *
  * WHY THIS FILE IMPORTS NOTHING FROM THE HARNESS
  * A profile-installed bundle is linked from its workspace directory, so a bare import such as

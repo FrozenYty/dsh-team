@@ -78,8 +78,10 @@ workaround is the lifecycle the shipped roster does not have:
 
 Two limits remain inherent to working around rather than fixing: the shipped catalog still knows the
 member existed, because the platform never deletes what it owns
-(`docs/architecture-en.md:635-639`, §6); and the two rosters could both be visible until the shipped tool
-row was retired, which is what v0.14.0 did (`cordis.patch.yml:28-44`).
+(`docs/architecture-en.md:635-639`, §6); and the shipped catalog can still be listed beside this
+plugin's, because the `agent-team` service that answers `list_agents` stays mounted for adoption and the
+projection filter. Retiring the shipped *tool* row in v0.14.0 removed the spawn, wait and task tools it
+published, not that service (`cordis.patch.yml:28-44`).
 
 ## 4. What a rename has to freeze
 
