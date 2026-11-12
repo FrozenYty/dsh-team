@@ -62,6 +62,12 @@ A short map, not a changelog: each release below names what it added and the sec
   row's `spawn_teammate`, `wait_agent` and `team_task_*` tools stop being registered and this plugin's own
   tools serve the Lead. Three model-facing tools the kept `agent-team` service publishes — `list_agents`,
   `send_message`, `interrupt_agent` — remain (§1, §2.3, §4.5, §6).
+- **v0.15** — the blocking wait returns on this plugin's own surface: `wait_members` observes the Harness's
+  `agent/status` for the child Sessions on this Lead's roster, which the disabled row's `wait_agent` used to
+  cover and the shipped service cannot see (§4.5).
+- **v0.16** — a member can be defined on disk: `spawn_member.definition` reads a flat-frontmatter markdown
+  file under `team/` in the Lead's working directory, the call's own arguments win over the file's, and the
+  result reports which parts came from where (§4.5, §4.6, ADR 0018).
 
 ### 2.1 Compaction is enabled
 
@@ -564,7 +570,7 @@ the Lead, so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default — and `started_with` reports back what the plugin forwarded, not what the child resolved. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `definition`, start it from a member definition committed with the project, whose fields fill whatever the call omitted (§4.6); with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default — and `started_with` reports back what the plugin forwarded, not what the child resolved. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error, and a definition that cannot be read is answered the same way (ADR 0016, ADR 0018). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
 | `wait_members` | One bounded wait on the live status of this Lead's members: it answers when a member's `agent/status` transitions (`idle` ⇄ `running`) or after the timeout, and reports the member and the status it entered. The timeout defaults to 30 s and is refused above 1 h; a roster with no `running` member and no `provisioning` reservation answers `no_progress` at once, because a blocked Lead cannot wake an idle member. It observes only post-call transitions and never wakes anyone (§4.5). |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
@@ -612,8 +618,65 @@ retirement proceeds even when the drain refuses. The shipped depth limit is 1, s
 direct child; a deeper tree — possible only when that limit is raised — is refused by message delivery
 and still retirable.
 
-## 5. Harness extension points used
+### 4.6 Member definitions (v0.16.0)
 
+A member used to exist only as a tool call: its prompt, label and assignment lived in that call and in the
+Lead's roster record, so a team could not be reviewed, versioned or shared, and the same "reviewer" was
+retyped every session. A definition moves the member out of the call and onto disk — one markdown file per
+member under `team/` in the Lead's working directory, committed with the project — while the roster stays
+runtime state (ADR 0018).
+
+**The path.** `<Lead working directory>/team/*.md`, resolved through the `workingDirectory` service:
+`ctx.get('workingDirectory').ensure(leadAgent, signal)` (§5). That is the same service and method the
+installed spawn seam uses for a relative `request.cwd`, so a definition is read from exactly the directory
+`spawn_options.cwd` resolves against. The service is optional and read with `ctx.get`, like `compaction`; a
+profile that mounts none, or whose `ensure` rejects, is a typed refusal
+(`reason: "working-directory-unavailable"`) rather than a guess at a directory.
+
+**The file.** `---` on line 1, a flat frontmatter block, `---`, then the markdown body, which is the
+member's prompt. The accepted fields are exactly the inputs `spawn_member` already has: `name` and `label`
+required, then `assignment`, `ephemeral`, `cwd`, `provider`, `model`, `reasoning_effort`, `max_tokens` and
+`agent_preset`. The file's *name* is not an identity — the definition declares `name`, which is also the key
+`spawn_member.definition` looks up — and a field with no counterpart on the call is out of scope.
+
+**The subset is documented, not approximated.** `key: value`, one pair per line, no indentation; a value is
+plain or quoted at both ends, with no escape interpreted; blank lines and `#` comments are allowed.
+Nesting, lists, block scalars (`|`, `>`), anchors and aliases (`&`, `*`), merge keys (`<<`), flow
+collections (`[...]`, `{...}`), duplicate keys, an unknown field, a key with no value and a missing
+`name`/`label` are each refused with the file path and the line, and an unknown field's sentence lists the
+accepted set. There is no YAML library, because the bundle imports nothing outside Node builtins (ADR 0002):
+this repository's parser is the specification, and what it does not implement is refused rather than
+misread.
+
+**Precedence: the call wins, and the result says so.** Every field passed to `spawn_member` overrides the
+definition's, per field and including inside `agent_options`; the answer's `definition` object names the
+file, the fields taken from it (`from_file`) and the ones the call replaced (`overridden`). `prompt` is the
+one exception: the body is the member's standing prompt and the call's `prompt` is the task, so the call's
+text is appended after the body and `definition.prompt` reports `file` or `file+call`. Nothing from the file
+is dropped silently, because a model that believes it overrode a definition and did not is exactly the
+failure this report exists to prevent.
+
+**One bad file never hides the others.** A scan collects what it can read and reports what it could not:
+`definition.problems` on a successful spawn, `problems` on a refusal, each row `{path, line?, problem}`. A
+name declared by two files refuses both, because a lookup that quietly picked one would make the other
+file's edits invisible. An unknown name answers `definition-not-found` with `available` — the names the same
+scan could use — and answers `definition-invalid` instead when the directory also held a refused file,
+since the name may be declared there. This is the rule a stored task already follows (ADR 0017): one bad
+record must not hide the rest.
+
+**Caps are refusals.** 16 KiB per file (`DEFINITION_FILE_MAX`) and 64 files per scan (`DEFINITION_LIMIT`),
+never a truncation and never a partial read. The size cap is per file, so an oversized definition is refused
+while its neighbours still work; the count cap is on the directory, so an over-full directory refuses the
+whole scan rather than serving a partial set. A refusal reserves nothing — no member record is written and no
+child is started — so fixing the file and retrying reuses the same name.
+
+**The surface is one parameter.** `spawn_member.definition` is the whole feature: there is no
+create/update/delete tool, because version control and an editor are what make a file better than a tool,
+and the model writes the files with its own file tools. `spawn_member`'s result schema is a two-branch
+`oneOf` — the member row, or the definition refusal — since the refusal is an answer rather than a host
+error, which is the rule ADR 0016 already applies to a refused start.
+
+## 5. Harness extension points used
 | Need | Mechanism |
 |---|---|
 | enable a shipped, disabled row | bundle patch `- id: <row>` with `disabled: false` |
@@ -628,6 +691,7 @@ and still retirable.
 | notice that a child stopped | `subagent/end` (published when a run settles) and the `idle` edge of `agent/status`; neither is durable, so the ephemeral sweep still carries its own evidence (§4.3.1, ADR 0013) |
 | wait on a member's live status | `ctx.on('agent/status', ({ agent, status }))` from the plugin's own context, filtered by the child ids this roster holds; the dispatch is scope-filtered and an unscoped listener is admitted to it (§4.5) |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
+| resolve the Lead's working directory, and the `team/` a member definition is read from | `ctx.get('workingDirectory').ensure(agent, signal)` — the same service and method the spawn seam uses to resolve a relative `cwd`; optional, so a profile without it refuses a definition spawn instead of guessing a directory (§4.6, ADR 0018) |
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
@@ -664,6 +728,12 @@ and still retirable.
   the shipped task board or the predecessor's transcript, so the successor's brief is composed from the
   record and from this plugin's own task rows (§4.3.2). A member whose assignment was never recorded, and
   whose board holds no open task, hands over a label and a pointer, not a summary.
+- **A member definition is a file this plugin only reads.** It cannot tell whether a definition is current,
+  whether its prompt matches the work the Lead has in mind, or whether a `team/` directory is shared by two
+  Leads in one working directory; that is the project's version control, not this plugin's job. What it
+  guarantees is narrower and checkable: the definitions a caller can use are exactly the readable `.md`
+  files under `team/` at the moment of the call, and a file it cannot read is refused by path and line
+  rather than half-applied (§4.6, ADR 0018).
 - **Compaction is profile-wide.** Enabling the backend changes behaviour for every session in the
   profile. It is a shipped feature turned on, not custom code, but it is not scoped to this plugin's
   members.

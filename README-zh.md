@@ -14,11 +14,11 @@
 
 ## 状态
 
-- 当前版本：v0.15.0。
+- 当前版本：v0.16.0。
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
-- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；以及任务板写入时的上限与真机没走到的交接矩阵格子；还有 `wait_members` 的事件接线、超时、取消与无进展路径。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；`wait_members` 的事件接线、超时、取消与无进展路径；以及整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝。由定义真正启动一个成员，是所有者安装后的验证项（ADR 0018）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -32,7 +32,7 @@
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 把成员作为一个可续跑的子代理启动，可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。 |
+| `spawn_member` | 把成员作为一个可续跑的子代理启动，可用 `definition` 从磁盘上的成员定义启动，也可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。 |
 | `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、实时状态、`compactable`，驻留时还有上下文压力。 |
 | `wait_members` | 阻塞当前这一轮，直到某个成员的实时状态发生变化或超时到期，并报告是哪个成员、变成了什么。有界：默认 30 秒，最长一小时。没有成员处于 running 或 provisioning 时立刻回答 `no_progress`，绝不唤醒任何人，也不等待任务板写入或消息被处理。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
@@ -69,6 +69,26 @@ handoff-probe-g2（从未见过前任）回复：42
 ```
 
 这段对话节选自 [PROGRESS.md](PROGRESS.md) 中记录的一次验收运行。
+
+## 定义成员
+
+成员可以是一个文件，而不是工具调用里的一段话：`spawn_member` 带 `definition: "<name>"` 时，会从 Lead 工作目录下的 `team/` 读取成员定义。这个文件随项目一起提交、评审与版本化，而花名册仍是运行时状态——这正是本插件词汇所借用的那套划分。插件只读这些文件；写它们用你自己的文件工具（ADR 0018）。
+
+```markdown
+---
+name: reviewer
+label: Review the diff
+assignment: Check every changed file for behaviour changes
+model: a-cheaper-model
+---
+You review changes. Report only findings that change behaviour, with the file and the line.
+```
+
+两条 `---` 之间是扁平 frontmatter，其下的 markdown 正文就是成员的提示词。`name` 与 `label` 必填，其余可接受字段都是 `spawn_member` 本来就有的：`assignment`、`ephemeral`、`cwd`、`provider`、`model`、`reasoning_effort`、`max_tokens` 与 `agent_preset`。这份清单就是全部子集——嵌套值、锚点、块标量、列表、重复键或未知字段，都会连文件名与行号一起被拒绝，而不是被猜测；带引号的值只去掉引号，不解释任何转义。
+
+**调用侧优先，且返回结果会说明这一点。** 传给 `spawn_member` 的每个字段都会覆盖文件里的同名项，返回结果中的 `definition` 对象会给出文件名、来自文件的部分（`from_file`）以及被你覆盖的部分（`overridden`）。唯一无法被调用覆盖的是 `prompt`：正文是成员的常驻提示词，调用里的 `prompt` 会追加在它之后，`definition.prompt` 会把这个事实报成 `file+call`。
+
+**一个坏文件不会藏起其他文件。** 格式错误的定义会在本来成功的 spawn 结果里，用 `definition.problems` 按路径与行号报出，合法的定义照常可用。同一个名字被两个文件声明时，两边都不可用——因为悄悄挑一个会让另一个文件的修改彻底不可见。上限是拒绝而不是截断：单文件 16 KiB，单次扫描 64 个文件——超过这个数量时整次扫描被拒绝，而不是只服务一个残缺的子集。路径同样绝不猜：profile 若没有挂载 `workingDirectory` 服务，就返回 `started: false` 与 `reason: "working-directory-unavailable"`，并且不预留任何成员。
 
 ## 生命周期
 
@@ -173,7 +193,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 ## 开发
 
 ```sh
-node --check index.js actions.js roster.js trash.js host-hooks.js
+node --check index.js actions.js roster.js definitions.js trash.js host-hooks.js
 node --test --test-isolation=none tests/*.test.mjs
 node scripts/check.mjs
 ```
@@ -187,6 +207,7 @@ Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面�
 | `index.js` | Host 插件入口：工具定义、参数校验、Lead 专属权限检查 |
 | `actions.js` | 模型侧工具背后的花名册操作 |
 | `roster.js`、`trash.js` | 持久花名册（相态、代次命名、收养、迁移），以及带恢复与保留上限的会话回收站 |
+| `definitions.js` | 成员定义：扁平 frontmatter 解析器、`team/` 目录扫描及其上限，以及解析所用的工作目录 |
 | `host-hooks.js` | 投影过滤与花名册名额补偿 |
 | `tests/`、`scripts/check.mjs` | 单元测试，以及 CI 会跑的仓库检查 |
 | `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`.github/` | bundle 本体、CI workflow 与模板 |

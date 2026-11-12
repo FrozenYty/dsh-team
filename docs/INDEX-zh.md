@@ -42,6 +42,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么交接书是一个可存模板，以及为什么只有一个工具？ | `docs/adr/0015-handoff-template.md` | 英文 |
 | 成员如何用自己的 cwd、模型或 preset 启动，陈旧的名字现在指向谁？ | `docs/adr/0016-spawn-capabilities.md` | 英文 |
 | 为什么工作板由插件自己拥有，替换成员时到底移动了什么？ | `docs/adr/0017-own-task-board.md` | 英文 |
+| 为什么成员是磁盘上的文件，以及接受哪一套 frontmatter 子集？ | `docs/adr/0018-member-definitions.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
@@ -67,6 +68,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 收养覆盖什么，或它消费的发现行形状 | `actions.js`、`roster.js`、`docs/architecture-zh.md` §4.5.1、`README.md` + `README-zh.md` |
 | 花名册相态或转移 | `docs/architecture-zh.md` §4.3 的状态矩阵；若模型变了，另写 ADR |
 | 交接规则——替换、退役或恢复时成员的未完成任务怎么处理 | `docs/architecture-zh.md` §4.3.2 的交接矩阵、`actions.js`、`README.md` + `README-zh.md`、ADR 0017 |
+| 成员定义的格式、接受的 frontmatter 子集或 `team/` 路径 | `definitions.js`、`docs/architecture-zh.md` §4.6、`README.md` + `README-zh.md`、ADR 0018 |
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
 | 持久记录结构 | `docs/architecture-zh.md` §4.2、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
 | 新增、改名或删除文档 | 本文件与 `INDEX-zh.md` |

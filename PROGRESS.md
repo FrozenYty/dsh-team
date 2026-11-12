@@ -998,3 +998,84 @@
   `agent/status` from the installed Harness and returns when a member's turn ends. That is the owner's
   install check, and the README's install-verification list carries the exact call to make.
 - **Version.** `0.15.0`: the model's tool surface gains a tool, so this is not a documentation patch.
+
+## 2026-11-12 — a member becomes a file on disk (P4-06, v0.16.0)
+
+- **The split the feature is for: the member is a file, the roster stays runtime state.** Until this
+  release every member was improvised in a tool call — prompt, label and assignment lived in that call
+  and in the Lead's `storageDomain` record (ADR 0003), so a team could not be reviewed, versioned or
+  cloned, and the same "reviewer" was retyped every session. `spawn_member` now takes one more optional
+  parameter, `definition`, naming a markdown file under `team/` in the Lead's working directory; its flat
+  frontmatter declares the member and its body is the prompt. No create/update/delete tool was added for
+  those files: version control and an editor are what make a file better than a tool, and the model
+  writes them with its own file tools (ADR 0018).
+- **The path is the service the Harness itself uses, and it is never guessed.** The directory is
+  `ctx.get('workingDirectory').ensure(leadAgent, signal)` — the same service and method the installed
+  subagent seam uses to resolve a relative `request.cwd` (`dsh-subagent` `lib/index.js:1530`) — so a
+  definition is read from exactly the directory `spawn_options.cwd` resolves against. It is not
+  `process.cwd()`, which is the Harness process's launch directory. The service is read with `ctx.get`
+  rather than added to `inject`, so a profile that does not mount it still activates every other tool; a
+  definition spawn there answers `started: false, reason: "working-directory-unavailable"` and reserves
+  nothing. An absent service, a rejected `ensure` and a non-absolute answer are all that same refusal.
+- **The accepted frontmatter is written down, and everything outside it is refused with the file and the
+  line.** Accepted: `name` and `label` (required) plus `assignment`, `ephemeral`, `cwd`, `provider`,
+  `model`, `reasoning_effort`, `max_tokens`, `agent_preset`; `key: value` one pair per line, no
+  indentation, a value plain or quoted at both ends with no escape interpreted, blank lines and `#`
+  comments. Refused by name and line: nesting, list items, block scalars (`|`, `>`), anchors and aliases
+  (`&`, `*`), merge keys (`<<`), flow collections, duplicate keys, an unknown field (the sentence lists
+  the accepted set), a key with no value, a missing `name`/`label` and an empty body. There is no YAML
+  library — the bundle imports nothing outside Node builtins (ADR 0002) — and a hand-written parser that
+  "mostly" understands YAML fails by silently misreading a value, which is the class of failure v0.12.0
+  already produced once. The field values are validated with the roster's own `checkMemberName`,
+  `checkLabel` and `checkAssignment`, so a definition cannot declare what the reservation would refuse.
+- **Precedence is per field, and it is reported rather than inferred.** Every argument the call passes
+  overrides the file's, including inside `agent_options`, and `definition.from_file` /
+  `definition.overridden` name the fields on both sides, so "I overrode it" is a fact in the answer. The
+  one field the call cannot replace is `prompt`: the body is the member's standing prompt and the call's
+  prompt is the task, so the call's text is appended after the body and `definition.prompt` reports
+  `file` or `file+call`. That asymmetry is deliberate and documented — a definition a task string erases
+  would be retyped in every call, which is the problem the feature removes.
+- **One bad file does not hide the others, and it is still visible.** A scan reports what it could not
+  read as `{path, line?, problem}`: `definition.problems` on an otherwise successful spawn, `problems` on
+  a refusal. A name declared by two files refuses **both**, because a lookup that quietly picked one
+  would make the other file's edits invisible. An unknown name answers `definition-not-found` with
+  `available` (the names the same scan could use), or `definition-invalid` when the directory also held a
+  refused file, since the name may be declared there. This is the rule a stored task already follows
+  (ADR 0017).
+- **Caps refuse, never truncate, and a refusal reserves nothing.** 16 KiB per file (`DEFINITION_FILE_MAX`,
+  refused per file, so an oversized definition does not hide its neighbours) and 64 files per scan
+  (`DEFINITION_LIMIT`, refused for the whole directory, because a partial set makes a missing name
+  indistinguishable from a deleted one). No member record is written and no child started on any refusal,
+  so fixing the file and retrying reuses the same name — unlike a capability refusal, whose `failed`
+  reservation is deliberately visible in the roster (ADR 0016).
+- **The result schema is a two-branch `oneOf`, and both branches are covered.** `spawn_member` now
+  answers either the member row (with an optional `definition` report) or
+  `{started: false, reason, message, …}` with a reason disjoint from the capability refusals, so exactly
+  one branch matches. `tests/entry.test.mjs`'s conformance test validates a definition spawn, a
+  `definition-not-found` refusal and a `working-directory-unavailable` refusal against that declared
+  schema, which is the check v0.13.0's undeclared result field needed and did not have. `label` and
+  `prompt` stopped being unconditionally required in the parameter schema — a definition can supply them
+  — and their descriptions say so; their guards still fire when they are passed blank.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits clean; `node scripts/check.mjs` passes after the last edit; `node --test
+  --test-isolation=none tests/*.test.mjs` is 146 tests, 146 passing — the 136 that existed plus 10, with
+  `tests/entry.test.mjs` extended and no existing test edited. The new `definitions.js` was added to
+  `package.json`'s `files`, to the repository check's Host-module list (so the zero-import rule covers it)
+  and to the CI syntax step. The main test was proved able to fail: `applyDefinition`'s `if (supplied)` in
+  `actions.js` was changed to `if (supplied && file[key] === undefined)`, the precedence test failed with
+  `actual 'reviewer'` against `expected 'auditor'` (`tests/definitions.test.mjs:168`), the line was
+  restored, and the test then passed. `tests/definitions.test.mjs` hashed
+  `BF0DFE19D334E4D31879D8F30ED9A030B2B7497A80B71971C8774B399F3C6C9C` before and after that proof, and
+  `actions.js` returned to `B80E11BB956A5494DA3FA2B42444F241A89C74F713A4F300D4165F6E64A10E75`, so the
+  proof edited the operation, not the test. Bilingual parity was measured before and after rather than
+  assumed: the README pair went from 17 `##` headings and 156 distinct backtick identifiers per side with
+  identical sets to 18 headings and 170 identifiers per side with identical sets.
+- **What stays unverified.** No install and no `plugin_manager` call was made, so the one thing only a
+  live profile can show is unproven: that `spawn_member { definition: … }` in a real Lead session reads
+  the real `team/` directory through the installed `workingDirectory` service and starts the member. The
+  suite exercises the parser, the scan, the merge, every refusal and the wrapper against the real
+  filesystem and a `workingDirectory` fake, but the service itself is the owner's install check. The
+  README's install-verification list carries the call to make.
+- **Adjacent correction.** `docs/architecture-en.md`'s release map skipped v0.15.0 — the entry was
+  missing, not wrong — so the v0.15 bullet was added beside the new v0.16 one in both languages.
+- **Version.** `0.16.0`: a new published module and a new parameter on the spawn surface are not a patch.
