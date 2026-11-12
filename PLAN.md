@@ -185,3 +185,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [ ] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
   P4-03 until v0.8.0; that ID belongs to the retention task, and two tasks sharing one ID made the
   reference ambiguous.)
+- [x] **P4-05** Spawn capabilities: forward `cwd`, model options and an agent preset, and make a refusal
+  say where a name went (v0.12.0).
+  Done when `spawn_member` can start a member in its own working directory, on a chosen provider/model
+  route and under a declared agent preset, each omitted field inheriting the Lead's value; a spawn that
+  passes none of them composes the exact request it composed before; a Host capability refusal becomes a
+  typed result (`started: false` with a `reason`) with no member left `provisioning`; the result reports
+  what was applied in `started_with`; and a refusal for a stale target carries `current_holder` naming
+  the live holder of that name.
+  Delivered: one nested `spawn_options` parameter (`cwd`, `agent_options`, `agent_preset`), with
+  `activationOptions` as the single place the tool vocabulary maps to the activation request; refusals
+  routed on the seam's `error.code` (`UNSUPPORTED_CAPABILITY`, `PRESET_UNAVAILABLE`,
+  `agent-preset/not-found`, `agent-preset/invalid`, `UNAUTHORIZED`); and `currentHolderOf` reported by
+  the four target-scoped refusals (ADR 0016). The suite pins the exact no-argument request, each
+  forwarded field, the typed refusals and the holder. The live start of a cwd/model/preset is the
+  owner's install check.
