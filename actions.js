@@ -1574,10 +1574,13 @@ export async function retireMember({
     throw new Error(`retire_member: no member named "${target}" in the roster, live or retired`)
   }
 
-  // The lifetime gate, before the handover write and before anything is drained: a refusal must change
-  // nothing at all. A standing member's retirement is the person's decision, so the model has to carry
-  // their words back; a one-shot member already consented when the Lead declared it one-shot, and an
-  // already-retired tombstone has nothing left to consent to (ADR 0026).
+  // The lifetime gate, before the handover write and before anything is drained or tombstoned: a refusal
+  // leaves this retirement's own state untouched — the record, its open work and its artifact — so the
+  // question can be answered and the call simply retried. (The adoption read above it is the reconciliation
+  // every roster operation performs, not part of this retirement.) A standing member's retirement is the
+  // person's decision, so the model has to carry their words back; a one-shot member already consented when
+  // the Lead declared it one-shot, and an already-retired tombstone has nothing left to consent to
+  // (ADR 0026).
   const lifespan = lifetimeOf(member)
   const quoted = typeof confirmed === 'string' ? confirmed.trim() : ''
   if (consentRequired && lifespan === LIFETIME.standing && member.phase !== PHASE.retired && quoted.length === 0) {
