@@ -2,7 +2,7 @@
 
 [中文](README-zh.md)
 
-> Change the person, not the work.
+> Only the person changes, not the work.
 
 A DeepSeek Harness profile bundle for the one thing the shipped agent-team roster cannot do: let a member
 go. A Lead can retire one, restore it from a trash it controls, or replace it with a successor that inherits
