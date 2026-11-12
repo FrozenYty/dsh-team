@@ -1,20 +1,23 @@
 /**
- * Host-side effects that make a retired member actually disappear, and that keep the shipped roster's
- * member budget usable after retirement.
+ * Host-side effects that make a retired member actually disappear, make the members this plugin owns
+ * appear in the shipped team panel, and keep the shipped roster's member budget usable after retirement.
  *
- * Two mechanisms, both borrowed from a peer plugin and both implemented here with a disposer so plugin
- * unload restores the host exactly:
+ * Three mechanisms, all implemented here with a disposer so plugin unload restores the host exactly:
  *
- *   1. **Projection filter** — the host's `sessionController` serves `/api/session/list` and the
+ *   1. **Projection filter, strip** — the host's `sessionController` serves `/api/session/list` and the
  *      `control`/`follow` streams, which carry `subagentCatalog` and `agentTeam.members`. Retired ids are
  *      stripped at that exit, so every client (top subagent picker, built-in team panel) stops rendering
  *      them without touching host source or rebuilding the Web app.
- *   2. **Slot credit** — the shipped legacy roster counts `members.length` against a single
+ *   2. **Projection filter, merge** — the built-in team panel renders `agentTeam` from the shipped fold,
+ *      which never heard of a member started through `ctx.subagents`. The same exit appends this Lead's
+ *      live members to the outgoing value, in the four fields the wire schema requires (ADR 0023).
+ *   3. **Slot credit** — the shipped legacy roster counts `members.length` against a single
  *      `maxMembers`. While a spawn runs, the effective limit is raised by the number of retired members
  *      of *that* Lead, so one retirement buys back one slot without editing the append-only log.
  *
- * Both are capability-probed and silently skipped when the host shape is absent: a Harness upgrade must
- * degrade the feature, never break the plugin.
+ * Both projection halves only rewrite the copy a client is about to receive; the Session log is never
+ * written. Everything is capability-probed and silently skipped when the host shape is absent: a Harness
+ * upgrade must degrade the feature, never break the plugin.
  */
 
 /** Marks the wrapped service so a reload cannot wrap it twice. */
@@ -26,6 +29,75 @@ const SLOT_MARK = Symbol.for('dsh.team-roster.slot-credit')
 const UNARY_METHODS = ['list', 'projections']
 /** Session-list methods that stream frames. */
 const STREAM_METHODS = ['control', 'follow']
+
+/** Whether one value is an `agentTeam` view (`{ members, tasks }`). */
+const isTeamView = (value) => value !== null
+  && typeof value === 'object'
+  && !Array.isArray(value)
+  && Array.isArray(value.members)
+
+/**
+ * The value of a projection frame (`{ key, value }` or `{ key, val }`) when it names that key.
+ * The installed `sessionController` publishes `{ key, val }`; `{ key, value }` is the shape this
+ * filter was first written against and is kept so an older host is still served.
+ */
+const framedValue = (node, key) => {
+  if (node.key !== key) return undefined
+  return node.value !== undefined ? node.value : node.val
+}
+
+/** Replace the value `framedValue` returned, keeping the frame's own field name. */
+const setFramedValue = (node, value) => {
+  if (node.value !== undefined) node.value = value
+  else node.val = value
+}
+
+/** Whether one object is the `projections` map of a control baseline, keyed by Lead Session id. */
+const isProjectionIndex = (value) => value !== null
+  && typeof value === 'object'
+  && !Array.isArray(value)
+  && !Object.hasOwn(value, 'values')
+
+/**
+ * Walk one outgoing payload and rewrite every team and catalog list it carries, at the exit where a
+ * client-facing copy is built.
+ *
+ * The shapes are the installed `sessionController` ones: a list row's `projections.values`, a
+ * `projections` baseline's `values`, a `control` baseline's `value.projections` map, a `control` change
+ * frame's `changes[].val`, and a `follow` snapshot's `projections.values`. The Session id an
+ * `agentTeam` value belongs to comes from the row's `sessionId`, the snapshot's `header.id`, the
+ * baseline map's key, or the change frame's `sessionId`.
+ * @param {unknown} payload - one session-list payload or streamed frame.
+ * @param {{catalog: (entries: unknown[]) => unknown[], members: (members: unknown[], leadId: string|undefined) => unknown[]}} rewrite
+ * @param {number} maxDepth - recursion guard for unexpected shapes.
+ * @param {string|undefined} leadSessionId - Session the payload belongs to, when it carries no id.
+ * @returns {unknown} the same payload reference.
+ */
+function rewriteExit(payload, rewrite, maxDepth, leadSessionId) {
+  const visit = (node, depth, scope) => {
+    if (node === null || typeof node !== 'object' || depth > maxDepth) return
+    const leadId = typeof node.sessionId === 'string'
+      ? node.sessionId
+      : typeof node.header?.id === 'string' ? node.header.id : scope
+    if (Array.isArray(node.subagentCatalog)) node.subagentCatalog = rewrite.catalog(node.subagentCatalog)
+    if (isTeamView(node.agentTeam)) node.agentTeam.members = rewrite.members(node.agentTeam.members, leadId)
+    const teamFrame = framedValue(node, 'agentTeam')
+    if (isTeamView(teamFrame)) teamFrame.members = rewrite.members(teamFrame.members, leadId)
+    const catalogFrame = framedValue(node, 'subagentCatalog')
+    if (Array.isArray(catalogFrame)) setFramedValue(node, rewrite.catalog(catalogFrame))
+    const index = isProjectionIndex(node.projections)
+    if (index) {
+      for (const [lead, block] of Object.entries(node.projections)) visit(block, depth + 1, lead)
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'agentTeam' || key === 'subagentCatalog') continue
+      if (key === 'projections' && index) continue
+      visit(node[key], depth + 1, leadId)
+    }
+  }
+  visit(payload, 0, leadSessionId)
+  return payload
+}
 
 /**
  * Remove retired member ids from one session-list payload, in place.
@@ -42,39 +114,59 @@ export function stripRetiredMembers(payload, retired, maxDepth = 8) {
     && typeof entry === 'object'
     && typeof entry.id === 'string'
     && retired.has(entry.id)
-  const visit = (node, depth) => {
-    if (node === null || typeof node !== 'object' || depth > maxDepth) return
-    if (Array.isArray(node.subagentCatalog)) node.subagentCatalog = node.subagentCatalog.filter((entry) => !isRetired(entry))
-    if (node.agentTeam !== null && typeof node.agentTeam === 'object' && Array.isArray(node.agentTeam.members)) {
-      node.agentTeam.members = node.agentTeam.members.filter((entry) => !isRetired(entry))
-    }
-    // Projection frames look like { key: 'agentTeam', value: { members } }.
-    if (node.key === 'agentTeam' && node.value !== null && typeof node.value === 'object' && Array.isArray(node.value.members)) {
-      node.value.members = node.value.members.filter((entry) => !isRetired(entry))
-    }
-    if (node.key === 'subagentCatalog' && Array.isArray(node.value)) {
-      node.value = node.value.filter((entry) => !isRetired(entry))
-    }
-    for (const key of Object.keys(node)) {
-      if (key === 'subagentCatalog' || key === 'agentTeam') continue
-      visit(node[key], depth + 1)
-    }
-  }
-  visit(payload, 0)
-  return payload
+  return rewriteExit(payload, {
+    catalog: (entries) => entries.filter((entry) => !isRetired(entry)),
+    members: (members) => members.filter((entry) => !isRetired(entry)),
+  }, maxDepth)
+}
+
+/**
+ * Add this Lead's live members to one session-list payload, in place, without duplicating an id that is
+ * already in a team value.
+ *
+ * The row is the four fields `teamMemberProjectionSchema` requires and the panel reads — `id`, `name`,
+ * `role` and `phase` — and nothing else, because the wire schema is strict. `name` is the model-facing
+ * target (`reviewer`, `reviewer-g2`), which is the handle the panel label and the click's conversation
+ * share; `id` is the child Session id the roster recorded, which is what makes that click open the real
+ * chat (ADR 0023).
+ * @param {unknown} payload - one session-list payload or streamed frame.
+ * @param {(leadSessionId: string) => Array<{id: string, name: string}>} readLive - live rows for one Lead.
+ * @param {string|undefined} leadSessionId - Session the payload belongs to, when it carries no id.
+ * @returns {unknown} the same payload reference.
+ */
+export function mergeLiveMembers(payload, readLive, leadSessionId) {
+  if (payload === null || typeof payload !== 'object' || typeof readLive !== 'function') return payload
+  return rewriteExit(payload, {
+    catalog: (entries) => entries,
+    members: (members, leadId) => {
+      if (typeof leadId !== 'string') return members
+      const live = readLive(leadId)
+      if (!Array.isArray(live) || live.length === 0) return members
+      const known = new Set(members.map((entry) => entry?.id))
+      const added = []
+      for (const member of live) {
+        if (typeof member?.id !== 'string' || member.id.length === 0 || typeof member.name !== 'string') continue
+        if (known.has(member.id)) continue
+        known.add(member.id)
+        added.push({ id: member.id, name: member.name, role: 'teammate', phase: 'active' })
+      }
+      return added.length === 0 ? members : [...members, ...added]
+    },
+  }, 8, leadSessionId)
 }
 
 /** A no-op disposer. */
 const NOOP = () => {}
 
 /**
- * Wrap the host session-list exits so retired members are never sent to a client.
+ * Wrap the host session-list exits so retired members are never sent to a client, and the members this
+ * plugin owns are.
  * @param {object} ctx - host plugin context.
- * @param {{readRetired: () => Promise<Set<string>>, log?: (line: string) => void, ttlMs?: number}} options
+ * @param {{readRetired: () => Promise<Set<string>>, readLive?: (leadSessionId: string) => Array<{id: string, name: string}>, log?: (line: string) => void, ttlMs?: number}} options
  * @returns {{installed: boolean, dispose: () => void, invalidate: () => void}}
  */
 export function installProjectionFilter(ctx, options) {
-  const { readRetired, log = () => {}, ttlMs = 2000 } = options
+  const { readRetired, readLive = () => [], log = () => {}, ttlMs = 2000 } = options
   const service = typeof ctx.get === 'function' ? ctx.get('sessionController') : undefined
   if (service === undefined || service === null) {
     return { installed: false, dispose: NOOP, invalidate: NOOP }
@@ -98,9 +190,10 @@ export function installProjectionFilter(ctx, options) {
     }
     return cache.ids
   }
-  const strip = async (value) => {
+  const strip = async (value, leadSessionId) => {
     const ids = await retiredIds()
-    return ids.size === 0 ? value : stripRetiredMembers(value, ids)
+    const stripped = ids.size === 0 ? value : stripRetiredMembers(value, ids)
+    return mergeLiveMembers(stripped, readLive, typeof leadSessionId === 'string' ? leadSessionId : undefined)
   }
 
   const restores = []
@@ -108,7 +201,8 @@ export function installProjectionFilter(ctx, options) {
     const original = service[method]
     if (typeof original !== 'function') continue
     service[method] = async function teamRosterFilteredUnary(...args) {
-      return await strip(await original.apply(this, args))
+      // A `projections` read carries its Session id in the request; a list read carries one per row.
+      return await strip(await original.apply(this, args), args[0]?.sessionId)
     }
     restores.push(() => { service[method] = original })
   }

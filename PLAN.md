@@ -332,3 +332,19 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   the four target-scoped refusals (ADR 0016). The suite pins the exact no-argument request, each
   forwarded field, the typed refusals and the holder. The live start of a cwd/model/preset is the
   owner's install check.
+
+- [x] **P4-10** The shipped team panel lists this plugin's live members (v0.21.0).
+  Done when every host exit that carries an `agentTeam` value — the `projections` baseline, a `list` row,
+  the `control` baseline map, a `control` change frame and a `follow` snapshot — serves this Lead's live
+  members as the four fields the strict wire schema requires; a member already present is neither
+  duplicated nor re-roled; a retired member is still absent from every exit; a member with no recorded
+  child id is not added; a host without `sessionController` is skipped; and dispose restores every
+  wrapped method.
+  Delivered (ADR 0023): the existing projection filter gains `mergeLiveMembers` beside
+  `stripRetiredMembers`; `index.js` supplies `livePanelMembers(roster)` (phase `active` plus a child id,
+  `name` = the model-facing target) through a synchronous roster-table read; and the synthesised row is
+  exactly `{ id, name, role: 'teammate', phase: 'active' }`. Retirement stays absence, the Session log is
+  never written, and the shipped task section is deliberately not overlaid (ten wire fields this board
+  does not have). The suite pins all five shapes, the duplicate case, the strip-and-merge order, the
+  no-op, the missing-child-id filter and the disposer; the rendered panel is the owner's install check.
+

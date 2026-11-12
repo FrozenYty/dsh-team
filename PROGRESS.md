@@ -1319,3 +1319,66 @@
   the suite registers on a fake Agent context and never loads the Harness. The four frozen names in ADR
   0014 and the three `cordis.patch.yml` entries were not touched.
 - **Version.** `0.20.0`: the plugin now serves a tool a real member can call, which is behaviour.
+
+## 2026-11-12 — the shipped team panel lists this plugin's members (P4-10, v0.21.0)
+
+- **The gap this closes is a read, not a lifecycle.** The built-in members/tasks panel renders
+  `projectionsBySession[lead].values.agentTeam`, the wire view of the Lead Session's team fold. That fold
+  only hears the `team/member` and `team/task` events the shipped roster appends, so a member started
+  through `ctx.subagents` was never in it — the plugin could list, message, retire and replace a member,
+  but the one in-app view the owner actually looks at could not show it. The log is not the place to fix
+  that: a synthetic transition out of a terminal phase throws and the projection records the throw as a
+  permanent `failure` (ADR 0001), after which every Team read and mutation for that Lead throws.
+- **The same exit already carried the answer.** `host-hooks.js` already wrapped
+  `sessionController.list` / `projections` / `control` / `follow` to strip retired ids from
+  `subagentCatalog` and `agentTeam`. The change extends that seam to strip and merge: the outgoing value
+  keeps losing retired ids, then gains this Lead's live members. The value is a parsed copy — every
+  publish point validates it with `wire.viewSchema.parse`, which builds new objects — so the overlay can
+  rewrite it without touching the projection's stored cell or appending a Session event. That property is
+  what made the seam safe in the first place, and the ADR records it as the boundary: write the copy,
+  never the log.
+- **The synthesised row is four fields, because that is all the strict schema accepts and all the panel
+  reads:** `{ id: childId, name: target, role: 'teammate', phase: 'active' }`. `id` is the recorded child
+  Session id, so the panel's click opens the member's real chat and its running-state lookup finds the
+  real child; `name` is the model-facing target (`reviewer`, `reviewer-g2`), the same handle every tool
+  takes; `role` and `phase` are the only true values for an overlay-added member. Only a record whose
+  phase is `active` and that carries a child id is offered (`livePanelMembers` in `index.js`), so a
+  provisioning reservation, a failed start and a retired tombstone are not added. An id already present
+  in the value is left exactly as it was — the overlay never duplicates, renames or re-roles a shipped
+  row — and a member that is retired simply stops being appended, because the wire phase enum is closed at
+  `provisioning | active | failed` and absence is the only honest statement of "retired" in this view.
+- **The task half is deliberately not overlaid.** The shipped task view needs about ten fields
+  (`id`, `revision`, `subject`, `description`, `status`, `blockedBy`, `writeScopes`, `ownerName`, `ready`,
+  `writeScopeWarnings`), while a member row needs four. This board has no revisions, dependency graph or
+  write scopes, so a synthetic task row would be rejected by the strict schema or drop most of what the
+  panel shows. The ADR records it as the next step, not something to invent here.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits 0; `node scripts/check.mjs` prints `check passed` after the last edit; and
+  `node --test --test-isolation=none tests/*.test.mjs` is 176 tests, 176 passing (170 before, plus six
+  new overlay tests). The tests drive every shape the value arrives in — the `projections` baseline, a
+  `list` row's `projections.values`, the `control` baseline's keyed map, a `control` change frame
+  (`changes[].val`) and a `follow` snapshot — through the installed filter, and cover the duplicate case,
+  the strip-and-merge order on all five shapes, the no-op (same payload and same array reference), the
+  missing-child-id filter, a host without `sessionController`, and the disposer restoring all four
+  methods rather than only `list`.
+- **The main test was proved able to fail, and the proof edited the operation, not the test.** With the
+  merge removed from the filter's `strip`, `tests/host-hooks.test.mjs` failed 2 of 14; the seam test at
+  line 137 failed with actual `['lead-1']` against expected `['lead-1', 'child-live']`. The merge was
+  restored and the file passed 14 of 14. `tests/host-hooks.test.mjs` hashed
+  `9E1B6A287F9B306143B01CF25817DB8A96742B9249AF516397E74B65A26B7044` before and after the proof, and
+  `host-hooks.js` returned to `D8470755B02A1CA5A63A6206669132B9CE90F84C19BD9A6292CF84A194DB78A2`, so
+  neither the test nor the delivered operation was left edited.
+- **Documents.** A new ADR 0023 records the overlay, its four-field row with the schema and render lines
+  it was read from, the copy-not-log boundary, retirement as absence, and the task-view reason. The
+  architecture pair gains §2.4.1 — what a plugin may write where, and how each written field maps to what
+  the panel shows — plus updated §2.4, §5 and §6 entries. The README pair says plainly that the shipped
+  **members** panel lists this plugin's live members and that a retired member leaves the panel rather than
+  being marked; the index pair registers ADR 0023; `PLAN.md` gains P4-10, ticked because this PR delivers
+  it.
+- **What stays unverified.** No install and no `plugin_manager` call was made. The rendered panel — a
+  member appearing, an idle one reading not-running, a click opening its chat, and a retired one disappearing —
+  is the owner's install check; the suite never loads the Harness. The overlay's freshness is also a real
+  limit: this plugin writes no Session event, so a spawn publishes no team change frame of its own, and a
+  new row appears on the next `list`/`projections`/`follow` read or `control` frame. The four frozen names
+  in ADR 0014 and the three `cordis.patch.yml` entries were not touched.
+- **Version.** `0.21.0`: the shipped panel's content changes, which is behaviour, not a comment.
