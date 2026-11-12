@@ -53,8 +53,9 @@ lockfile and a reader.
    and an accepted ADR is closed, so entries and ADR bodies written before this change are historical
    facts: the plugin *was* called that then. That is why ADR 0012 still shows the provider reporting
    `include:team-roster` with package `dsh-team-roster` and the refusal quoted as
-   `dsh-team-roster: config field …`, and why ADR 0004, 0005, 0006, 0010 and 0011 still name the trash
-   path under `~/.dsh/team-roster`. The same applies to the v0.3 note that renamed the storage domain from
+   `dsh-team-roster: config field …`, and why ADR 0004, 0010 and 0011 still name the trash
+   path under `~/.dsh/team-roster`. ADR 0005 and 0006 name no path: what they keep is the old
+   route prefix, `/api/team-roster`. The same applies to the v0.3 note that renamed the storage domain from
    `team_control` to `team_roster` — it is the record of that migration, not a current name. After this
    change the provider reports `include:dsh-team` with `patchId: team-roster`, and a refusal reads
    `dsh-team: config field …`. A current document (the README pair, `docs/architecture-*.md`,
