@@ -14,11 +14,11 @@
 
 ## 状态
 
-- 当前版本：v0.16.0。
+- 当前版本：v0.19.0。
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
-- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；以及整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝。由定义真正启动一个成员，是所有者安装后的验证项（ADR 0018）。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝；以及团队文件层（v0.19.0）——三来源优先级、写入拒绝、占位符退路与保留文件名。由定义真正启动一个成员、或真机读取一次团队文件，是所有者安装后的验证项（ADR 0018、ADR 0021）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -40,7 +40,7 @@
 | `retire_member` | 排空、立碑、把持久化会话移进回收站（移不动时改由工作区归档隐藏），再执行保留上限。对已退役成员重复调用是无操作，并会说明这一点。 |
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
-| `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取已存的那份，传入模板即保存，传空串则回到内置版本。 |
+| `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取生效的那份及其 `source`（`file`、`stored` 或 `builtin`），传入模板即保存，传空串则回到内置版本。Lead 项目里的 `team/team.md` 只要存在就胜出，因此保存或清除都会带着该文件的路径被拒绝，并要求编辑它。 |
 | `task_board` | 该 Lead 自有的工作板：用 `action` 选择 `create`、`list`、`update`、`release` 或 `delete`。一条任务有 id、标题、一段有上限的正文（说明“完成指什么”、工作停在哪里）、`open` 或 `done`，以及可选的成员 `owner`；未完成的任务会随替换一起过去，正文随之移动。 |
 
 **成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值——只有一个例外：改了 `provider` 或 `model` 却没给 `reasoning_effort` 时，新路由解析自己的默认值。`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 携带 `provider`、`model`、`reasoning_effort` 与 `max_tokens`，最后一项是 token 上限，也是挑更便宜模型的地方；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。`started_with` 是插件转发内容的回执，不是子代理解析结果的确认：它原样回显传入的字段，既不解析也不回读，所以模型有没有真正生效，要靠成员的第一条请求去确认，而不是这个字段。Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
@@ -90,6 +90,8 @@ You review changes. Report only findings that change behaviour, with the file an
 
 **一个坏文件不会藏起其他文件。** 格式错误的定义会在本来成功的 spawn 结果里，用 `definition.problems` 按路径与行号报出，合法的定义照常可用。同一个名字被两个文件声明时，两边都不可用——因为悄悄挑一个会让另一个文件的修改彻底不可见。上限是拒绝而不是截断：单文件 16 KiB，单次扫描 64 个文件——超过这个数量时整次扫描被拒绝，而不是只服务一个残缺的子集。路径同样绝不猜：profile 若没有挂载 `workingDirectory` 服务，就返回 `started: false` 与 `reason: "working-directory-unavailable"`，并且不预留任何成员。
 
+`team/team.md` 预留给团队作用域，不是成员定义：成员仍然可以在别的文件里声明 `name: team`，但这个文件名本身会被定义扫描跳过。这正是避免同一个文件在每次 spawn 时都被报成坏定义的原因（ADR 0021）。
+
 ## 生命周期
 
 | 步骤 | 行为 |
@@ -112,7 +114,7 @@ You review changes. Report only findings that change behaviour, with the file an
 
 - **先启动继任者，再退役前任，都在同一次调用里。** 启动失败时前任原封不动，失败的预留会记成继任者的 `failed` 记录；退役失败则返回 `predecessor_retired: false`，再调一次 `retire_member` 即可收尾（ADR 0009）。目标已经退役时同样接受，由墓碑提供交接书。
 - **assignment 是持久字段，且有长度上限。** `spawn_member.assignment` 在启动时写入，`message_member.assignment` 在工作变化时替换，两者都限制在 1000 个字符以内，超长直接拒绝而不是截断；`list_members` 会报告它，墓碑也会保留它。
-- **交接书的形状可以每个 Lead 固定一次。** `handoff_template` 存下的模板会代入 `{successor}`、`{predecessor}`、`{label}`、`{assignment}` 与 `{task_board}`。没有引用 `{assignment}` 的模板在保存时就被拒绝——继任者若不知道接手的是什么，就不算完成交接；未知占位符同样在保存时被拒绝，而不是原样写进子代理的提示词。内置交接书就是默认模板、由同一套渲染代码生成，因此没有存过模板的 Lead 得到的字句和以前完全一样，清除模板即回到它（ADR 0015）。
+- **交接书的形状可以放在两个地方，而文件胜出。** 在成员定义旁边提交 `team/team.md`，frontmatter 留空、正文写模板；它是项目的形状，因此同一个项目里的两个 Lead 共用它。或者用 `handoff_template` 把一份模板存在这个 Lead 的花名册记录上。顺序是文件、已存模板、内置形状，读取形式会用 `source` 报出实际生效的是哪一个。两者适用同一套占位符——`{successor}`、`{predecessor}`、`{label}`、`{assignment}` 与 `{task_board}`；没有引用 `{assignment}` 的模板会被拒绝，因为继任者若不知道接手的是什么，就不算完成交接；未知占位符会被按名字拒绝，模板 1000 字符的上限是拒绝而不是截断。文件存在时，`handoff_template` 的保存与清除都会被拒绝，并点名要编辑的文件：文件会遮蔽写入，接受它就成了静默无操作。坏文件会在 `file_problem` 里报告，且不会成为生效模板；接下来是已存模板，最后是内置形状。两者都没有的 Lead 得到的字句与以前完全一样（ADR 0015、ADR 0021）。
 
 ## 临时成员
 
@@ -211,7 +213,7 @@ Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面�
 | `index.js` | Host 插件入口：工具定义、参数校验、Lead 专属权限检查 |
 | `actions.js` | 模型侧工具背后的花名册操作 |
 | `roster.js`、`trash.js` | 持久花名册（相态、代次命名、收养、迁移），以及带恢复与保留上限的会话回收站 |
-| `definitions.js` | 成员定义：扁平 frontmatter 解析器、`team/` 目录扫描及其上限，以及解析所用的工作目录 |
+| `definitions.js` | `team/` 层：扁平 frontmatter 解析器、成员定义扫描及其上限、团队文件的交接书模板，以及两者解析所用的工作目录 |
 | `host-hooks.js` | 投影过滤与花名册名额补偿 |
 | `tests/`、`scripts/check.mjs` | 单元测试，以及 CI 会跑的仓库检查 |
 | `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`.github/` | bundle 本体、CI workflow 与模板 |

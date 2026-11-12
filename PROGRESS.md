@@ -1203,3 +1203,67 @@
   and the read rule are unit-tested only.
 - **Version.** `0.18.0`: a task that cannot say what it is, and a write that can undo the handover it
   exists to move, were both behaviour.
+
+## 2026-11-12 — the team scope moves onto disk: the brief's shape is a team file (v0.19.0)
+
+- **A survey found the asymmetry, and this release closes it.** CrewAI splits a crew into `crew.jsonc`
+  and `agents/<name>.jsonc`, both on disk. This plugin already had the member scope on disk (v0.16.0,
+  ADR 0018), but the team scope lived only in the per-Lead `storageDomain` record — so the one setting
+  that shapes a handover, the brief template, was the only team setting with no diff, no review, and no
+  sharing between two Leads in one project.
+- **One optional file, in the same directory the member definitions already use.**
+  `<Lead working directory>/team/team.md`, resolved by `definitionDirectory` — the same
+  `workingDirectory.ensure(Lead, signal)` + `join(..., 'team')` path — and parsed by the same
+  `parseFrontmatter` reader, with no accepted field. Its body is the handoff template; its frontmatter is
+  empty for now, so no team setting was invented. The directory resolution and the parser are code that
+  already existed, not a second path or a second YAML subset.
+- **The effective template has three sources, and the read reports which one is in effect.** The file
+  wins; otherwise the stored `handoffTemplate`; otherwise the built-in shape. `handoff_template`'s read
+  answer keeps `template`, `stored`, `valid`, `problem` and `message`, and gains `source`
+  (`file`|`stored`|`builtin`), `file` and `file_problem`; the declared output schema and
+  `tests/entry.test.mjs`'s conformance check both cover the new fields. A replacement passes the same
+  resolved template to `handoffPrompt`, so the brief's composition is untouched — only where the
+  template comes from changed.
+- **A store write or clear is refused while the file exists.** The exact answer is
+  `handoff_template: the team file "<path>" is in effect, so a stored template would be shadowed and this
+  write would change nothing. Edit that file to change the brief, or remove it to use handoff_template
+  again.` The refusal holds even when the file itself is unusable, because a fixed file would shadow the
+  write on the next replacement; accepting it would only move the surprise later. This is the failure the
+  feature is built to prevent — a successful call whose brief did not change.
+- **`team.md` is reserved, explicitly.** The member-definition scan skips that exact filename, so a
+  `team.md` can never be reported as a broken definition on every spawn. A member may still declare
+  `name: team` in another file: the filename is not an identity, and the reservation covers one path. A
+  test proves both halves.
+- **The file is held to the placeholder rules.** `parseTeamFile` calls `handoffTemplateProblem`, so an
+  unknown token is refused by name, `{assignment}` is required, the 1000-character cap is a refusal, and
+  the existing rendered-brief cap still applies. A file that fails any rule is reported in
+  `file_problem` and never becomes the effective template: the stored template is next, the built-in
+  shape is last. That is the same fallback a stale stored value already gets, not a way around the rules.
+- **No file means no change.** `tests/team-file.test.mjs` pins the built-in brief byte for byte and
+  asserts the read reports `source: 'builtin'`; the existing 162 tests were not edited to accommodate the
+  new first source. The one new test file carries seven cases.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits clean; `node scripts/check.mjs` passes after the last edit; and
+  `node --test --test-isolation=none tests/*.test.mjs` is 169 tests, 169 passing (162 before, plus 7 in
+  `tests/team-file.test.mjs`; `tests/entry.test.mjs` extended, no existing assertion changed).
+- **The main test was proved able to fail, and the proof edited the operation, not the test.** With the
+  file branch moved after the stored branch in `resolveHandoffTemplate`, the precedence test failed at
+  `tests/team-file.test.mjs:84` with `actual 'stored'` against `expected 'file'` (`AssertionError
+  [ERR_ASSERTION]: the file is the source while it exists`), and 6 of 7 passed. The file branch was
+  restored and the test passed again. `tests/team-file.test.mjs` hashed
+  `25AA40C0C0B783F744F9646A8AC97460056598CF42EFC0CF515AE20E51912CA9` before and after the proof, and
+  `actions.js` returned to `B3627CC9B2E60FCB736EB5563F2F7C305A1A899E5EA4B06AEF32534B8D1015EF`, so the
+  test file was never edited and the operation was exactly restored.
+- **Bilingual parity was measured before and after rather than assumed.** The README pair went from 18
+  `##` headings and 178 distinct backtick identifiers per side with identical sets to 18 and 184 per side,
+  still identical; the index pair from 5/41 identical to 5/43 identical; the architecture pair from 21
+  headings and 304 English/301 Chinese identifiers with 9 English-only and 6 Chinese-only spans to 22 and
+  313/310 with 10 and 7 — the one new difference on each side is the localized team-file path
+  (`<Lead working directory>/team/team.md` against `<Lead 工作目录>/team/team.md`), which follows the
+  existing localized `<Lead working directory>/team/*.md` pair. No other set difference was added.
+- **What stays unverified.** No install and no `plugin_manager` call was made. The live
+  `handoff_template` read/write and a replacement rendered from a real `team/team.md` are the owner's
+  install check: the suite drives `definitions.js`, `actions.js` and the tool wrappers against a real
+  filesystem and a `workingDirectory` fake, and never loads the Harness. The four frozen names in ADR 0014
+  and the three `cordis.patch.yml` entries were not touched.
+- **Version.** `0.19.0`: the source of the handoff template changes, which is behaviour, not a comment.

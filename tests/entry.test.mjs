@@ -363,7 +363,8 @@ test('every answer conforms to the output schema its own tool declares', async (
   const cleared = await answer('task_board', { action: 'update', task_id: task.task.id, body: null })
   assert.equal(cleared.task.body, undefined)
   await answer('task_board', { action: 'update', task_id: task.task.id, status: 'done' })
-  await answer('handoff_template', {})
+  const template = await answer('handoff_template', {})
+  assert.equal(template.source, 'builtin', 'no file and no stored template means the built-in shape')
 
   // The definition layer is a second branch of this one result schema, so both answers it can give are
   // checked against the declared schema: a member started from a file, and the typed refusal (ADR 0018).
@@ -399,6 +400,18 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.equal(replacedFromFile.target, 'auditor-g2')
   assert.equal(replacedFromFile.assignment, 'Recheck the curve.')
   assert.equal(replacedFromFile.definition.assignment, 'predecessor')
+
+  // The team file is a third source for the brief's shape, and its read answer declares `source` plus
+  // the file it found (v0.19.0, ADR 0021). A store write while it exists is refused by the wrapper too.
+  await writeFile(join(cwd, 'team', 'team.md'), '---\n---\nFrom the file: {predecessor} -> {successor}. {assignment}\n')
+  const brief = await defined.tools.get('handoff_template').execute({}, { agent: defined.lead })
+  assertMatchesSchema(brief, defined.tools.get('handoff_template').output.schema, 'handoff_template')
+  assert.equal(brief.source, 'file')
+  assert.ok(brief.file.endsWith(join('team', 'team.md')))
+  await assert.rejects(
+    () => defined.tools.get('handoff_template').execute({ template: 'Stored: {assignment}' }, { agent: defined.lead }),
+    /handoff_template: the team file .*team\.md.*Edit that file/,
+  )
 
   // A profile without the service: the working-directory refusal is the other branch of the same answer.
   const unserviceable = harness()

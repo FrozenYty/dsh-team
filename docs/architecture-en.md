@@ -68,6 +68,10 @@ A short map, not a changelog: each release below names what it added and the sec
 - **v0.16** — a member can be defined on disk: `spawn_member.definition` reads a flat-frontmatter markdown
   file under `team/` in the Lead's working directory, the call's own arguments win over the file's, and the
   result reports which parts came from where (§4.5, §4.6, ADR 0018).
+- **v0.19** — the team scope gets the other half of that split: one optional `team/team.md` beside the
+  member definitions, whose body is the handoff-brief template. The effective template is the file, then
+  the stored template, then the built-in; the read form reports which source is in effect, and a
+  `handoff_template` write or clear is refused while the file exists (§4.4, §4.5, §4.7, ADR 0021).
 
 ### 2.1 Compaction is enabled
 
@@ -256,9 +260,10 @@ ephemeral     true when the member retires itself once its work is over, set by 
               by message_member (§4.3.1); optional, absent otherwise, so a non-ephemeral record is unchanged
 startedAt     ISO timestamp on an ephemeral member: when its child was started. This is the positive
               evidence the lazy sweep requires, so a reservation that never published is never swept
-handoffTemplate  on the roster record, not on a member: this Lead's handoff-brief template, whose
-              placeholders a replacement interpolates (§4.4); optional, so every record written before
-              P4-02 loads and behaves exactly as it did
+handoffTemplate  on the roster record, not on a member: this Lead's stored handoff-brief template,
+              whose placeholders a replacement interpolates (§4.4). It is the *second* source: a
+              `team/team.md` in the Lead's project wins while it exists (§4.7). Optional, so every
+              record written before P4-02 loads and behaves exactly as it did
 tasks         on the roster record, not on a member: this Lead's work board, an array of task rows. Each
               row is `{ id, title, body?, status, owner?, created_at, updated_at? }`: `id` is a UUID
               generated when the task is created, `title` is bounded display text (`TASK_TITLE_MAX`, 200),
@@ -275,9 +280,10 @@ tasks         on the roster record, not on a member: this Lead's work board, an 
 the artifact went — and is the only value that makes `restore_member` a typed refusal without a move.
 
 There is no other field, and in particular no `dormant` phase (§4.3) and no `briefPath`: the brief is
-composed at replacement time from `assignment` and from the Lead's `handoffTemplate` (§4.4). The
-`ephemeral` and `startedAt` fields are the P4-01 pair, and both are optional: a record written by any
-earlier release loads and behaves exactly as it did.
+composed at replacement time from `assignment` and from the effective template — the `team/team.md` file,
+the stored `handoffTemplate`, or the built-in shape, in that order (§4.4, §4.7). The `ephemeral` and
+`startedAt` fields are the P4-01 pair, and both are optional: a record written by any earlier release
+loads and behaves exactly as it did.
 
 `handoffTemplate` is the one field on this record that describes the Lead rather than a member. Its
 **type** is validated when the record loads; its **content** — the placeholder vocabulary, the required
@@ -285,7 +291,9 @@ earlier release loads and behaves exactly as it did.
 form (§4.5). That split is deliberate: the storage facility validates every record of every Lead when it
 opens the domain, so refusing a whole roster over one Lead's brief preference would hide every team. A
 stored template that no longer passes validation is reported, never silently dropped, and the
-composition falls back to the built-in brief instead of writing the offending token into a child.
+composition falls back to the built-in brief instead of writing the offending token into a child. Since
+v0.19.0 the file's body goes through the same content check where it is parsed, and a file that fails it
+does not become the effective template (§4.7).
 
 `tasks` follows the same split for the same reason, and goes one step further. Its **structure** is
 validated on load — an array, every row an object with an `id` string, a known `status`, a non-empty
@@ -357,11 +365,13 @@ What the cells depend on:
   `started: false` with a `reason` the model can act on instead of a host error (ADR 0016). On the
   `replace` cells this is the ordering already written above: the predecessor is untouched and the
   answer says `predecessor_retired: false`.
-- **`replace` with a stored template is the same cell.** The phases and the order of the two halves do
-  not change: the successor starts from the brief, and the brief is rendered from the Lead's
-  `handoffTemplate` instead of the built-in shape (§4.4). Two refusals are added and both happen before
-  anything starts — a stored template is validated when it is set, and a rendered brief past its cap
-  refuses the call — so the cells stay as written and the record is not touched.
+- **`replace` with a stored or file template is the same cell.** The phases and the order of the two
+  halves do not change: the successor starts from the brief, and the brief is rendered from the effective
+  template — `team/team.md`, then the Lead's `handoffTemplate`, then the built-in shape (§4.4, §4.7).
+  Two refusals are added and both happen before anything starts — a template is validated when it is set
+  or parsed, and a rendered brief past its cap refuses the call — so the cells stay as written and the
+  record is not touched. A `handoff_template` write or clear while the file exists is a refusal, not a
+  phase transition: it changes no member row and no stored template (§4.7).
 - **Two tools in one model turn.** Every call re-reads the roster and every mutation is one atomic
   `update` (§4.2), so the second call acts on the first one's result: `message_member` then
   `retire_member` in one turn delivers and then tombstones, the reverse order refuses with `retired`,
@@ -597,18 +607,21 @@ The successor's brief is inherited work, not a copy of the predecessor's state: 
 the predecessor's `assignment` unless the model records a different one, so repeated replacement does not
 thin the record out one generation at a time.
 
-**The brief's shape is the Lead's; the inherited work is the record's.** A Lead that replaces members
-repeatedly stores a template with `handoff_template` (§4.5) and the composition uses it; a Lead that
-stores none gets the built-in shape. The placeholders are `{successor}` and `{predecessor}` (the two
-targets), `{label}` (the predecessor's role), `{assignment}` (what it was recorded as doing) and
-`{task_board}` (the pointer to the Lead's own task board). `{assignment}` is required, because a brief
-that omits it hands the successor a role and a board pointer but not the work it inherited — which is the
-whole point of the handoff. The template is validated when it is stored: an unknown placeholder is refused
-by name, so a typo cannot reach a child as literal text. The successor's own task is always appended after
+**The brief's shape has three sources, in this order: the team file, the stored template, the built-in
+shape.** A Lead that replaces members repeatedly can commit `team/team.md` with the project, store a
+template with `handoff_template` (§4.5), or store nothing and get the built-in shape. The file wins while
+it exists, so the tool reports `source` on every read and refuses a store or clear with the file's path
+(§4.7). The placeholders are `{successor}` and `{predecessor}` (the two targets), `{label}` (the
+predecessor's role), `{assignment}` (what it was recorded as doing) and `{task_board}` (the pointer to the
+Lead's own task board). `{assignment}` is required, because a brief that omits it hands the successor a
+role and a board pointer but not the work it inherited — which is the whole point of the handoff. A
+template is validated when it is stored or when the file is parsed: an unknown placeholder is refused by
+name, so a typo cannot reach a child as literal text. The successor's own task is always appended after
 the rendered template, so no template can drop it. The rendered section is capped at 2000 characters and
-refused rather than truncated, measured only when a template is stored — which is what keeps the built-in
-path byte-identical to the release before P4-02. The template belongs to one Lead's roster record, so two
-Leads never share one, and `list_members` rows never carry it.
+refused rather than truncated, measured only when a template is in effect — which is what keeps the
+built-in path byte-identical to the release before P4-02. A stored template belongs to one Lead's roster
+record, so two Leads never share one; a team file belongs to the project, so two Leads working in the same
+project do share it, deliberately. `list_members` rows never carry either.
 
 **The board travels with the brief, bounded.** A brief is not a workspace dump: a member starting with a
 200-line backlog is worse off than one starting with five ids. So the composition adds **one line** naming
@@ -624,7 +637,7 @@ the release before P2-09 produced. A successor whose predecessor owned no open t
 that is byte-identical to the old one, and a test pins that string — the brief carries ids and titles only
 when there is work actually in flight, and it never carries a `done` row.
 
-**A stored template keeps its own line.** The inherited-tasks line is appended after the rendered template
+**A template keeps its own line.** The inherited-tasks line is appended after the rendered template
 and before the successor's own task, so a template can neither drop it nor duplicate it, and the
 `{task_board}` placeholder still means what it always meant: the pointer. A template is not required to
 mention the board at all — it is the default shape that does.
@@ -656,7 +669,7 @@ the Lead, so a failed projection cannot disable every tool.
 | `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. It is a retirement with no successor, so the member's open tasks lose their owner and the result names them in `unowned`/`unowned_tasks` (§4.3.2). |
 | `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, a pruned tombstone answers `reason: 'pruned'` without touching the workspace, and a refusal carries `current_holder` when another generation of the name is live. It assigns no work: `unowned`/`unowned_tasks` report the open rows still waiting for an owner (§4.3.2). |
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
-| `handoff_template` | Read, store or clear this Lead's handoff-brief template: omit `template` to read it back, pass a template to validate and store it, pass an empty string to clear it and return to the built-in brief (§4.4). One template per Lead, validated at set time; a stored value that no longer passes validation is reported by the read (`valid`, `problem`) rather than silently dropped, and the composition falls back to the built-in. |
+| `handoff_template` | Read, store or clear this Lead's handoff-brief shape: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to validate and store it, pass an empty string to clear it. The team file `team/team.md` wins while it exists, so a store or clear is refused with the file's path and the instruction to edit it; a broken file is reported by `file_problem` and does not shadow a usable stored template. A stored value that no longer passes validation is reported (`valid`, `problem`) and the composition falls back to the built-in (§4.7). |
 | `task_board` | This Lead's own work board: `create` adds a task, `list` reads the board, `update` sets a task's `status`, `owner` and/or `body` (`owner: null` and `body: null` clear them), `release` clears an owner, `delete` removes the row (§4.3.2). One tool with an `action` enum rather than five names, because the five operations share one row shape and one refusal vocabulary and each action carries at most three extra fields. A task id is a UUID, a title is refused past 200 characters, a body is refused past 2000 and one Lead holds at most 200 tasks; a stored row whose title or body no longer passes the read rule is served with `problem` rather than dropped (§4.2). `list` reports how many tasks are open, how many of those nobody owns, and every row's body — the acceptance criteria and stopping point the brief does not carry. An id-addressed write is built from the row as stored inside the serialized mutation, so an `update` keeps a field it did not name and a `release` or `delete` whose row moved since the call read it answers `changed: false` with the row it found instead of undoing a handover (ADR 0020). |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
@@ -758,6 +771,59 @@ and the model writes the files with its own file tools. `spawn_member`'s result 
 `oneOf` — the member row, or the definition refusal — since the refusal is an answer rather than a host
 error, which is the rule ADR 0016 already applies to a refused start.
 
+### 4.7 The team file (v0.19.0)
+
+The member scope moved onto disk in v0.16.0; the team scope wanted the same thing for the one setting that
+shapes a handover. A brief template was the only team setting with no diff, no review, and no sharing
+between two Leads working in the same project, so it is now a file committed with the project:
+`<Lead working directory>/team/team.md`, resolved through the same `workingDirectory` service and the same
+`team/` directory the member definitions use (§4.6). The file's body is the handoff template, validated by
+the same `handoffTemplateProblem` rules a stored template passes.
+
+**The name is reserved, and that is the answer to the scan collision.** `team.md` is skipped by the
+member-definition scan, so it can never be mistaken for a member definition — a `team.md` declares no
+`name` and would otherwise be reported as a broken definition on every spawn. A member may still declare
+`name: team` in another file: the filename is not an identity (ADR 0018), and the reservation covers one
+path, not one name.
+
+**The frontmatter is empty for now.** It is parsed by the same documented subset, with no accepted field,
+so a team setting nobody asked for is refused by name and line instead of silently carried. A future team
+setting is a field added to that set, not a new parser.
+
+**The effective template has three sources, in this order.**
+
+| Source | When it is in effect | What the composition does |
+|---|---|---|
+| `file` | `team/team.md` exists and parses as a usable template | renders the file's body; the stored template is shadowed |
+| `stored` | no usable file, and this Lead's `handoffTemplate` passes the content rules | renders the stored template, unchanged from v0.11.0 |
+| `builtin` | no usable file and no usable stored template | renders the built-in shape, byte-identical to a profile that never had either |
+
+The read form of `handoff_template` reports `source`, the effective `template`, the file's path when one
+exists, `file_problem` when the file is not usable, and the stored value's own `stored`/`valid`/`problem`.
+A file that exists but does not pass — an unknown placeholder, a missing `{assignment}`, an over-cap
+template, an unknown frontmatter field, an unreadable or oversized file — is reported and never becomes
+the effective template; the stored template is next, and the built-in shape is last. That is the same
+fallback a stored value that no longer validates already gets, and it is what stops a typo in a file from
+reaching a child as literal text.
+
+**A store write is refused while the file exists.** The file wins, so accepting a write would be a silent
+no-op: the model would believe it changed the brief while the file still composed every successor. Both
+setting and clearing answer with the same refusal, and it names the file and the edit:
+
+```
+handoff_template: the team file "<abs path>/team/team.md" is in effect, so a stored template would be
+shadowed and this write would change nothing. Edit that file to change the brief, or remove it to use
+handoff_template again.
+```
+
+**What stays in the runtime record, and why.** The *tasks* do not move to the file. A task is lifecycle
+state, written in the same breath as a tombstone and moved by a replacement (ADR 0017): it belongs to the
+Lead's run, not to the project's source tree. The template is the opposite kind of state — a shape
+preference, true of the team rather than of one member or one run — and that is exactly what a committed
+file is good at. The split is by kind, not by age: the file holds what two Leads in one project should
+share, and the record holds what only this run knows. A shared `team/` directory is therefore a feature
+for the template and would be a bug for the board.
+
 ## 5. Harness extension points used
 | Need | Mechanism |
 |---|---|
@@ -773,7 +839,7 @@ error, which is the rule ADR 0016 already applies to a refused start.
 | notice that a child stopped | `subagent/end` (published when a run settles) and the `idle` edge of `agent/status`; neither is durable, so the ephemeral sweep still carries its own evidence (§4.3.1, ADR 0013) |
 | wait on a member's live status | `ctx.on('agent/status', ({ agent, status }))` from the plugin's own context, filtered by the child ids this roster holds; the dispatch is scope-filtered and an unscoped listener is admitted to it (§4.5) |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
-| resolve the Lead's working directory, and the `team/` a member definition is read from | `ctx.get('workingDirectory').ensure(agent, signal)` — the same service and method the spawn seam uses to resolve a relative `cwd`; optional, so a profile without it refuses a definition spawn instead of guessing a directory (§4.6, ADR 0018) |
+| resolve the Lead's working directory, and the `team/` a member definition or the team file is read from | `ctx.get('workingDirectory').ensure(agent, signal)` — the same service and method the spawn seam uses to resolve a relative `cwd`; optional, so a profile without it refuses a definition spawn and cannot see a team file, instead of guessing a directory (§4.6, §4.7, ADR 0018, ADR 0021) |
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | credit the shipped roster budget | patch the legacy roster's `maxMembers` getter and `spawn` (ADR 0004) |
@@ -810,12 +876,13 @@ error, which is the rule ADR 0016 already applies to a refused start.
   the shipped task board or the predecessor's transcript, so the successor's brief is composed from the
   record and from this plugin's own task rows (§4.3.2). A member whose assignment was never recorded, and
   whose board holds no open task, hands over a label and a pointer, not a summary.
-- **A member definition is a file this plugin only reads.** It cannot tell whether a definition is current,
-  whether its prompt matches the work the Lead has in mind, or whether a `team/` directory is shared by two
-  Leads in one working directory; that is the project's version control, not this plugin's job. What it
-  guarantees is narrower and checkable: the definitions a caller can use are exactly the readable `.md`
-  files under `team/` at the moment of the call, and a file it cannot read is refused by path and line
-  rather than half-applied (§4.6, ADR 0018).
+- **A member definition and the team file are files this plugin only reads.** It cannot tell whether they
+  are current, whether a prompt matches the work the Lead has in mind, or whether a `team/` directory is
+  shared by two Leads in one working directory; that is the project's version control, not this plugin's
+  job. What it guarantees is narrower and checkable: the definitions a caller can use are exactly the
+  readable `.md` files under `team/` at the moment of the call, the team file is exactly `team.md`, and a
+  file it cannot read is refused by path and line rather than half-applied (§4.6, §4.7, ADR 0018,
+  ADR 0021).
 - **Compaction is profile-wide.** Enabling the backend changes behaviour for every session in the
   profile. It is a shipped feature turned on, not custom code, but it is not scoped to this plugin's
   members.

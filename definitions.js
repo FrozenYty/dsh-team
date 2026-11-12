@@ -25,7 +25,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 
-import { checkAssignment, checkLabel, checkMemberName } from './roster.js'
+import { checkAssignment, checkLabel, checkMemberName, handoffTemplateProblem } from './roster.js'
 
 /**
  * The directory a definition lives in, relative to the Lead's working directory.
@@ -35,6 +35,21 @@ import { checkAssignment, checkLabel, checkMemberName } from './roster.js'
  * wrong `team/` or none at all (ADR 0018).
  */
 export const DEFINITION_DIR = 'team'
+
+/**
+ * The one team-scope file, beside the member definitions in the same `team/` directory.
+ *
+ * A member definition is a file whose frontmatter declares `name`; this file is the other half of the
+ * split the survey found in CrewAI: the team's own settings, on disk and in review, while the roster
+ * stays runtime state. Its body is the handoff-brief template, because a template is multi-line prose
+ * that a flat `key: value` frontmatter cannot express; its frontmatter is deliberately empty for now, so
+ * a field nobody asked for is refused instead of silently carried (ADR 0021).
+ *
+ * The name is **reserved**: the member-definition scan skips this exact file, so a `team.md` can never be
+ * mistaken for a member definition. A member may still declare `name: team` in another file — the
+ * filename is not an identity, and this reservation only keeps the team file out of the definition set.
+ */
+export const TEAM_FILE = 'team.md'
 
 /**
  * Cap on one definition file, refused rather than truncated.
@@ -167,20 +182,25 @@ function checkField(key, value) {
 }
 
 /**
- * Parse one definition file: its flat frontmatter and the markdown body that is the prompt.
+ * Parse the one frontmatter subset both kinds of file share.
  *
- * A refusal names the line the parser stopped on, because "something is wrong with this file" is not
- * actionable in a file an author edits by hand. Nothing is repaired: a value the subset cannot represent
- * is refused, never coerced into the closest thing.
+ * There is deliberately no second parser for the team file: the accepted subset, its refusals and the
+ * line arithmetic are the same code, with the accepted field set and the value checker passed in. A
+ * member definition accepts the fields `spawn_member` has; the team file accepts none yet, so every
+ * field it could carry is refused by name rather than silently ignored.
  * @param {string} text - the file's contents.
  * @param {string} path - the file's path, reported in every refusal.
- * @returns {{definition: object}|{problem: object}} the definition, or the first refusal.
+ * @param {{fields: string[], validate?: Function, describe: string, noun?: string}} options - the accepted
+ *   field set, the per-field checker (absent when no field is accepted), the sentence an unknown field
+ *   gets, and what to call the file in the opening-fence refusal.
+ * @returns {{fields: object, declaredAt: object, close: number, lines: string[]}|{problem: object}} the
+ *   parsed block, or the first refusal.
  */
-export function parseDefinition(text, path) {
+function parseFrontmatter(text, path, { fields: accepted, validate, describe, noun = 'definition' }) {
   const source = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
   const lines = source.split(/\r?\n/)
   if (lines[0] !== FENCE) {
-    return { problem: problem(path, `a definition must open with "${FENCE}" on line 1; found ${JSON.stringify(lines[0] ?? '')}`, 1) }
+    return { problem: problem(path, `a ${noun} must open with "${FENCE}" on line 1; found ${JSON.stringify(lines[0] ?? '')}`, 1) }
   }
   const close = lines.indexOf(FENCE, 1)
   if (close === -1) {
@@ -221,23 +241,46 @@ export function parseDefinition(text, path) {
     }
     const [, key, raw] = match
     if (key === '<<') return { problem: problem(path, 'a merge key ("<<") is not part of the accepted subset', lineNumber) }
-    if (!DEFINITION_FIELDS.includes(key)) {
-      return { problem: problem(path, `unknown field "${key}"; ${acceptedFields()}`, lineNumber) }
+    if (!accepted.includes(key)) {
+      return { problem: problem(path, `unknown field "${key}"; ${describe}`, lineNumber) }
     }
     if (declaredAt[key] !== undefined) {
       return { problem: problem(path, `"${key}" is declared twice; it was already declared on line ${declaredAt[key]}`, lineNumber) }
     }
     const scalar = readScalar(raw)
     if (scalar.refusal !== undefined) return { problem: problem(path, `${key}: ${scalar.refusal}`, lineNumber) }
-    let value
-    try {
-      value = checkField(key, scalar.text)
-    } catch (error) {
-      return { problem: problem(path, error instanceof Error ? error.message : String(error), lineNumber) }
+    let value = scalar.text
+    if (validate !== undefined) {
+      try {
+        value = validate(key, scalar.text)
+      } catch (error) {
+        return { problem: problem(path, error instanceof Error ? error.message : String(error), lineNumber) }
+      }
     }
     fields[key] = value
     declaredAt[key] = lineNumber
   }
+  return { fields, declaredAt, close, lines }
+}
+
+/**
+ * Parse one definition file: its flat frontmatter and the markdown body that is the prompt.
+ *
+ * A refusal names the line the parser stopped on, because "something is wrong with this file" is not
+ * actionable in a file an author edits by hand. Nothing is repaired: a value the subset cannot represent
+ * is refused, never coerced into the closest thing.
+ * @param {string} text - the file's contents.
+ * @param {string} path - the file's path, reported in every refusal.
+ * @returns {{definition: object}|{problem: object}} the definition, or the first refusal.
+ */
+export function parseDefinition(text, path) {
+  const parsed = parseFrontmatter(text, path, {
+    fields: DEFINITION_FIELDS,
+    validate: checkField,
+    describe: acceptedFields(),
+  })
+  if (parsed.problem !== undefined) return parsed
+  const { fields, declaredAt, close, lines } = parsed
   if (fields.name === undefined) {
     return { problem: problem(path, `the frontmatter declares no "name"; ${acceptedFields()}`, 1) }
   }
@@ -266,6 +309,40 @@ export function parseDefinition(text, path) {
 }
 
 /**
+ * Parse the team-scope file: an empty frontmatter block and the handoff template in the body.
+ *
+ * The body is validated by the same `handoffTemplateProblem` a stored template goes through, so a file
+ * cannot smuggle an unknown placeholder, a missing `{assignment}` or an over-cap template past the rules
+ * the tool enforces. A problem is reported with the file and, for a frontmatter problem, its line; the
+ * template's own problems are not line-specific, so the row carries only the path.
+ * @param {string} text - the file's contents.
+ * @param {string} path - the file's path, reported in every refusal.
+ * @returns {{team: {path: string, template: string}}|{problem: object}} the team template, or a refusal.
+ */
+export function parseTeamFile(text, path) {
+  const parsed = parseFrontmatter(text, path, {
+    fields: [],
+    describe: 'the team file\'s frontmatter is reserved for team settings and accepts none yet; put the handoff template in the body',
+    noun: 'team file',
+  })
+  if (parsed.problem !== undefined) return parsed
+  const { close, lines } = parsed
+  const template = lines.slice(close + 1).join('\n').trim()
+  if (template.length === 0) {
+    return {
+      problem: problem(
+        path,
+        'the markdown body after the closing "---" is the handoff template, and it is empty',
+        Math.min(close + 2, lines.length),
+      ),
+    }
+  }
+  const invalid = handoffTemplateProblem(template)
+  if (invalid !== undefined) return { problem: problem(path, invalid) }
+  return { team: { path, template } }
+}
+
+/**
  * Read every definition in one directory.
  *
  * A file that cannot be read, is past the size cap, or fails to parse becomes one problem row and the
@@ -288,7 +365,11 @@ export async function scanDefinitions(dir) {
       : { definitions: new Map(), problems: [problem(dir, error instanceof Error ? error.message : String(error))] }
   }
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+    // `team.md` is the team-scope file, not a member definition, so the reservation is enforced here:
+    // the two files would otherwise share one parse path, and a `team.md` would be reported as an
+    // invalid definition (it declares no `name`) on every spawn. The filename is reserved; a member may
+    // still declare `name: team` in any other file (ADR 0021).
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.md') && entry.name !== TEAM_FILE)
     .map((entry) => entry.name)
     .sort()
   if (files.length > DEFINITION_LIMIT) {
@@ -382,6 +463,53 @@ export async function definitionDirectory(ctx, agent, signal) {
     }
   }
   return { dir: join(cwd, DEFINITION_DIR) }
+}
+
+/**
+ * Read the one team-scope file, if the Lead's project has one.
+ *
+ * It reuses the member-definition directory resolution and its per-file cap. The frontmatter is parsed by
+ * the same subset parser; only the body is different — it is the handoff template, validated by the
+ * roster's own placeholder rules. A missing file is a normal profile, not an error. A file that exists
+ * but cannot be read, is over the cap, or fails a rule is reported as `found: true` with a `problem`:
+ * the caller must still know it exists, because it shadows the stored template even when it is broken.
+ * @param {{ctx: object, agent: object, signal?: AbortSignal}} request - the plugin context, the live Lead
+ *   Agent and cancellation for the directory check.
+ * @returns {Promise<{found: false, path?: string}|{found: true, path: string, template?: string, problem?: object}>}
+ *   the file's state. A profile without a usable `workingDirectory` service reports `found: false`: no
+ *   team file can be seen from here, which is exactly how it behaved before this file existed.
+ */
+export async function loadTeamTemplate({ ctx, agent, signal }) {
+  const resolved = await definitionDirectory(ctx, agent, signal)
+  if (resolved.reason !== undefined) return { found: false }
+  const path = join(resolved.dir, TEAM_FILE)
+  let text
+  try {
+    const info = await stat(path)
+    if (info.size > DEFINITION_FILE_MAX) {
+      return {
+        found: true,
+        path,
+        problem: problem(path, `the file is ${info.size} bytes; the cap is ${DEFINITION_FILE_MAX}, refused rather than truncated`),
+      }
+    }
+    text = await readFile(path, 'utf8')
+  } catch (error) {
+    // ENOENT is the normal no-team-file profile. Any other read failure means something is there and
+    // could not be read, so it is reported rather than treated as absence.
+    if (error?.code === 'ENOENT') return { found: false, path }
+    return { found: true, path, problem: problem(path, error instanceof Error ? error.message : String(error)) }
+  }
+  if (text.length > DEFINITION_FILE_MAX) {
+    return {
+      found: true,
+      path,
+      problem: problem(path, `the file is ${text.length} characters; the cap is ${DEFINITION_FILE_MAX}, refused rather than truncated`),
+    }
+  }
+  const parsed = parseTeamFile(text, path)
+  if (parsed.problem !== undefined) return { found: true, path, problem: parsed.problem }
+  return { found: true, path, template: parsed.team.template }
 }
 
 /**
