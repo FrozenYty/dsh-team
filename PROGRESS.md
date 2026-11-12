@@ -1440,3 +1440,82 @@
   what the running profile had already written.
 - **Version.** `0.21.1`: documentation of a measured boundary, with the Status block's version line changed
   alongside `package.json`.
+
+## 2026-11-12 — a member runs on the API of the session that started it (P4-11, v0.22.0)
+
+- **The defect, as the owner measured it.** A member spawned now records the starter's current route — the
+  probe session's own header reads `provider: do, model: DeepSeek-V4.1-Flash` — but a member spawned *before*
+  a model switch keeps the route it had at spawn for its whole life: its own `request/header` was written
+  then and never changes. An inventory of 60 session logs found 18 sessions still on
+  `deepseek-official/deepseek-flash`, several of them members of a live team (one member made 4 of 4 requests
+  on the official API), while the live Lead sessions ran on the relay. The previous entry recorded the
+  boundary correctly and drew the wrong conclusion from it: the seam does resolve a child from the parent's
+  *current* header, so the fleet is only correct for members started after the switch — and nothing in the
+  plugin said so, or reported the ones that had fallen behind.
+- **The fix is one resolution, forwarded explicitly.** `spawn_member` now reads the calling Lead's current
+  `provider` and `model` from `caller.session.requestHeader()?.config` — the same accessor and field the
+  installed seam resolves inheritance from
+  (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-62`) — and sends them as the activation request's
+  `agentOptions`. The accessor is probed, never assumed: a Session without it, an accessor that throws, an
+  absent config, or a config that does not name both fields resolves nothing. The parent Agent's creation
+  options are deliberately *not* a second source; they are the stale snapshot this release exists to stop
+  using.
+- **`reasoningEffort` is never added.** The seam drops the parent's effort only when the route it resolved
+  differs from the parent's (`:88-90`), and forwarding the parent's own route is exactly the case where it
+  does not differ, so the Lead's effort survives the merge without being sent. A caller-named
+  `reasoning_effort` is still forwarded unchanged, and a caller-named `provider`/`model` still wins and is
+  completed from the same read so the recorded route is the whole route the child runs on.
+- **Every resolution failure is a recorded fallback, never a failed spawn.** Two cases forward nothing, keep
+  the exact `{ prompt, parent }` request the previous release sent, and let the Harness inherit:
+  `no-session-route` (no accessor, no config, or no complete pair) and `capability-absent`
+  (`ctx.subagents.getProvider('spawn')?.capabilities.agentOptions !== true` — forwarding one would make the
+  seam reject the start with `UNSUPPORTED_CAPABILITY`, `@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`).
+  `started_with.route_source` reports which path ran: `caller`, `plugin` or `inherited`, the last carrying
+  `route.select_reason`. A spawn is never broken to fix a route.
+- **The member record carries the route, and the roster row exposes the stragglers.** The record gains an
+  optional `route` (`{ source, provider?, model?, select_reason? }`), written once with the reservation and
+  never rewritten — a fact about the start, not live state. `list_members` resolves the Lead's route once per
+  read and, for a member whose recorded route differs, adds `route_stale: true` and a `route_note` naming
+  both routes, saying the member is still billed on the one it started on, and naming the one call that
+  clears it. A member with no recorded route, or a Lead whose own route cannot be read, is not flagged:
+  absence of evidence is not a straggler, and the flag clears itself the moment the routes match again
+  because the comparison is made at read time and stored nowhere.
+- **The remedy is machinery that already exists.** Nothing re-routes a live member — its route lives in its
+  own recorded `request/header` — so the README pair says the way to clear a stale member is
+  `spawn_member { replace: "<target>" }`, which starts a successor on the current route and hands the
+  predecessor's open work over in the same call (ADR 0009, ADR 0017). No `reroute_member` tool was added: the
+  work has to move with the person anyway.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits 0; `node scripts/check.mjs` prints `check passed` after the last edit; and
+  `node --test --test-isolation=none tests/*.test.mjs` is 189 tests, 189 passing (176 before, plus 12 in the
+  new `tests/route.test.mjs` and one wrapper-level test in `tests/entry.test.mjs`). The new suite covers
+  forwarding, the caller's route winning, a partial caller route, all three unresolvable-route shapes, the
+  capability fallback, `reasoningEffort` never added, the flag being set and not set, the flag clearing when
+  the routes match again, an unreadable Lead route flagging nobody, a pre-v0.22.0 record, and an adopted
+  member that was never spawned here. `tests/entry.test.mjs`'s conformance test drives real answers through
+  the declared schemas of `spawn_member` and `list_members`.
+- **The main test was proved able to fail, and the proof edited the operation, not the test.** With the
+  forwarding removed from `spawnMember` — `if (false && Object.keys(route.requestField).length > 0)` —
+  `node --test --test-isolation=none tests/route.test.mjs` failed 2 of 12: the forwarding test at line 84
+  with actual `undefined` against expected `{ provider: 'do', model: 'DeepSeek-V4.1-Flash' }`, and the
+  `reasoning_effort` test with `TypeError: Cannot convert undefined or null to object` because there was no
+  `agentOptions` object to inspect. The forwarding was restored and the file passed 12 of 12.
+  `tests/route.test.mjs` hashed `61B6F2322C9E4CA6CC829B4A7CC34C9D91CDBA55E7124FDE26E87E9A3363CDB4` before
+  and after the proof — the test was never edited — and `actions.js` returned to
+  `45B248F0F60FBDDB9AB0E7FFA6867E77D026E324BCEA11788297BCBCDB3395CF`.
+- **Documents.** ADR 0024 records the decision to forward rather than inherit implicitly, the
+  `reasoningEffort` exception, both fallback rules, the record and row fields, and why the stale-route flag
+  exists; it also states that it adjusts ADR 0016 points 2 and 6, which said a spawn with no
+  `spawn_options` composes exactly `{ prompt, parent }` and that `started_with` carries only what the caller
+  supplied — both true when written, and both changed here on purpose. `docs/architecture-en.md` gains
+  rewritten §2.6, a `route` line in the §4.2 record shape, updated §4.1 request composition, updated §4.5
+  `spawn_member`/`list_members` rows and a §2 delivery line; the Chinese pair matches. The README pair gains
+  the route sentence in the members/tools section, the "how to clear a stale member" note, a rewritten
+  "Costs and model routes" section, a Status entry for the measured boundary and an install-verification
+  item. The index pair registers ADR 0024; `PLAN.md` gains P4-11, ticked because this PR delivers it.
+- **What stays unverified.** No install and no `plugin_manager` call was made. The live spawn is the owner's
+  install check, and specifically the route recorded on the **child's own** `request/header`: the suite runs
+  against fakes and never loads the Harness, so it proves the request the plugin composes, not what the
+  child's Session ends up storing. The four frozen names in ADR 0014 and the three `cordis.patch.yml`
+  entries were not touched.
+- **Version.** `0.22.0`: the route a member runs on is behaviour, not a comment.

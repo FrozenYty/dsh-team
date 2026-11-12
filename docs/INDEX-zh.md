@@ -48,6 +48,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么交接书是一个团队文件，以及为什么文件存在时写入存储会被拒绝？ | `docs/adr/0021-team-file-handoff-template.md` | 英文 |
 | 为什么成员能读到自己名下的工作，以及为什么工作板只有一个写入者？ | `docs/adr/0022-member-reads-its-work.md` | 英文 |
 | 为什么官方团队面板会列出本插件的成员，以及为什么已退役成员是离场而不是被标注？ | `docs/adr/0023-panel-overlay.md` | 英文 |
+| 为什么插件要转发 Lead 的模型路由，为什么从不转发它的 effort，以及为什么掉队的成员会被标出来？ | `docs/adr/0024-forward-the-lead-route.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
@@ -81,6 +82,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
 | 持久记录结构 | `docs/architecture-zh.md` §4.2、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
 | 投影出口，或官方团队面板显示什么 | `host-hooks.js`、`index.js`、`docs/architecture-zh.md` §2.4、`README.md` + `README-zh.md`、ADR 0023 |
+| 成员启动时用哪条路由、哪个来源优先，或掉队成员是否被标出 | `actions.js`、`roster.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §2.6、§4.1、§4.2 与 §4.5、`README.md` + `README-zh.md`、ADR 0024 |
 | 新增、改名或删除文档 | 本文件与 `INDEX-zh.md` |
 | 插件名称或显示标题，或补丁行的 `name` | `package.json`、`cordis.patch.yml`、`AGENTS.md`、`README.md` + `README-zh.md`、`docs/architecture-en.md` + `docs/architecture-zh.md`、一份新 ADR |
 | 任何改变安装步骤的改动 | `README.md` + `README-zh.md` |

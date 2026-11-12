@@ -245,6 +245,30 @@ const CURRENT_HOLDER = {
 }
 
 /**
+ * The route one member started on: the provider and model pair the child actually runs on, and where the
+ * plugin got it.
+ *
+ * `source` is the field that keeps the two paths apart. `caller` means the spawn call named the route (or
+ * a member definition did), `plugin` means the caller named a route but not these two fields and the
+ * plugin completed them from the Lead's current route, and `inherited` means the plugin forwarded nothing
+ * and the Harness resolved the route on its own — which is also the fallback whenever the route could not
+ * be read or the provider cannot apply one. `select_reason` is present only on `inherited` and names which
+ * of those two fallbacks ran, because "the Session had no route to read" and "the provider cannot apply
+ * one" are different facts about a spawn and only one of them is worth investigating (ADR 0024).
+ */
+const ROUTE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['source'],
+  properties: {
+    source: { type: 'string', enum: ['caller', 'plugin', 'inherited'] },
+    provider: { type: 'string' },
+    model: { type: 'string' },
+    select_reason: { type: 'string', enum: ['no-session-route', 'capability-absent'] },
+  },
+}
+
+/**
  * One file the definition scan could not use, named by path and — when the problem is a line of that
  * file — by line. A row here never stops a spawn that names a definition the same scan did read, which
  * is why it is reported in a result rather than thrown (ADR 0018).
@@ -343,6 +367,16 @@ const MEMBER_ROW = {
     predecessor_retired: { type: 'boolean' },
     // True on a one-shot member that will retire itself once its turn ends (P4-01, ADR 0013).
     ephemeral: { type: 'boolean' },
+    // The route this member was started on, and where that route came from (ADR 0024). Absent only on a
+    // record written before v0.22.0 or on one whose resolution produced nothing to record, which is a
+    // member the plugin inherited the route for without ever knowing it.
+    route: ROUTE,
+    // Present only on a `list_members` row whose recorded route is not the one this Lead is on now: the
+    // member is still being woken on the API it started on, which is what the owner's bill is made of.
+    // The flag is the answer to "which of my members is still billing the old API"; the sentence names
+    // the one call that fixes it.
+    route_stale: { type: 'boolean' },
+    route_note: { type: 'string' },
     // Present on a result whose sweep retired finished ephemeral members; absent otherwise.
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
@@ -362,8 +396,11 @@ const MEMBER_ROW = {
       type: 'string',
       enum: ['unsupported-capability', 'preset-unavailable', 'preset-not-found', 'preset-invalid', 'unauthorized'],
     },
-    // What the member was started with: only the `spawn_options` fields the caller supplied, so a
-    // plain spawn's result is unchanged and an applied model is never invisible (ADR 0016).
+    // What the member was started with: only the `spawn_options` fields the caller supplied, so an
+    // applied model is never invisible (ADR 0016), plus `route_source` — `caller`, `plugin` or
+    // `inherited` — which says whether the route on this result came from the call or was resolved and
+    // forwarded by the plugin (ADR 0024). It is present on every spawn, including one that forwarded
+    // nothing, because that is the fact a roll-out has to be able to read back.
     started_with: {
       type: 'object',
       additionalProperties: false,
@@ -371,6 +408,7 @@ const MEMBER_ROW = {
         cwd: { type: 'string' },
         agent_options: AGENT_OPTIONS_SCHEMA,
         agent_preset: { type: 'string' },
+        route_source: { type: 'string', enum: ['caller', 'plugin', 'inherited'] },
       },
     },
     // Present only on a spawn that named a member definition: which parts came from the file and which
@@ -792,7 +830,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           spawn_options: {
             type: 'object',
             additionalProperties: false,
-            description: 'Optional settings the member starts with. Omit the object, or any field in it, to inherit the Lead: an omitted member runs in the Lead\'s working directory, on the Lead\'s model and route, and with the Lead\'s tool set. One exception: a changed provider or model without reasoning_effort lets the new route resolve its own default instead of inheriting the Lead\'s effort. started_with reports back what the plugin forwarded, not what the child resolved: it echoes the supplied fields unresolved and unread, so it is a receipt for the request, never a confirmation that a chosen model took effect. With replace, the successor starts with these options and the predecessor\'s record is unaffected.',
+            description: 'Optional settings the member starts with. Omit the object, or any field in it, to inherit the Lead: an omitted member runs in the Lead\'s working directory, on the Lead\'s model and route, and with the Lead\'s tool set. One exception: a changed provider or model without reasoning_effort lets the new route resolve its own default instead of inheriting the Lead\'s effort. A spawn that supplies no agent_options still runs on this Session\'s current route: the plugin resolves provider and model from this Session and forwards them, so a member keeps using the API of the Session that started it even after a later model switch, and started_with.route_source says whether the route came from this call (caller), was resolved by the plugin (plugin), or was inherited unresolved because nothing could be read or the provider cannot apply one (inherited). started_with reports back what the plugin forwarded, not what the child resolved: it echoes the supplied fields unresolved and unread, so it is a receipt for the request, never a confirmation that a chosen model took effect. With replace, the successor starts with these options and the predecessor\'s record is unaffected.',
             properties: {
               cwd: {
                 type: 'string',
@@ -904,7 +942,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, ephemeral: true on a one-shot member that will retire itself, live state and, while resident, context pressure. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first retires every ephemeral member whose turn has ended — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, ephemeral: true on a one-shot member that will retire itself, live state and, while resident, context pressure. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first retires every ephemeral member whose turn has ended — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any.',
       parameters: {
         type: 'object',
         additionalProperties: false,

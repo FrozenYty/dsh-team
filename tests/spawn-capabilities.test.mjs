@@ -70,7 +70,10 @@ test('a spawn with no spawn_options produces exactly the request it produced bef
 
   assert.deepEqual(ctx.requests, [{ prompt: [{ type: 'text', text: 'Start.' }], parent: lead }])
   assert.deepEqual(Object.keys(ctx.requests[0]).sort(), ['parent', 'prompt'], 'no extra request field is added')
-  assert.equal(Object.hasOwn(born, 'started_with'), false, 'nothing was applied, so nothing extra is reported')
+  // This Lead exposes no `requestHeader()`, so the route cannot be resolved and the spawn inherits exactly
+  // as it did before; the one added fact is which path ran (ADR 0024).
+  assert.deepEqual(born.started_with, { route_source: 'inherited' })
+  assert.equal(born.route.select_reason, 'no-session-route', 'the fallback says why it fell back')
   assert.equal(Object.hasOwn(born, 'started'), false)
   assert.equal(Object.hasOwn(born, 'reason'), false)
 })
@@ -96,7 +99,8 @@ test('each spawn option is forwarded to the activation request and reported back
     cwd: '../elsewhere',
     agent_options: { provider: 'other', model: 'cheap-model', reasoning_effort: 'low', max_tokens: 2048 },
     agent_preset: 'reader',
-  }, 'the result reports what the member started with')
+    route_source: 'caller',
+  }, 'the result reports what the member started with, and who chose the route')
   assert.deepEqual(JSON.parse(JSON.stringify(born)), born, 'the result stays lossless JSON')
 })
 
@@ -106,7 +110,7 @@ test('an option supplied alone is forwarded alone and reported alone', async () 
   const born = await spawn(ctx, table, { agentPreset: 'reader' })
 
   assert.deepEqual(Object.keys(ctx.requests[0]).sort(), ['agentPreset', 'parent', 'prompt'])
-  assert.deepEqual(born.started_with, { agent_preset: 'reader' })
+  assert.deepEqual(born.started_with, { agent_preset: 'reader', route_source: 'inherited' })
 })
 
 test('a Harness capability refusal becomes a typed refusal and leaves no half-registered member', async () => {

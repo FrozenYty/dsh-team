@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.21.1.
+- Current version: v0.22.0.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -33,10 +33,17 @@ directory did not, on purpose (ADR 0014).
   `spawn_options` (v0.12.0) — a member started in the forwarded `cwd` and reporting that exact directory,
   a valid `agent_preset` running, an unknown preset id answering `started: false` with
   `reason: preset-not-found` and the declared ids, an alternate model id running and replying, and a spawn
-  with no options carrying no `started_with`; the task board (v0.13.2) — a task created and owned by a
-  member, `spawn_member` with `replace` answering `transferred: 1` with the task id and the predecessor
-  retired, the successor's brief naming that id and title, and `retire_member` with no successor answering
-  `unowned: 1` with the id.
+  with no options carrying no `started_with` — the behaviour that release had, and the one v0.22.0 changes,
+  since such a spawn now reports `started_with.route_source`; the task board (v0.13.2) — a task created and
+  owned by a member, `spawn_member` with `replace` answering `transferred: 1` with the task id and the
+  predecessor retired, the successor's brief naming that id and title, and `retire_member` with no successor
+  answering `unowned: 1` with the id.
+- **The cost boundary this release answers, measured on the running profile.** After the relay switch, an
+  inventory of 60 session logs found 18 still on `deepseek-official/deepseek-flash` — several of them
+  members of a live team, while the live Lead sessions ran on the relay — because a member's route is
+  written into its own Session header at start and nothing re-routes it. v0.22.0 forwards the Lead's current
+  route at spawn, records it on the member, and flags a member whose route is no longer the Lead's. The live
+  half — the route on a spawned child's own `request/header` — stays the owner's install check (ADR 0024).
 - **The tool surface, measured live** (v0.14.0, `listTools` read immediately before and after the
   install): the shipped row is retired, so `spawn_teammate`, `wait_agent` and the `team_task_*` tools are
   gone from a Lead's list and calling one answers `unknown tool`, while this plugin's `spawn_member` and
@@ -57,18 +64,20 @@ directory did not, on purpose (ADR 0014).
   Lead. The live call from inside a real member remains the owner's install check (ADR 0022).
 - **Unit-tested only**, with no live profile having exercised them: the write-time `label` and
   `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
-  operations overlap; that a member still running is never swept; the exact request a spawn with no
-  `spawn_options` composes; the task board's write-time caps and the transfer-matrix cells a live run did
+  operations overlap; that a member still running is never swept; the exact request a spawn whose route
+  cannot be resolved composes; the task board's write-time caps and the transfer-matrix cells a live run did
   not reach; the task body's 2000-character cap, the handover injected between a board call's read and its
   write — an interleaving a live run cannot be made to produce, so the test drives the table's own
   serialized `update` hook — and the rule that a board write cannot undo a handover; `wait_members`' event
   wiring, timeout, cancellation and no-progress paths; the whole definition layer (v0.16.0) — reading
   a file, the precedence report, and every refusal; the team-file layer (v0.19.0) — the three-source
-  precedence, the store-write refusal, the placeholder fallback and the reserved filename; and the member
+  precedence, the store-write refusal, the placeholder fallback and the reserved filename; the member
   scope (v0.20.0) — the owner filter, the empty answer, the non-member refusal, the registration on a
-  member Agent and the schema conformance of a real answer. A live start from a definition, a live
-  team-file read or a live `list_my_tasks` call from inside a member is the owner's install check
-  (ADR 0018, ADR 0021, ADR 0022).
+  member Agent and the schema conformance of a real answer; and the route layer (v0.22.0) — forwarding,
+  the caller's option winning, both fallbacks, `reasoning_effort` never added, and the stale-route flag
+  being set, cleared and never guessed. A live start from a definition, a live team-file read, a live
+  `list_my_tasks` call from inside a member, and the route on a real child's own `request/header` are the
+  owner's install check (ADR 0018, ADR 0021, ADR 0022, ADR 0024).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -90,8 +99,8 @@ that is a move rather than a deletion.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Start a named member as a continuable child, optionally from a member definition on disk with `definition`, or with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
-| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, live state, `compactable` and — while resident — context pressure. |
+| `spawn_member` | Start a named member as a continuable child, optionally from a member definition on disk with `definition`, or with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. A spawn that names no model starts the member on **this Session's current route**: the plugin resolves `provider` and `model` from the Session and forwards them, and `started_with.route_source` says whether the route came from the call, was resolved by the plugin, or was inherited unresolved. |
+| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, the `route` it was started on, live state, `compactable` and — while resident — context pressure. A member whose route is no longer the Lead's is marked `route_stale: true` with a `route_note` naming both routes and the call that replaces it. |
 | `wait_members` | Block this turn until a member's live status changes or a timeout expires, and report which member changed and into what. Bounded: 30 seconds by default, at most one hour. It answers `no_progress` at once when no member is running or provisioning, never wakes anyone, and does not wait for board writes or message processing. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
@@ -101,6 +110,18 @@ that is a move rather than a deletion.
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to store it, pass an empty string to return to the built-in. A `team/team.md` in the Lead's project wins while it exists, so a store or clear is refused with that file's path and the instruction to edit it. |
 | `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, a bounded body (what "done" means and where the work stopped), `open` or `done`, and an optional member `owner`; the open ones move with a replacement, body included. |
 | `list_my_tasks` | **A member's own tool, not the Lead's**: the read-only rows whose `owner` is that member's own target, each with its id, title, body, status and timestamps, and how many are still open. It takes no argument — the caller's Session is the selector. A member owning nothing gets an empty list, not an error; another member's rows, unowned rows and the Lead's whole board are invisible. Only the Lead writes the board, so a member reports finished work and the Lead marks it done. |
+
+**A member starts on this Session's API, even when you name no model at all.** With no
+`spawn_options.agent_options`, `spawn_member` resolves the Lead's current `provider` and `model` from the
+Session itself and forwards them, so the member uses the API of the Session that started it; the same
+route the plugin forwarded is recorded on the member and reported back on its row.
+`started_with.route_source` says which path ran — `caller` when the call (or its definition) named the
+route, `plugin` when the plugin resolved and forwarded it, `inherited` when nothing could be forwarded.
+Only that last path leaves the Harness to resolve inheritance itself, and its `route.select_reason` says
+why: `no-session-route` (the Session exposes no readable route yet) or `capability-absent` (the spawn
+provider does not advertise `agentOptions`). **`reasoning_effort` is never added**: forwarding the Lead's
+own route keeps the Lead's effort in the merge anyway, and sending an effort for a model this plugin never
+asked about is what would fail a child's first request.
 
 **A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
 forwards three things the Harness already supports, and every field omitted inherits the Lead's value —
@@ -116,6 +137,16 @@ supplied fields unresolved and unread, so a model choice has to prove itself on 
 request, not on this field. A start the Harness refuses comes back as `started: false` with a
 reason and the way out; and a refusal for a stale target names the live holder of that name in
 `current_holder`, so a Lead whose member was replaced can retarget the old name.
+
+**A member started before a model switch keeps the old route, and the roster says so.** Nothing re-routes
+a live member: its provider and model were written into its own Session's request header when it started,
+and a message or a wake reuses them. So `list_members` compares each member's recorded `route` with the
+Lead's current one and marks the ones that differ with `route_stale: true` and a `route_note` that names
+both routes. That flag is the answer to "which of my members is still billing the old API". **The way to
+clear one is to replace it**: `spawn_member { replace: "<target>" }` starts a successor on the current
+route and hands the predecessor's open work over in the same call (ADR 0009, ADR 0017), and the stale row
+then leaves `list_members` as retired. There is deliberately no reroute tool: the work has to move with
+the person anyway.
 
 Two host-side effects run on the session-list exits, both capability-probed: the projections strip retired
 ids from `subagentCatalog` and `agentTeam` frames, so the top subagent picker and the built-in team panel
@@ -316,36 +347,44 @@ Five things this bundle does not do, each decided rather than forgotten.
 
 ## Costs and model routes
 
-**The suspicion this section answers.** After a relay provider was connected, the owner's own account was
-still billed, and this plugin's members were the obvious suspects. They are not: below is what this plugin
-chooses, what the Harness chooses for it, and the one component in this profile that follows an endpoint of
-its own instead of the session's route.
+**The suspicion this section answers, and the measurement that confirmed it.** After a relay provider was
+connected, the owner's account was still billed. An inventory of 60 session logs found 18 sessions still on
+`deepseek-official/deepseek-flash`, several of them members of a live team, while the live Lead sessions ran
+on the relay: a member's provider and model were written into its own Session's request header when it
+started, so nothing about a later switch reaches it. Below is what this plugin chooses, what the Harness
+chooses for it, and the one component in this profile that follows an endpoint of its own instead of the
+session's route.
 
 ### What chooses a member's model
 
-`spawn_member` forwards `spawn_options.agent_options` when — and only when — the caller supplies it. With no
-`spawn_options` the request is exactly `{ prompt, parent }`, and the plugin names no provider and no model
-(ADR 0016). Everything after that is the Harness:
+**The plugin states the route now, and records it.** With no `spawn_options.agent_options`, `spawn_member`
+resolves the Lead's current `provider` and `model` from `session.requestHeader().config` — the seam's own
+inheritance source — and forwards them as the request's `agentOptions`, so the member is started on the API
+of the Session that started it and the plugin is what names it (ADR 0024). An explicit
+`spawn_options.agent_options` still wins field by field, and the field the caller did not name is completed
+from the same read, so `started_with.route_source` can say the route came from the call (`caller`), was
+resolved by the plugin (`plugin`), or was inherited unresolved (`inherited`).
 
-- **Inheritance is the parent's current route, not a creation-time snapshot.** The subagent seam reads
-  `provider`, `model` and `reasoningEffort` from the parent Session's latest logged request header, and falls
-  back to the parent Agent's creation options only while no request has been logged
-  (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-92`). A Lead that switched to the relay before
-  spawning hands the relay down; the older snapshot is the fallback, not the normal path.
-- **A member is not frozen to the model it started on.** That resolution runs at every spawn, so a member
-  started after a route change inherits the new route; the creation-time fallback covers only a parent that
-  has not sent a request yet (`:49-92`).
-- **A changed route drops the parent's effort**, so the selected model resolves its own default instead of
-  failing on an effort it never advertised (`:88-90`).
+- **`reasoning_effort` is never forwarded.** The seam drops the parent's effort when the route it resolved
+  differs from the parent's (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:88-90`); forwarding the
+  Lead's own route is exactly the case where it does not differ, so the Lead's effort survives the merge
+  without being sent. A caller who names `reasoning_effort` still gets it forwarded — that is the caller's
+  own field.
+- **Every failure to resolve is a fallback, not a failed spawn.** A Session whose route cannot be read
+  (`no-session-route`) and a provider that does not advertise `agentOptions` (`capability-absent`, the gate
+  at `@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`) both forward nothing, record
+  `route.source: "inherited"` with that reason, and let the Harness inherit as it did before. The request
+  in that case is exactly `{ prompt, parent }`; a spawn is never broken to fix a route.
+- **A live member cannot be re-routed.** Its route lives in its own recorded request header. That is why
+  `list_members` flags a member whose recorded `route` is not the Lead's current one
+  (`route_stale: true`, with a `route_note`), and why the remedy is one replacement:
+  `spawn_member { replace: "<target>" }` starts a successor on the current route and hands its open work
+  over (ADR 0009, ADR 0017).
 
-The plugin's own work is forwarding what the caller named, and it deliberately does not force an explicit
-route on every spawn: the parent's `reasoningEffort` survives only while the route is unchanged (`:88-90`),
-and the shipped subagent tool's route preflight is not on this path
-(`@deepseek-ai/dsh-tool-subagent/lib/index.js:440-448`), so a forced effort the route does not support would
-fail the child's first request after the member is already recorded as started. The provider capability gate
-is the Harness's (`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`), and the Session route allowlist
-belongs to the shipped tool (`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`), which this plugin does not
-use.
+The plugin does not preflight the route through `ctx.llm` the way the shipped subagent tool does
+(`@deepseek-ai/dsh-tool-subagent/lib/index.js:437-450`, and the Session route allowlist at `:89-96`): that
+preflight validates a *caller-chosen* route against the profile's allowlist, while what is forwarded here is
+the route the Session is already issuing requests on — proven rather than proposed.
 
 ### No LLM call, and the compaction row follows the session
 
@@ -438,8 +477,13 @@ tree — there is no build step. Verification after installing is live calls, no
 - `spawn_member` with `replace` returns `predecessor_retired: true` and a successor at the next
   generation; when the predecessor owned open tasks, the result also reports `transferred` with their ids,
   and the successor's brief names them;
-- `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed, or
-  `started: false` with a `reason` when the profile's provider or preset registry refuses it;
+- `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed plus
+  `route_source`, or `started: false` with a `reason` when the profile's provider or preset registry
+  refuses it;
+- a plain `spawn_member` answers `started_with.route_source: "plugin"` in a profile whose Session route is
+  readable, the member's own Session `request/header` names that same provider and model, and
+  `list_members` reports the same pair on the row; the row of a member started before a route switch is
+  marked `route_stale: true` until it is replaced;
 - `wait_members` answers `no_progress` when nothing is running; after `message_member` wakes a member,
   it returns that member's target with `status: "idle"` when the turn ends, within its timeout;
 - a Lead's tool list contains this plugin's tools — `wait_members` included — and no `spawn_teammate`,

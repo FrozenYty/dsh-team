@@ -60,6 +60,35 @@ export const TASK_STATUS = {
 }
 
 /**
+ * Where the provider and model a member carries came from (ADR 0024).
+ *
+ * `caller` — the spawn call named the route (directly, or through a member definition), so the plugin
+ * forwarded what the caller chose; `plugin` — the caller named a route, but not these two fields, so the
+ * plugin completed them from the Lead's current route so the recorded route is the whole one; `inherited`
+ * — the plugin forwarded nothing and the Harness inherited the Lead's route on its own, which is also
+ * the path taken when the route could not be resolved or the provider cannot apply it.
+ */
+export const ROUTE_SOURCE = {
+  caller: 'caller',
+  plugin: 'plugin',
+  inherited: 'inherited',
+}
+
+/**
+ * Why a member's route was not forwarded (`source: 'inherited'`). Absent on every other source, and also
+ * absent when the plugin did forward a route — there is nothing to explain about the normal path.
+ *
+ * `no-session-route` — the Lead Session exposes no usable current route (no `requestHeader()` accessor,
+ * no config, or a config without both a provider and a model); `capability-absent` — the spawn provider
+ * does not advertise `agentOptions`, so forwarding one would make the start fail. Both are the cases this
+ * release must not turn into a failed spawn (ADR 0024).
+ */
+export const ROUTE_SELECT_REASON = {
+  noSessionRoute: 'no-session-route',
+  capabilityAbsent: 'capability-absent',
+}
+
+/**
  * Cap on a task title, refused rather than truncated, exactly like `LABEL_MAX`.
  *
  * 200 is not a new number: the roster already bounds its two model-written display strings at 200 — a
@@ -460,6 +489,29 @@ function parseRoster(value) {
     if (member.startedAt !== undefined && (typeof member.startedAt !== 'string' || member.startedAt === '')) {
       throw new Error('roster member startedAt must be a non-empty string')
     }
+    // The v0.22.0 field, checked on load like `ephemeral`: optional, so every record written before it
+    // exists loads unchanged, but a record that carries one must carry the shape the read reasons about.
+    // Only the structure is checked here — a `provider` or `model` an older profile wrote as something
+    // else is not this field's business, and refusing a whole domain over one Lead's record would hide
+    // every roster (ADR 0017, ADR 0024).
+    if (member.route !== undefined) {
+      const route = member.route
+      if (route === null || typeof route !== 'object' || Array.isArray(route)) {
+        throw new Error('roster member route must be an object')
+      }
+      if (typeof ROUTE_SOURCE[route.source] !== 'string') {
+        throw new Error(`roster member route source "${String(route.source)}" is unknown`)
+      }
+      if (route.provider !== undefined && (typeof route.provider !== 'string' || route.provider.length === 0)) {
+        throw new Error('roster member route provider must be a non-empty string')
+      }
+      if (route.model !== undefined && (typeof route.model !== 'string' || route.model.length === 0)) {
+        throw new Error('roster member route model must be a non-empty string')
+      }
+      if (route.select_reason !== undefined && !Object.values(ROUTE_SELECT_REASON).includes(route.select_reason)) {
+        throw new Error(`roster member route select_reason "${String(route.select_reason)}" is unknown`)
+      }
+    }
     // Every tool selects a member by its target, and the lookup takes the first match. A record that
     // holds one target twice would resolve silently to whichever member was written first, so it is
     // refused when the record is loaded rather than guessed at when it is used.
@@ -650,6 +702,41 @@ export function withMember(roster, member) {
   if (index === -1) members.push(member)
   else members[index] = member
   return { ...roster, members }
+}
+
+/**
+ * Attach the route a member was started on, or leave the record untouched when there is none to record.
+ *
+ * A record with no route is not a defect: the field is optional, so every member spawned before this
+ * release, and every member whose route could not be resolved, stays exactly the record it was. The
+ * field is written once at spawn, next to the reservation it belongs to — never updated afterwards,
+ * because it is a fact about the start and `started_with` is the receipt for the request (ADR 0016,
+ * ADR 0024).
+ * @param {object} member - the record being written.
+ * @param {object|undefined} route - what to record, or undefined to record nothing.
+ * @returns {object} the record to persist.
+ */
+export function withRoute(member, route) {
+  return route === undefined ? member : { ...member, route }
+}
+
+/**
+ * Whether a member's recorded route is one the Lead is no longer on.
+ *
+ * The comparison is the whole point of recording a route: a member started before a model switch keeps
+ * the provider and model it was started with for its whole life, so it is still billed to the API it
+ * began on while its Lead has moved. A row is flagged only when both sides name a complete route and
+ * they differ — a member with no recorded route, or a Lead whose own route cannot be read, is not
+ * evidence of a straggler and is left unflagged rather than guessed at (ADR 0024).
+ * @param {object} member - one stored member record.
+ * @param {{provider: string, model: string}|undefined} leadRoute - the Lead's current route.
+ * @returns {boolean} true when the member's route differs from the Lead's.
+ */
+export function staleRouteOf(member, leadRoute) {
+  const route = member?.route
+  if (route === undefined || leadRoute === undefined) return false
+  if (typeof route.provider !== 'string' || typeof route.model !== 'string') return false
+  return route.provider !== leadRoute.provider || route.model !== leadRoute.model
 }
 
 /**

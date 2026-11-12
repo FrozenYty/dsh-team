@@ -22,6 +22,8 @@ import { loadDefinition, loadTeamTemplate } from './definitions.js'
 import {
   HANDOFF_BRIEF_MAX,
   PHASE,
+  ROUTE_SELECT_REASON,
+  ROUTE_SOURCE,
   TASK_BODY_MAX,
   TASK_STATUS,
   TASK_TITLE_MAX,
@@ -42,11 +44,13 @@ import {
   planTask,
   readRoster,
   reownerTasks,
+  staleRouteOf,
   targetOf,
   tasksOf,
   updateRoster,
   usableHandoffTemplate,
   withMember,
+  withRoute,
   withTask,
 } from './roster.js'
 import {
@@ -82,8 +86,35 @@ export function pressureOf(ctx, agent) {
   return { pressureTokens, contextWindow, ratio }
 }
 
-/** Project one stored member into the row the model renders. */
-export function memberRow(ctx, member) {
+/**
+ * The sentence a row carries when its member is still on a route its Lead has left.
+ *
+ * It has to say three things the fields cannot: that the member is billing the old API, that nothing is
+ * going to fix it by itself, and the one call that does. The remedy is the replacement this plugin
+ * already has (ADR 0009, ADR 0017), so the tool adds no second way to do it (ADR 0024).
+ * @param {string} target - the member's model-facing target.
+ * @param {object} route - the member's recorded route.
+ * @param {{provider: string, model: string}} leadRoute - the Lead's current route.
+ * @returns {string} the sentence.
+ */
+function staleRouteNote(target, route, leadRoute) {
+  return `This member started on ${route.provider}/${route.model} and is still billed there, while this Lead now runs on ${leadRoute.provider}/${leadRoute.model}. Nothing re-routes a live member, so the way to clear it is one call: spawn_member { replace: "${target}", label, prompt } starts a successor on the current route and hands over its open work.`
+}
+
+/**
+ * Project one stored member into the row the model renders.
+ *
+ * `leadRoute` is what makes a straggler visible: the row is a read, so the comparison runs here rather
+ * than being stored, and the member's own route is reported whichever way the comparison goes. Omitting
+ * it is a row with no comparison — a spawn answer describes the member it just started, not the roster
+ * (ADR 0024).
+ * @param ctx - plugin context.
+ * @param {object} member - one stored member record.
+ * @param {{provider: string, model: string}|undefined} leadRoute - the Lead's current route, when the
+ *   caller has it.
+ * @returns {object} the row the model renders.
+ */
+export function memberRow(ctx, member, leadRoute) {
   const live = liveStateOf(ctx, member)
   const compactor = ctx.get('compaction') !== undefined
   const row = {
@@ -117,6 +148,15 @@ export function memberRow(ctx, member) {
   if (typeof member.assignment === 'string') row.assignment = member.assignment
   // A member that will leave on its own once its work is over is worth seeing before relying on it.
   if (member.ephemeral === true) row.ephemeral = true
+  // The route it started on, and whether this Lead is still on it. A member with no recorded route says
+  // nothing, which is honest: the plugin does not know what it started on (ADR 0024).
+  if (member.route !== undefined) {
+    row.route = member.route
+    if (staleRouteOf(member, leadRoute)) {
+      row.route_stale = true
+      row.route_note = staleRouteNote(row.target, member.route, leadRoute)
+    }
+  }
   return row
 }
 
@@ -567,7 +607,11 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
   const caller = requireLiveLead('list_members', leadSessionId, leadAgent)
   const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
-  return { members: roster.members.map((member) => memberRow(ctx, member)), ...swept }
+  // The Lead's route is resolved once for the whole read and compared with each member's recorded one, so
+  // a row can say whether that member is still billing an API this Session has left (ADR 0024). An
+  // unreadable route leaves every row uncomparable, which is why it is not an error here either.
+  const leadRoute = currentRouteOf(caller)
+  return { members: roster.members.map((member) => memberRow(ctx, member, leadRoute)), ...swept }
 }
 
 /**
@@ -692,6 +736,123 @@ export async function waitMembers({
 }
 
 /**
+ * The route one Agent is currently issuing its model requests on, or undefined when it cannot be read.
+ *
+ * This is the Harness's own inheritance source and nothing else: the subagent seam resolves a child's
+ * provider and model from `parent.session.requestHeader()?.config`, and falls back to the parent Agent's
+ * creation options only while no request has been logged
+ * (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-62`). The creation options are deliberately not
+ * a second source here: they are a snapshot from before the Lead switched, and a route resolved from them
+ * would be forwarded as current and be wrong. An Agent that has sent no request yet therefore resolves
+ * nothing, and the spawn inherits exactly as it did before this release.
+ *
+ * The accessor is probed, never assumed: it is read off the caller's own Session behind a type check and
+ * a `try`, because a spawn must not fail over a resolution step (§ "Never break a spawn to do it").
+ * @param {object|undefined} agent - the Lead Agent whose route is wanted.
+ * @returns {{provider: string, model: string}|undefined} the complete route, or undefined.
+ */
+function currentRouteOf(agent) {
+  try {
+    const requestHeader = agent?.session?.requestHeader
+    if (typeof requestHeader !== 'function') return undefined
+    const config = requestHeader.call(agent.session)?.config
+    const provider = config?.provider
+    const model = config?.model
+    if (typeof provider !== 'string' || provider.length === 0) return undefined
+    if (typeof model !== 'string' || model.length === 0) return undefined
+    return { provider, model }
+  } catch (error) {
+    return undefined
+  }
+}
+
+/** The spawn provider this plugin starts every member on; its capability table is what gates `agentOptions`. */
+const SPAWN_PROVIDER = 'spawn'
+
+/**
+ * Whether the provider a member starts on can apply `agentOptions` at all.
+ *
+ * Forwarding a resolved route to a provider that does not advertise the capability is not a no-op: the
+ * seam rejects the start with `UNSUPPORTED_CAPABILITY` (`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`),
+ * so the member would fail to start because of a step the caller never asked for. An absent provider table
+ * or an absent provider is the same answer — the plugin cannot prove the capability, so it does not use it.
+ * @param ctx - plugin context.
+ * @returns {boolean} true only when the provider advertises `agentOptions`.
+ */
+function spawnProviderAppliesAgentOptions(ctx) {
+  const provider = ctx.subagents?.getProvider?.(SPAWN_PROVIDER)
+  return provider?.capabilities?.agentOptions === true
+}
+
+/**
+ * Resolve what the spawn request should carry for the member's route, and the record that goes with it.
+ *
+ * **The caller's explicit route wins, and the result says so.** When the call (or the definition it
+ * named) supplied `provider` or `model`, that is what is forwarded, and the two fields it did not supply
+ * are completed from the Lead's current route so that the route recorded on the member is the whole route
+ * the child actually runs on — `source: 'caller'`.
+ *
+ * **Otherwise the plugin forwards the Lead's current route explicitly** (`source: 'plugin'`), which is
+ * what makes a member use the API of the Session that started it even when the Harness's own resolution
+ * would have been enough: the same two fields the seam would read, from the same place, resolved at spawn
+ * time. **`reasoningEffort` is never added.** The seam drops the parent's effort only when the route it
+ * resolves differs from the parent's (`:88-90`), and forwarding the resolved route is exactly the case
+ * where it does not differ, so the Lead's effort survives the merge on its own; a caller-unknown effort
+ * would instead have to be right about a model this function never asked about. The shipped tool's
+ * preflight is not on this path either (`@deepseek-ai/dsh-tool-subagent/lib/index.js:437-450`).
+ *
+ * **Every failure is a fallback, never a failure.** No route to read, or a provider that cannot apply one,
+ * forwards nothing, records `source: 'inherited'` with the reason it fell back, and lets the Harness
+ * inherit exactly as it did before this release (ADR 0024).
+ * @param {{ctx: object, leadAgent: object|undefined, agentOptions?: object}} request - the calling Lead
+ *   Agent, the context, and the effective `agent_options` the call resolved to (a definition's fields are
+ *   already merged into it).
+ * @returns {{requestField: object, recorded: object}} the `agentOptions` to add to the activation
+ *   request (empty when nothing is forwarded) and the `route` to record on the member.
+ */
+function resolveSpawnRoute({ ctx, leadAgent, agentOptions }) {
+  const suppliedProvider = typeof agentOptions?.provider === 'string' && agentOptions.provider.length > 0
+    ? agentOptions.provider
+    : undefined
+  const suppliedModel = typeof agentOptions?.model === 'string' && agentOptions.model.length > 0
+    ? agentOptions.model
+    : undefined
+  const explicit = suppliedProvider !== undefined || suppliedModel !== undefined
+  const leadRoute = currentRouteOf(leadAgent)
+  if (explicit) {
+    const provider = suppliedProvider ?? leadRoute?.provider
+    const model = suppliedModel ?? leadRoute?.model
+    const recorded = {
+      source: ROUTE_SOURCE.caller,
+      ...provider === undefined ? {} : { provider },
+      ...model === undefined ? {} : { model },
+    }
+    return { requestField: {}, recorded }
+  }
+  if (leadRoute === undefined) {
+    return {
+      requestField: {},
+      recorded: { source: ROUTE_SOURCE.inherited, select_reason: ROUTE_SELECT_REASON.noSessionRoute },
+    }
+  }
+  if (!spawnProviderAppliesAgentOptions(ctx)) {
+    return {
+      requestField: {},
+      recorded: {
+        source: ROUTE_SOURCE.inherited,
+        provider: leadRoute.provider,
+        model: leadRoute.model,
+        select_reason: ROUTE_SELECT_REASON.capabilityAbsent,
+      },
+    }
+  }
+  return {
+    requestField: { provider: leadRoute.provider, model: leadRoute.model },
+    recorded: { source: ROUTE_SOURCE.plugin, provider: leadRoute.provider, model: leadRoute.model },
+  }
+}
+
+/**
  * The optional part of the Harness activation request, built from the tool's `spawn_options`.
  *
  * The plugin interprets none of these values. `cwd` is forwarded exactly as the model wrote it: the
@@ -719,19 +880,24 @@ function activationOptions({ cwd, agentOptions, agentPreset }) {
 
 /**
  * What to report about the start: the options the member was started with, in the tool's own vocabulary,
- * and only the ones the caller supplied.
+ * and only the ones the caller supplied — plus one field the plugin may have supplied itself.
  *
  * A silently applied model is how a cost surprise happens, so the caller sees what it asked for. Only
- * the supplied fields are echoed, which is also what keeps a spawn that passes none of them producing
- * exactly the result it produced before this release.
+ * the supplied fields are echoed, which is what keeps a spawn that passes none of them producing the
+ * result shape it produced before ADR 0016. `route_source` is the one addition: `caller` when the route
+ * was the call's own, `plugin` when the plugin resolved and forwarded the Lead's current route, and
+ * `inherited` when nothing was forwarded and the Harness inherited it. It is present on every spawn,
+ * because "which path ran" is the fact a roll-out like this one has to be able to read back (ADR 0024).
  * @param {{cwd?: string, agentOptions?: object, agentPreset?: string}} options - the tool's fields.
- * @returns {object} `{cwd?, agent_options?, agent_preset?}`, or an empty object.
+ * @param {object} route - the route record `resolveSpawnRoute` built.
+ * @returns {object} `{cwd?, agent_options?, agent_preset?, route_source}`, or `{route_source}`.
  */
-function startedWith({ cwd, agentOptions, agentPreset }) {
+function startedWith({ cwd, agentOptions, agentPreset }, route) {
   const value = {}
   if (cwd !== undefined) value.cwd = cwd
   if (agentOptions !== undefined) value.agent_options = agentOptions
   if (agentPreset !== undefined) value.agent_preset = agentPreset
+  value.route_source = route.source
   return value
 }
 
@@ -991,11 +1157,15 @@ export async function spawnMember({
   const baseName = typeof name === 'string' && name.length > 0 ? name : predecessor?.name
   if (baseName === undefined) throw new Error('spawn_member: name is required unless replace or definition supplies one')
   const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'spawn_member')
+  // What route the member starts on, resolved after the definition merge (a file may name the route) and
+  // before the reservation, so the record and the request carry one answer (ADR 0024). It never throws:
+  // a route the plugin cannot resolve is a reason to inherit, not a reason to break a spawn.
+  const route = resolveSpawnRoute({ ctx, leadAgent: caller, agentOptions })
   // A successor continues the predecessor's work, so it inherits the recorded assignment unless the
   // model records a different one. Without this, a brief would thin out one generation at a time. A
   // definition's own `assignment` has already lost here when the predecessor had one to inherit (ADR
   // 0019), so this fallback only serves the inline path.
-  const planned = planMember(roster, baseName, label, recorded ?? predecessor?.assignment, ephemeral === true)
+  const planned = withRoute(planMember(roster, baseName, label, recorded ?? predecessor?.assignment, ephemeral === true), route.recorded)
   if (predecessor !== undefined) planned.predecessor = predecessor.memberId
   const successorTarget = targetOf(planned)
   // The work this handover is about: what the predecessor still owns on its own board, plus what an
@@ -1023,7 +1193,16 @@ export async function spawnMember({
   // Persist the reservation before starting anything: a crash must leave a visible member,
   // never an invisible child.
   await updateRoster(table, leadSessionId, (current) => withMember(current, planned))
-  const request = { prompt: [{ type: 'text', text }], parent: caller, ...activationOptions({ cwd, agentOptions, agentPreset }) }
+  const request = {
+    prompt: [{ type: 'text', text }],
+    parent: caller,
+    ...activationOptions({ cwd, agentOptions, agentPreset }),
+  }
+  // The resolved route travels as the request's own `agentOptions.provider`/`model`, beside whatever the
+  // caller's fields mapped to — never instead of them, and never with an effort added (ADR 0024).
+  if (Object.keys(route.requestField).length > 0) {
+    request.agentOptions = { ...request.agentOptions, ...route.requestField }
+  }
   let started
   try {
     started = await ctx.subagents.startActivation({
@@ -1068,9 +1247,10 @@ export async function spawnMember({
       `spawn_member: the successor could not start (${reason}); the predecessor "${replace}" was NOT retired and is still live. Its failed reservation is recorded as "${successorTarget}".`,
     )
   }
-  // What the member was started with, in the tool's vocabulary, only for the fields the caller supplied.
-  const applied = startedWith({ cwd, agentOptions, agentPreset })
-  const reported = Object.keys(applied).length === 0 ? {} : { started_with: applied }
+  // What the member was started with, in the tool's vocabulary, only for the fields the caller supplied,
+  // plus the route source: which of the two paths above actually ran (ADR 0024).
+  const applied = startedWith({ cwd, agentOptions, agentPreset }, route.recorded)
+  const reported = { started_with: applied }
   // `startedAt` is the evidence the lazy sweep requires: the child was started, so a later observation
   // that it is no longer resident means it ran and stopped (ADR 0013). A non-ephemeral record is
   // unchanged, which is why the field is written only here.

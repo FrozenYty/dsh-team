@@ -15,18 +15,23 @@ import { memoryTable } from './memory-table.mjs'
  * reaches the model and nothing else.
  *
  * `cwd` mounts the `workingDirectory` service, which is what a `definition` spawn resolves the `team/`
- * directory from; omitting it is a profile without that service.
+ * directory from; omitting it is a profile without that service. `route` mounts the Lead Session's
+ * `requestHeader()` — the source a member's route is resolved from (ADR 0024); omitting it is a Session
+ * whose header cannot be read, which is the inherit path.
  */
-function harness({ tryMembership = () => undefined, listMembers = () => [], config, capture = false, cwd } = {}) {
+function harness({ tryMembership = () => undefined, listMembers = () => [], config, capture = false, cwd, route } = {}) {
   const table = memoryTable()
   const tools = new Map()
   const childTools = new Map()
   const disposers = []
   const requests = []
+  const leadSession = route === undefined
+    ? { id: 'lead-1', header: {} }
+    : { id: 'lead-1', header: {}, requestHeader: () => ({ config: route }) }
   const lead = {
     id: 'lead-1',
     status: 'idle',
-    session: { id: 'lead-1', header: {} },
+    session: leadSession,
     ctx: {
       tools: {
         register: (definition) => {
@@ -64,6 +69,11 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
       drainChildren: async () => {},
       sendMessage: async () => 'message-1',
       interrupt: () => {},
+      // The spawn provider's capability table: forwarding agentOptions requires it, so the probe the
+      // plugin uses has to be mounted here for the route path to run at all (ADR 0024).
+      getProvider: (name) => (name === 'spawn'
+        ? { name, capabilities: { agentOptions: true, agentPreset: true } }
+        : undefined),
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
     storageDomain: { open: async () => ({ table: () => table, close: async () => {} }) },
@@ -181,6 +191,9 @@ test('spawn_member validates spawn_options and forwards it to the activation req
     cwd: 'packages/api',
     agent_options: { model: 'cheap-model', max_tokens: 4096 },
     agent_preset: 'reader',
+    // The call named a model, so the route is the caller's and the plugin resolved no second one: this
+    // Lead's Session exposes no `requestHeader()` in the harness fake either way (ADR 0024).
+    route_source: 'caller',
   })
   assert.equal(table.get('lead-1').members[0].phase, 'active')
 })
@@ -385,7 +398,6 @@ test('every answer conforms to the output schema its own tool declares', async (
   }
 
   const born = await answer('spawn_member', { name: 'reviewer', label: 'Reviewer', prompt: 'Review the parser.' })
-  assert.equal(born.target, 'reviewer')
   const task = await answer('task_board', {
     action: 'create',
     title: 'Recheck the curve',
@@ -485,4 +497,47 @@ test('every answer conforms to the output schema its own tool declares', async (
     .execute({ definition: 'reviewer' }, { agent: unserviceable.lead })
   assertMatchesSchema(noService, unserviceable.tools.get('spawn_member').output.schema, 'spawn_member')
   assert.equal(noService.reason, 'working-directory-unavailable')
+})
+
+/**
+ * The router path through the wrapper, which `actions.js` tests cannot reach: a Lead whose Session
+ * exposes a current route gets a member started on that route, a result that says where the route came
+ * from, and a read that flags the one member still on another API. Every answer goes through the
+ * declared schema, which is what makes the new fields declared rather than merely present (ADR 0024).
+ */
+test('the wrapper forwards a resolvable route and the read flags the member left behind', async () => {
+  const routed = harness({ route: { provider: 'do', model: 'DeepSeek-V4.1-Flash' } })
+  const spawnTool = routed.tools.get('spawn_member')
+  const onRelay = await spawnTool.execute({ name: 'relay', label: 'On the relay', prompt: 'Start.' }, { agent: routed.lead })
+  assertMatchesSchema(onRelay, spawnTool.output.schema, 'spawn_member')
+  assert.deepEqual(onRelay.route, { source: 'plugin', provider: 'do', model: 'DeepSeek-V4.1-Flash' })
+  assert.equal(onRelay.started_with.route_source, 'plugin')
+  assert.deepEqual(routed.requests[0].agentOptions, { provider: 'do', model: 'DeepSeek-V4.1-Flash' })
+
+  const onOfficial = await spawnTool.execute({
+    name: 'official',
+    label: 'Still on the official API',
+    prompt: 'Start.',
+    spawn_options: { agent_options: { provider: 'deepseek-official', model: 'deepseek-flash' } },
+  }, { agent: routed.lead })
+  assertMatchesSchema(onOfficial, spawnTool.output.schema, 'spawn_member')
+  assert.equal(onOfficial.started_with.route_source, 'caller')
+  assert.deepEqual(onOfficial.route, { source: 'caller', provider: 'deepseek-official', model: 'deepseek-flash' })
+
+  const roster = await routed.tools.get('list_members').execute({}, { agent: routed.lead })
+  assertMatchesSchema(roster, routed.tools.get('list_members').output.schema, 'list_members')
+  const flagged = roster.members.filter((row) => row.route_stale === true)
+  assert.deepEqual(flagged.map((row) => row.target), ['official'], 'the straggler is the member another API bills')
+  assert.match(flagged[0].route_note, /spawn_member \{ replace: "official"/)
+  assert.deepEqual(JSON.parse(JSON.stringify(roster)), roster, 'the read stays lossless JSON')
+
+  // A profile whose Session exposes no readable route still starts members, and the answer says the
+  // plugin inherited rather than resolved: the fallback is visible, not silent.
+  const blind = harness()
+  const inherited = await blind.tools.get('spawn_member')
+    .execute({ name: 'inherited', label: 'No readable route', prompt: 'Start.' }, { agent: blind.lead })
+  assertMatchesSchema(inherited, blind.tools.get('spawn_member').output.schema, 'spawn_member')
+  assert.deepEqual(inherited.started_with, { route_source: 'inherited' })
+  assert.deepEqual(inherited.route, { source: 'inherited', select_reason: 'no-session-route' })
+  assert.deepEqual(blind.requests[0], { prompt: [{ type: 'text', text: 'Start.' }], parent: blind.lead })
 })
