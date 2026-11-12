@@ -21,6 +21,8 @@ import { join } from 'node:path'
 import {
   HANDOFF_BRIEF_MAX,
   PHASE,
+  TASK_STATUS,
+  TASK_TITLE_MAX,
   TRASH_STATE,
   adoptMember,
   checkAssignment,
@@ -28,15 +30,21 @@ import {
   currentHolderOf,
   findByTarget,
   findAnyTarget,
+  findTask,
   handoffTemplateProblem,
   hasLiveTarget,
   liveStateOf,
+  openTasksOf,
   planMember,
+  planTask,
   readRoster,
+  reownerTasks,
   targetOf,
+  tasksOf,
   updateRoster,
   usableHandoffTemplate,
   withMember,
+  withTask,
 } from './roster.js'
 import {
   DEFAULT_TRASH_LIMIT,
@@ -109,18 +117,59 @@ export function memberRow(ctx, member) {
   return row
 }
 
-/** What a brief says about the work when the predecessor's record carries no assignment. */
+/**
+ * What a brief says about the work when the predecessor's record carries no assignment.
+ *
+ * The task board is a separate repository: this plugin reads stored task rows and reports them on the
+ * brief (see `inheritedTasksLine`), but it never verifies them against the record, because a brief is not
+ * a reviewer (ADR 0017).
+ */
 const UNRECORDED_ASSIGNMENT = 'not recorded; take it from the shared team task board'
 
 /**
- * The pointer a successor follows to the work it inherited: the shared team task board under the
- * predecessor's name. The board is not copied and not duplicated, because the rows may already have
- * changed and the child pays for every word.
+ * The pointer a successor follows to the work it inherited: the task board under the predecessor's name.
+ * The board is not copied and not duplicated, because the rows may already have changed and the child
+ * pays for every word.
  * @param {string} target - the predecessor's model-facing target.
  * @returns {string} the sentence the brief points with.
  */
 function boardPointer(target) {
   return `the shared team task board under the name "${target}": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.`
+}
+
+/**
+ * How many inherited tasks a brief names, and how many characters that line may take.
+ *
+ * A member starting with a 200-line backlog is worse off than one starting with five ids: the list exists
+ * to save the successor a round-trip on the work that is actually in flight, and the pointer sentence
+ * remains for everything past it. 5 rows is roughly what one agent can hold as a starting backlog, and
+ * 600 characters is five maximal titles (200 each, `TASK_TITLE_MAX`) with room for the ids — so the line
+ * is dropped in the one case where it would stop being a brief, which degrades to exactly the sentence
+ * the release before this one sent.
+ */
+const HANDOFF_TASK_MAX = 5
+const HANDOFF_TASK_LINE_MAX = 600
+
+/**
+ * The line a brief carries when the predecessor owned open tasks, or undefined when it owns none or the
+ * list would not stay short.
+ *
+ * Ids and titles both, because either alone is unusable: an id the successor cannot look up is a
+ * reference it must ask about, and a title alone cannot be marked done. The board pointer sentence stays
+ * in the brief's shape, so this line is an addition to it rather than a replacement — which is also what
+ * keeps a Lead with no tasks byte-identical to the release before this one.
+ * @param {object[]} tasks - the predecessor's open tasks, oldest first.
+ * @returns {string|undefined} the line, or undefined.
+ */
+function inheritedTasksLine(tasks) {
+  const shown = tasks.slice(0, HANDOFF_TASK_MAX)
+  const rest = tasks.length - shown.length
+  const items = shown.map((task) => `${task.id} "${task.title}"`).join(', ')
+  const line = rest > 0
+    ? `Open tasks it still owned: ${items} (and ${rest} more on the shared team task board under the name it held).`
+    : `Open tasks it still owned: ${items}`
+  if (line.length > HANDOFF_TASK_LINE_MAX) return undefined
+  return line
 }
 
 /**
@@ -142,9 +191,10 @@ const BUILT_IN_HANDOFF = [
  * Compose the short, self-contained prompt a cold successor starts from.
  *
  * The successor has no transcript of the predecessor and must not be handed one: it needs to know what
- * the work is, that it is the successor, and that the predecessor is gone. The work itself stays on the
- * shared team task board, which this plugin does not own, so the brief points at the board by the
- * predecessor's name instead of copying it.
+ * the work is, that it is the successor, and that the predecessor is gone. The work itself is stored as
+ * task rows on this Lead's roster (P2-09, ADR 0017), and the open ones are named here by id and title,
+ * bounded, so the successor does not have to ask for them; the pointer sentence stays for everything past
+ * that bound.
  *
  * A Lead may store a template that fixes this shape (`handoff_template`, ADR 0015). The built-in shape
  * is the default, and both go through the same interpolation, so "no template stored" is byte-identical
@@ -152,12 +202,14 @@ const BUILT_IN_HANDOFF = [
  * is also re-checked by the read form, and `spawnMember` only passes a usable one here, so a token can
  * never be handed to a child as literal text.
  *
- * @param {{successor: string, predecessor: object, prompt: string, template?: string}} request
- *   `template` is an already-checked stored template, or undefined for the built-in.
+ * @param {{successor: string, predecessor: object, prompt: string, template?: string, tasks?: object[]}} request
+ *   `template` is an already-checked stored template, or undefined for the built-in. `tasks` is the
+ *   predecessor's open tasks; omitting it is exactly the same as passing none, so every caller written
+ *   before P2-09 composes the brief it always did.
  * @returns {string} the prompt handed to `startActivation`.
  * @throws when a stored template renders past `HANDOFF_BRIEF_MAX` — refused, never truncated.
  */
-export function handoffPrompt({ successor, predecessor, prompt, template }) {
+export function handoffPrompt({ successor, predecessor, prompt, template, tasks }) {
   const target = targetOf(predecessor)
   const values = {
     successor,
@@ -178,7 +230,9 @@ export function handoffPrompt({ successor, predecessor, prompt, template }) {
       `handoff template: the rendered brief is ${rendered.length} characters; the cap is ${HANDOFF_BRIEF_MAX}. Shorten the stored template or the predecessor's assignment.`,
     )
   }
-  return `${rendered}\nYour task: ${prompt}`
+  const line = Array.isArray(tasks) && tasks.length > 0 ? inheritedTasksLine(tasks) : undefined
+  const body = line === undefined ? rendered : `${rendered}\n${line}`
+  return `${body}\nYour task: ${prompt}`
 }
 
 /** Project one stored handoff template into the tool's result. */
@@ -383,6 +437,7 @@ export async function sweepEphemeral({
     && liveStateOf(ctx, member).resident === false)
   if (finished.length === 0) return {}
   const swept = []
+  const unowned = []
   for (const member of finished) {
     const outcome = await retireMember({
       ctx,
@@ -396,9 +451,20 @@ export async function sweepEphemeral({
       trashLimit,
     })
     // A member another caller retired in between answers `already-retired`; it is not this sweep's doing.
-    if (outcome.retired === true && outcome.reason !== 'already-retired') swept.push(targetOf(member))
+    if (outcome.retired === true && outcome.reason !== 'already-retired') {
+      swept.push(targetOf(member))
+      // A swept member is a retirement with no successor, so its open work loses its owner. Reporting it
+      // here is what keeps a fan-out from quietly orphaning tasks the model never saw move (ADR 0017).
+      if (Array.isArray(outcome.unowned_tasks)) unowned.push(...outcome.unowned_tasks)
+    }
   }
-  return swept.length === 0 ? {} : { swept: swept.length, swept_targets: swept }
+  if (swept.length === 0) return {}
+  const value = { swept: swept.length, swept_targets: swept }
+  if (unowned.length > 0) {
+    value.unowned = unowned.length
+    value.unowned_tasks = unowned
+  }
+  return value
 }
 
 /**
@@ -596,6 +662,12 @@ export async function spawnMember({
   const planned = planMember(roster, baseName, label, recorded ?? predecessor?.assignment, ephemeral === true)
   if (predecessor !== undefined) planned.predecessor = predecessor.memberId
   const successorTarget = targetOf(planned)
+  // The work this handover is about: what the predecessor still owns on its own board, plus what an
+  // earlier retirement left unowned — work with no owner is exactly what a successor is for. The brief
+  // names them and the start below hands the same ids over, so both halves quote one list (ADR 0017).
+  const inherited = predecessor === undefined
+    ? []
+    : [...openTasksOf(roster, replace), ...unownedOpenTasks(roster)]
   const text = predecessor === undefined
     ? prompt
     : handoffPrompt({
@@ -603,6 +675,9 @@ export async function spawnMember({
       predecessor,
       prompt,
       template: usableHandoffTemplate(roster.handoffTemplate),
+      // The board travels as ids and titles, bounded: an owned board is what makes the brief carry the
+      // work instead of a pointer to someone else's (P2-09, ADR 0017).
+      tasks: inherited,
     })
   // Persist the reservation before starting anything: a crash must leave a visible member,
   // never an invisible child.
@@ -692,6 +767,14 @@ export async function spawnMember({
   }
   if (predecessor === undefined) return { ...successor, ...swept, ...reported }
 
+  // The handover, and it is deliberately the first write after the start, before the tombstone and before
+  // anything touches the filesystem: the work changes hands once, in one mutation. Writing it first is what
+  // makes a retirement whose tombstone write then fails a *partial* lifecycle rather than a silent loss —
+  // the successor the caller started still carries the work it was started for, and one more retire_member
+  // finishes the record. The reverse order would leave a tombstone whose open work points at nobody when
+  // the handover write failed (P2-09, ADR 0017).
+  const handover = await handOverTasks(table, leadSessionId, inherited.map((task) => task.id), successorTarget)
+
   if (predecessor.phase === PHASE.retired) {
     return {
       ...successor,
@@ -699,7 +782,12 @@ export async function spawnMember({
       ...reported,
       replaced: replace,
       predecessor_retired: true,
-      message: `Successor ${successorTarget} started from the tombstone's handoff brief; "${replace}" was already retired.`,
+      // What this call actually re-addressed: an earlier retirement left the work unowned, and the
+      // replacement that finally arrives is what it was waiting for (P2-09, ADR 0017).
+      ...(handover.length === 0 ? {} : { transferred: handover.length, transferred_tasks: handover }),
+      message: `Successor ${successorTarget} started from the tombstone's handoff brief; "${replace}" was already retired.${
+        handover.length === 0 ? '' : ` Its ${handover.length} open ${handover.length === 1 ? 'task was' : 'tasks were'} handed to ${successorTarget}.`
+      }`,
     }
   }
 
@@ -715,6 +803,8 @@ export async function spawnMember({
       target: replace,
       reason: `Replaced by ${successorTarget}`,
       trashLimit,
+      // No `successor`: the handover above already moved this member's open work, and passing it again
+      // would report the same ids twice. The retirement is the record half only (P2-09, ADR 0017).
     })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
@@ -743,7 +833,10 @@ export async function spawnMember({
     ...reported,
     replaced: replace,
     predecessor_retired: true,
-    message: `Successor ${successorTarget} started from the handoff brief and the predecessor "${replace}" is retired. ${retirement.message}`,
+    ...(handover.length === 0 ? {} : { transferred: handover.length, transferred_tasks: handover }),
+    message: `Successor ${successorTarget} started from the handoff brief and the predecessor "${replace}" is retired.${
+      handover.length === 0 ? '' : ` Its ${handover.length} open ${handover.length === 1 ? 'task moved' : 'tasks moved'} to ${successorTarget}.`
+    } ${retirement.message}`,
   }
 }
 
@@ -785,6 +878,11 @@ export async function spawnMember({
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   target: string, reason?: string, trashLimit?: number}} request - `trashLimit` is the effective cap
  *   from the plugin config; it defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none.
+ *
+ *   There is no `successor` parameter on purpose. A replacement hands its work over itself, through
+ *   `handOverTasks`, because it is the only caller that knows the successor and it must be able to do so
+ *   whether or not the predecessor's record is still live. What is left here is the un-owning half: a
+ *   retirement nobody replaces leaves open work owned by nobody and says which (P2-09, ADR 0017).
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
 export async function retireMember({
@@ -811,9 +909,23 @@ export async function retireMember({
   if (member === undefined) {
     throw new Error(`retire_member: no member named "${target}" in the roster, live or retired`)
   }
+
+  // The handover, and it is deliberately the first write: the work loses its owner in one mutation, before
+  // the tombstone and before anything touches the filesystem. Writing it first is what makes a retirement
+  // whose tombstone write then fails a *partial* lifecycle rather than a silent loss — the work is already
+  // unowned, and the one more retire_member that finishes the record has nothing left to move. The reverse
+  // order would leave a tombstone whose open work still points at a member that is gone (P2-09, ADR 0017).
+  let handover = []
+  await updateRoster(table, leadSessionId, (current) => {
+    const handed = reownerTasks(current, targetOf(member), undefined)
+    handover = handed.moved
+    return handed.roster
+  })
+
   if (member.phase === PHASE.retired) {
     // The `retired` row of the state matrix: a repeat is a no-op, not a failure and not an unknown
-    // target. Nothing is drained, nothing is moved, and the tombstone is left exactly as it is.
+    // target. Nothing is drained and nothing is moved; the write above is a no-op too, because an
+    // already-retired member owns no open work for it to find (P2-09, ADR 0017).
     const { fields, notice } = retargetNotice(roster, target)
     return {
       target: targetOf(member),
@@ -844,7 +956,9 @@ export async function retireMember({
     return base
   }
 
-  // Step 1: the tombstone, with the trash path the move is about to use.
+  // Step 1: the tombstone, with the trash path the move is about to use. The member's open tasks were
+  // already re-addressed to the successor (or left unowned) by the handover write above, so this record
+  // only changes its own lifecycle fields.
   const plan = await planMemberTrash(ctx, { leadSessionId, memberId: member.childId, dataDir })
   await updateRoster(table, leadSessionId, (current) => {
     const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
@@ -938,9 +1052,16 @@ export async function retireMember({
     archived,
     trashed: moved,
     pruned,
+    // What this retirement did to the member's open work: left unowned, with its ids named, so a Lead
+    // reading a retirement it did not pair with a replacement sees the work it now owes (P2-09,
+    // ADR 0017). A member that owned nothing adds neither field, exactly as before.
+    ...(handover.length === 0 ? {} : { unowned: handover.length, unowned_tasks: handover }),
     message: moved
       ? 'Member retired: drained, its session moved to the trash directory, and tombstoned.'
       : `Member retired and tombstoned; the session artifact was not moved (${moveReason ?? 'unknown'}).`,
+  }
+  if (handover.length > 0) {
+    value.message += ` Its ${handover.length} open ${handover.length === 1 ? 'task is' : 'tasks are'} now unowned: nobody will carry ${handover.length === 1 ? 'it' : 'them'} until a successor starts or an owner is assigned.`
   }
   if (pruned > 0) {
     value.message += ` Retention removed ${pruned} older ${pruned === 1 ? 'artifact' : 'artifacts'} from this Lead's trash: it keeps at most ${trashLimit}, oldest first, because the platform offers no Session deletion of its own (ADR 0011, ADR 0012).`
@@ -1113,6 +1234,16 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
     message: 'Member restored and active again. A restored session may take one client refresh to reappear.',
   }
   if (typeof restoredPath === 'string') value.path = restoredPath
+  // A restore is a lifecycle fact, not a work assignment. Whether the tasks the member used to own come
+  // back depends on who took them over while it was gone, and the record cannot tell "the successor
+  // carries this" from "nobody does" without guessing across a handover. So it changes no owner and says
+  // how much unowned work is still waiting for one (P2-09, ADR 0017).
+  const unowned = unownedOpenTasks(readRoster(table, leadSessionId))
+  if (unowned.length > 0) {
+    value.unowned = unowned.length
+    value.unowned_tasks = unowned.map((task) => task.id)
+    value.message += ` ${unowned.length} open ${unowned.length === 1 ? 'task is' : 'tasks are'} unowned; assign one with task_board if this member should carry it.`
+  }
   return value
 }
 
@@ -1168,6 +1299,242 @@ function refusalFor(roster, target) {
     ...fields,
   }
 }
+
+/**
+ * Project one stored task into the row the model renders.
+ *
+ * A task whose stored content no longer passes the read rules is reported with `problem` rather than
+ * dropped: the storage facility validates every record when the domain opens, so a content rule cannot be
+ * enforced on load without letting one Lead's stale task hide every roster (ADR 0017). `updated_at` is
+ * omitted until the task is written a second time, so a freshly created row shows one timestamp.
+ * @param {object} task - the stored task.
+ * @returns {object} the row.
+ */
+function taskRow(task) {
+  const row = { id: task.id, title: task.title, status: task.status }
+  if (typeof task.owner === 'string') row.owner = task.owner
+  if (typeof task.created_at === 'string') row.created_at = task.created_at
+  if (typeof task.updated_at === 'string') row.updated_at = task.updated_at
+  const problem = taskTitleProblem(task.title)
+  if (problem !== undefined) row.problem = problem
+  return row
+}
+
+/**
+ * What is unusable about one stored task title, or undefined when it renders fine.
+ * The write path refuses these (`checkTaskTitle`); this is the read path for a stored value that predates
+ * the rule or was hand-edited, and it reports instead of throwing.
+ * @param {unknown} title - the stored title.
+ * @returns {string|undefined} the problem.
+ */
+function taskTitleProblem(title) {
+  if (typeof title !== 'string' || title.trim().length === 0) return 'title is not a non-empty string'
+  if (title.length > TASK_TITLE_MAX) return `title is ${title.length} characters; the cap is ${TASK_TITLE_MAX}`
+  return undefined
+}
+
+/**
+ * The open task count one task operation reports beside its row.
+ * @param {object} roster - the roster as persisted.
+ * @returns {number} how many tasks are still open.
+ */
+function openTaskCount(roster) {
+  return tasksOf(roster).filter((task) => task.status === TASK_STATUS.open).length
+}
+
+/**
+ * The open tasks nobody owns: what a retirement without a successor leaves behind, and what a restore or
+ * a `list` reports so the Lead can see the work waiting for an owner (P2-09, ADR 0017).
+ * @param {object} roster - one Lead's roster.
+ * @returns {object[]} open tasks with no owner.
+ */
+function unownedOpenTasks(roster) {
+  return tasksOf(roster).filter((task) => task.status === TASK_STATUS.open && task.owner === undefined)
+}
+
+/**
+ * Give a set of task ids one owner, in one serialized write, and return the ids that actually changed.
+ *
+ * Ids rather than a target, because the caller has already decided *which* work moves: a replacement moves
+ * what the predecessor owned plus what nobody owned, while a plain retirement moves nothing. Splitting
+ * "which" from "to whom" is what keeps the two paths from needing two mutations of the same list.
+ * @param {object} table - roster table.
+ * @param {string} leadSessionId - the Lead whose roster changes.
+ * @param {string[]} taskIds - ids to hand over.
+ * @param {string} owner - the target that takes them.
+ * @returns {Promise<string[]>} the ids that moved.
+ */
+async function handOverTasks(table, leadSessionId, taskIds, owner) {
+  const wanted = new Set(taskIds)
+  let moved = []
+  await updateRoster(table, leadSessionId, (current) => {
+    const tasks = tasksOf(current).map((task) => {
+      if (!wanted.has(task.id) || task.status !== TASK_STATUS.open) return task
+      moved.push(task.id)
+      return { ...task, owner }
+    })
+    return { ...current, tasks }
+  })
+  return moved
+}
+
+/**
+ * Read, create, update, release or delete tasks on this Lead's board.
+ *
+ * The board is one array on the Lead's roster record next to `handoffTemplate`, and it is what a
+ * replacement hands over: the open tasks of the predecessor move to the successor in the same call that
+ * retires it, and a retirement without a successor leaves them unowned and says so (ADR 0017).
+ *
+ * One tool with an action enum rather than five tools: the surface is already eight names, the five
+ * operations share one row shape and one refusal vocabulary, and each action carries at most two extra
+ * fields. The enum is the only thing that selects a behaviour, so the schema stays readable to the model:
+ * one string enum, and optional fields whose descriptions say which action reads them.
+ *
+ * An `owner` of `null` is how a caller states "nobody owns this now"; omitting the field leaves ownership
+ * untouched. `release` is the named shorthand for exactly that, on a task that stays open. `delete`
+ * removes the row in one call rather than requiring `done` first, because a task nobody needs is not a
+ * lifecycle question.
+ *
+ * @param {{table: object, leadSessionId: string, action: string, task_id?: string, title?: string,
+ *   owner?: string|null, status?: string}} request
+ * @returns {Promise<object>} the tool's result object, unchanged.
+ */
+export async function taskBoard({ table, leadSessionId, action, task_id, title, owner, status }) {
+  const roster = readRoster(table, leadSessionId)
+  const source = `task_board: ${action}`
+  /** The task an id-addressed action works on, or a refusal naming the id. */
+  const requireTask = () => {
+    if (typeof task_id !== 'string' || task_id.length === 0) {
+      throw new Error(`${source}: task_id must be a non-empty string`)
+    }
+    const task = findTask(roster, task_id)
+    if (task === undefined) throw new Error(`${source}: no task with the id "${task_id}"`)
+    return task
+  }
+  /** Resolve an owner handle to a stored target, refusing one no member holds. */
+  const resolveOwner = () => {
+    if (typeof owner !== 'string' || owner.length === 0) {
+      throw new Error(`${source}: owner must be a non-empty member target, or null to leave the task unowned`)
+    }
+    const member = findAnyTarget(roster, owner)
+    if (member === undefined) {
+      throw new Error(`${source}: no member named "${owner}" in this roster; pass a target list_members reports, or null for no owner`)
+    }
+    return targetOf(member)
+  }
+  /** The task action's own id-addressed write, so every mutation goes through one serialized update. */
+  const writeTask = (taskId, next) => updateRoster(table, leadSessionId, (current) => (
+    findTask(current, taskId) === undefined ? current : withTask(current, next)
+  ))
+
+  // Status is a task fact every action reads, so it is validated once, before the branch that consumes it.
+  if (status !== undefined && typeof TASK_STATUS[status] !== 'string') {
+    throw new Error(`${source}: status must be "open" or "done"`)
+  }
+
+  if (action === 'list') {
+    const tasks = tasksOf(roster).map((task) => taskRow(task))
+    const waiting = tasks.filter((task) => task.status === TASK_STATUS.open && task.owner === undefined)
+    const value = {
+      action,
+      tasks,
+      open: tasks.filter((task) => task.status === TASK_STATUS.open).length,
+    }
+    if (tasks.length > 0) {
+      value.message = `${tasks.length} task${tasks.length === 1 ? '' : 's'} on this Lead's board.`
+    }
+    if (waiting.length > 0) {
+      value.unowned = waiting.length
+      value.unowned_tasks = waiting.map((task) => task.id)
+      value.message = `${value.message ?? ''} ${waiting.length} open ${waiting.length === 1 ? 'task is' : 'tasks are'} unowned: nobody carries ${waiting.length === 1 ? 'it' : 'them'} until a successor starts or an owner is assigned.`.trim()
+    }
+    return value
+  }
+
+  if (action === 'create') {
+    if (owner === null) throw new Error(`${source}: owner must be a member target or omitted, not null`)
+    if (status !== undefined) throw new Error(`${source}: a new task is always open; set its status with update`)
+    const task = planTask(roster, { title, owner: undefined }, source)
+    if (owner !== undefined) task.owner = resolveOwner()
+    const persisted = await updateRoster(table, leadSessionId, (current) => withTask(current, task))
+    return {
+      action,
+      task: taskRow(findTask(persisted, task.id) ?? task),
+      open: openTaskCount(persisted),
+      message: 'Task created. A replacement hands its open tasks to the successor; a retirement without one leaves them unowned and reports their ids.',
+    }
+  }
+
+  if (action === 'update') {
+    const existing = requireTask()
+    if (status === undefined && owner === undefined) {
+      throw new Error(`${source}: nothing to change; pass status, owner, or both`)
+    }
+    const next = { ...existing }
+    if (status !== undefined) {
+      if (typeof TASK_STATUS[status] !== 'string') {
+        throw new Error(`${source}: status must be "open" or "done"`)
+      }
+      next.status = status
+    }
+    if (owner !== undefined) {
+      if (owner === null) delete next.owner
+      else next.owner = resolveOwner()
+    }
+    if (next.status === existing.status && next.owner === existing.owner) {
+      return {
+        action,
+        task: taskRow(existing),
+        changed: false,
+        message: `Task ${existing.id} already has that status and owner; nothing was written.`,
+      }
+    }
+    next.updated_at = new Date().toISOString()
+    const persisted = await writeTask(existing.id, next)
+    return {
+      action,
+      task: taskRow(findTask(persisted, existing.id) ?? next),
+      changed: true,
+      open: openTaskCount(persisted),
+      message: next.status === TASK_STATUS.done
+        ? 'Task marked done: it no longer moves with a handover.'
+        : 'Task updated.',
+    }
+  }
+
+  if (action === 'release') {
+    const existing = requireTask()
+    if (existing.owner === undefined) {
+      return {
+        action,
+        task: taskRow(existing),
+        changed: false,
+        message: `Task ${existing.id} is already unowned; nothing was written.`,
+      }
+    }
+    const next = { ...existing, updated_at: new Date().toISOString() }
+    delete next.owner
+    const persisted = await writeTask(existing.id, next)
+    return {
+      action,
+      task: taskRow(findTask(persisted, existing.id) ?? next),
+      changed: true,
+      message: 'Task released: it is still open and now unowned, ready for the next member that should carry it.',
+    }
+  }
+
+  const existing = requireTask()
+  const persisted = await updateRoster(table, leadSessionId, (current) => (
+    { ...current, tasks: tasksOf(current).filter((candidate) => candidate.id !== existing.id) }
+  ))
+  return {
+    action,
+    deleted: existing.id,
+    open: openTaskCount(persisted),
+    message: 'Task deleted. A replacement can no longer hand it over; re-create it if the work is still owed.',
+  }
+}
+
 
 /**
  * Deliver one message to a live member, optionally replacing the assignment recorded for it.
