@@ -14,9 +14,9 @@
 
 ## 状态
 
-- 当前版本：v0.10.0。
+- 当前版本：v0.12.0。
 - 在作者本机 profile 上实测：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0，v0.6.0 复测）；回收站上限（v0.7.0）；可配置上限（v0.8.0），配置值生效，越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`。
-- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护，以及“仍在运行的成员永不被清扫”这一条。
+- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护、“仍在运行的成员永不被清扫”这一条，以及 spawn 选项——普通 spawn 发出的 request 逐字段一致、每个字段都被转发、Host 能力门拒绝时变成带类型的拒绝，以及陈旧 target 的拒绝指出的活持有者（v0.12.0）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -30,7 +30,7 @@
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 把成员作为一个可续跑的子代理启动；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。 |
+| `spawn_member` | 把成员作为一个可续跑的子代理启动，可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。 |
 | `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、实时状态、`compactable`，驻留时还有上下文压力。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
@@ -38,6 +38,8 @@
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
 | `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取已存的那份，传入模板即保存，传空串则回到内置版本。 |
+
+**成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值：`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 用于更便宜的模型、另一个 provider 或 token 上限；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。结果用 `started_with` 报告实际用了什么；Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
 
 每次退役都会产生两个宿主侧效果，二者都带能力探测：宿主会话列表出口会从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 
@@ -102,6 +104,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 - 在 Lead 会话里可以调用 `list_members`，驻留成员带上下文压力；
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 与 `trash_path`；
 - `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；
+- `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
 - `include:compaction-basic` 的状态是 `schema`，而不是 `inactive`。
 
 ## 配置

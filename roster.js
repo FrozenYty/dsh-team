@@ -364,6 +364,31 @@ export function hasLiveTarget(roster, target) {
 }
 
 /**
+ * The live member that currently holds the base name a stale target belonged to, when another generation
+ * does.
+ *
+ * A target is namespaced by generation (`reviewer`, `reviewer-g2`, ...), so a refusal for a stale one is
+ * actionable only when it says which live member the *name* now reaches: the caller can retarget with
+ * that target instead of re-reading the roster. The base name is read from the stale record itself, not
+ * by stripping a `-g<N>` suffix, because a base name may legally end in `-g2` on its own.
+ * @param roster - one Lead's roster.
+ * @param target - the stale model-facing target.
+ * @returns {{target: string, generation: number}|undefined} the highest-generation live holder of that
+ *   name, or undefined when the target is unknown or no other generation is live.
+ */
+export function currentHolderOf(roster, target) {
+  const stale = findAnyTarget(roster, target)
+  if (stale === undefined) return undefined
+  let holder
+  for (const member of roster.members) {
+    if (member.name !== stale.name || member.memberId === stale.memberId) continue
+    if (!ADDRESSABLE.has(member.phase)) continue
+    if (holder === undefined || member.generation > holder.generation) holder = member
+  }
+  return holder === undefined ? undefined : { target: targetOf(holder), generation: holder.generation }
+}
+
+/**
  * Reserve the next generation of a base name and return the provisioning record.
  * The caller persists this record before starting the child, so a crash leaves a visible reservation
  * rather than an invisible child.

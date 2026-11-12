@@ -41,6 +41,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why do one-shot members leave on their own, and why does the sweep need evidence? | `docs/adr/0013-ephemeral-members.md` | English |
 | Why is the plugin called `dsh-team`, and which identifiers did not change? | `docs/adr/0014-plugin-name.md` | English |
 | Why is the handoff brief a stored template, and why is it one tool? | `docs/adr/0015-handoff-template.md` | English |
+| How does a member start with its own cwd, model or preset, and where does a stale name point now? | `docs/adr/0016-spawn-capabilities.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 

@@ -15,6 +15,7 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
   const tools = new Map()
   const childTools = new Map()
   const disposers = []
+  const requests = []
   const lead = {
     id: 'lead-1',
     status: 'idle',
@@ -49,7 +50,10 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
     agentTeams: { tryMembership, listMembers },
     subagents: {
       listDescendants: async () => [],
-      startActivation: async (request) => ({ childId: request.childId }),
+      startActivation: async (spec) => {
+        requests.push(spec.request)
+        return { childId: spec.childId }
+      },
       drainChildren: async () => {},
       sendMessage: async () => 'message-1',
       interrupt: () => {},
@@ -69,13 +73,13 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
     // A refused load must be observable together with what it did (or did not) register.
     try {
       apply(ctx, config)
-      return { tools, childTools, table, lead, child, error: undefined }
+      return { tools, childTools, table, lead, child, requests, error: undefined }
     } catch (error) {
-      return { tools, childTools, table, lead, child, error }
+      return { tools, childTools, table, lead, child, requests, error }
     }
   }
   apply(ctx, config)
-  return { tools, childTools, table, lead, child }
+  return { tools, childTools, table, lead, child, requests }
 }
 
 test('a Lead whose Team projection cannot be read still receives and can call the roster tools', async () => {
@@ -125,6 +129,52 @@ test('message_member refuses a blank message and a non-Lead caller', async () =>
     () => tools.get('message_member').execute({ target: 'reviewer', message: 'hello' }, { agent: child }),
     /available to the Team Lead only/,
   )
+})
+
+test('spawn_member validates spawn_options and forwards it to the activation request', async () => {
+  const refused = [
+    [{ cwd: 42 }, /cwd must be a non-empty string/],
+    [{ cwd: '   ' }, /cwd must be a non-empty string/],
+    [{ agent_options: 'cheap' }, /agent_options must be an object/],
+    [{ agent_options: { model: '' } }, /model must be a non-empty string/],
+    [{ agent_options: { max_tokens: 1.5 } }, /max_tokens must be a positive integer/],
+    [{ agent_options: { effort: 'high' } }, /agent_options has an unknown field "effort"/],
+    [{ agent_preset: 7 }, /agent_preset must be a non-empty string/],
+    [{ preset: 'reader' }, /spawn_options has an unknown field "preset"/],
+  ]
+  for (const [spawnOptions, message] of refused) {
+    const { tools, lead } = harness()
+    await assert.rejects(
+      () => tools.get('spawn_member').execute(
+        { name: 'reviewer', label: 'Reviewer', prompt: 'Do the work.', spawn_options: spawnOptions },
+        { agent: lead },
+      ),
+      message,
+    )
+  }
+
+  // The wrapper hands the tool's fields to the operation, which composes the request and reports back
+  // what was applied: this is the layer the unit tests on actions.js never enter.
+  const { tools, lead, table, requests } = harness()
+  const born = await tools.get('spawn_member').execute({
+    name: 'reviewer',
+    label: 'Reviewer',
+    prompt: 'Do the work.',
+    spawn_options: {
+      cwd: 'packages/api',
+      agent_options: { model: 'cheap-model', max_tokens: 4096 },
+      agent_preset: 'reader',
+    },
+  }, { agent: lead })
+  assert.deepEqual(requests[0].cwd, 'packages/api')
+  assert.deepEqual(requests[0].agentOptions, { model: 'cheap-model', maxTokens: 4096 })
+  assert.equal(requests[0].agentPreset, 'reader')
+  assert.deepEqual(born.started_with, {
+    cwd: 'packages/api',
+    agent_options: { model: 'cheap-model', max_tokens: 4096 },
+    agent_preset: 'reader',
+  })
+  assert.equal(table.get('lead-1').members[0].phase, 'active')
 })
 
 test('the loader path reads the trash cap from the config and refuses a bad one before registering anything', () => {

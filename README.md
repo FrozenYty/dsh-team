@@ -20,14 +20,16 @@ storage domain, the patch row id and the trash directory did not, on purpose (AD
 
 ## Status
 
-- Current version: v0.10.0.
+- Current version: v0.12.0.
 - Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
   refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
   `list_members` answered `swept: 2` with both targets, and both rows came back `retired`.
 - Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn,
-  the lost-update protection when two roster operations overlap, and that a member still running is never
-  swept.
+  the lost-update protection when two roster operations overlap, that a member still running is never
+  swept, and the spawn options — the exact request a plain spawn sends, each forwarded field, the typed
+  refusal a Host capability gate produces, and the live holder a stale target's refusal names
+  (v0.12.0).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -49,7 +51,7 @@ that is a move rather than a deletion.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Start a named member as a continuable child; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
+| `spawn_member` | Start a named member as a continuable child, optionally with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. |
 | `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, live state, `compactable` and — while resident — context pressure. |
 | `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
@@ -57,6 +59,17 @@ that is a move rather than a deletion.
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the stored one, pass a template to store it, pass an empty string to return to the built-in. |
+
+**A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
+forwards three things the Harness already supports, and every field omitted inherits the Lead's value:
+`cwd` for a separate checkout or worktree (a relative path resolves against the Lead's directory, and the
+child keeps the Lead's permission roots, so a directory outside the sandbox grant stays denied),
+`agent_options` for a cheaper model, another provider or a token limit, and `agent_preset` for a narrower
+tool set — the *only* route to a read-only member, because the Harness has no per-call tool allow/deny,
+and preset ids come from the profile's bundle patches rather than a directory path. The result reports
+what was applied in `started_with`; a start the Harness refuses comes back as `started: false` with a
+reason and the way out; and a refusal for a stale target names the live holder of that name in
+`current_holder`, so a Lead whose member was replaced can retarget the old name.
 
 Two host-side effects run for every retirement, both capability-probed: the host's session-list exits strip
 retired ids from `subagentCatalog` and `agentTeam` frames, so the top subagent picker and the built-in team
@@ -152,6 +165,8 @@ tree — there is no build step. Verification after installing is live calls, no
 - `retire_member` returns `trashed: true` and a `trash_path` for a session that has an artifact;
 - `spawn_member` with `replace` returns `predecessor_retired: true` and a successor at the next
   generation;
+- `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed, or
+  `started: false` with a `reason` when the profile's provider or preset registry refuses it;
 - `include:compaction-basic` reports status `schema`, not `inactive`.
 
 ## Configuration

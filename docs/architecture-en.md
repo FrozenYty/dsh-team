@@ -47,6 +47,9 @@ A short map, not a changelog: each release below names what it added and the sec
   their pre-rename names (§1, ADR 0014).
 - **v0.11** — a stored, reusable handoff-brief template per Lead, set through one tool, which the
   replacement handoff composes the successor's brief from (§4.4, §4.5, ADR 0015).
+- **v0.12** — a member can start with its own working directory, model route or agent preset, a start
+  the Harness refuses is a typed result, and a refusal for a stale target names the live holder of its
+  name (§4.1, §4.3, §4.4, §4.5, ADR 0016).
 
 ### 2.1 Compaction is enabled
 
@@ -167,6 +170,23 @@ a UUID `childId`, passes it to `startActivation`, and keeps the name→childId m
 same arrangement the shipped team uses. Capacity is `maxActiveSubagents` (default 8), counted per
 subagent tree and process-local; draining a child releases its slot.
 
+**Request composition.** The plugin sends `{ prompt, parent }` plus the optional fields the model named
+through `spawn_member.spawn_options` (§4.5): `cwd`, `agentOptions` and `agentPreset`. Every field omitted
+means the member inherits the Lead's value, so a spawn that names none composes exactly the request it
+always did — a test pins the exact object. `cwd` is forwarded verbatim: the seam resolves a relative
+path against the parent's cwd (`resolveDirectory`), and a child keeps the parent's permission roots, so a
+directory outside the sandbox grant stays denied; a plugin that pre-resolved the path would disagree with
+the Host. The two capability gates belong to the provider: `agentOptions` requires
+`provider.capabilities.agentOptions` and `agentPreset` requires `provider.capabilities.agentPreset` —
+true for the in-process spawn/fork providers and false for every external backend, whose advertisement is
+`NO_START_CAPABILITIES` — and both are asserted before the manager reserves anything. Three facts about
+the Harness shape this surface and are recorded because a reader will not expect them: there is **no
+per-call tool allow/deny**, so `agentPreset` is the only route to a tool-restricted or read-only member
+and the seam rejects `toolFilter` outright; **a preset id must be declared by the profile's bundle
+patches**, because the registry neither scans directories nor accepts a path; and **there is no worktree
+field**, so a worktree is `ctx.worktrees.create(...)` followed by forwarding its `path` as `cwd`, with
+that service optional and experimental enough that this plugin does not create one itself (ADR 0016).
+
 Two Harness facts shape retirement:
 
 - `drainChildren(parent, [childId])` stops one child, releases its slot and residency, but the child's
@@ -270,6 +290,12 @@ What the cells depend on:
 - **`replace` is one model call composed of `spawn` and `retire`.** The successor starts first in every
   cell, so a start that fails leaves the row exactly as it was, and the retire half reports
   `predecessor_retired: false` when it fails.
+- **A start the Harness refuses is the same failed start, answered as a typed result.** The capability
+  gates are asserted before a child is reserved, so nothing is running: the reservation the plugin wrote
+  first becomes a `failed` record, nothing is left `provisioning`, and `spawn_member` returns
+  `started: false` with a `reason` the model can act on instead of a host error (ADR 0016). On the
+  `replace` cells this is the ordering already written above: the predecessor is untouched and the
+  answer says `predecessor_retired: false`.
 - **`replace` with a stored template is the same cell.** The phases and the order of the two halves do
   not change: the successor starts from the brief, and the brief is rendered from the Lead's
   `handoffTemplate` instead of the built-in shape (§4.4). Two refusals are added and both happen before
@@ -394,6 +420,13 @@ predecessor untouched and live, and a failed retirement returns `predecessor_ret
 reason, so one more `retire_member` call recovers it. A target already retired is accepted, and its
 tombstone supplies the brief. ADR 0009 records the ordering and why the alternatives were rejected.
 
+**A successor starts with the options the caller names for it.** `spawn_options` applies to a
+replacement exactly as it does to a plain spawn; the predecessor's live record and its eventual
+tombstone are unaffected. A start the Harness refuses — a preset id the profile does not declare, a
+provider without the requested capability — is the failed start the ordering above already covers: the
+predecessor stays live, the result says `predecessor_retired: false`, and the failed reservation is
+listed so a retry can name a declared preset or omit the field (ADR 0016).
+
 The successor's brief is inherited work, not a copy of the predecessor's state: the successor inherits
 the predecessor's `assignment` unless the model records a different one, so repeated replacement does not
 thin the record out one generation at a time.
@@ -430,12 +463,12 @@ so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` or `agent_preset`; an omitted field inherits the Lead's value, and the result reports what was applied in `started_with`. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any. |
-| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`. |
-| `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`. |
-| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, and a repeat is a no-op that answers `reason: 'already-retired'`. |
-| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, and a pruned tombstone answers `reason: 'pruned'` without touching the workspace. |
+| `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
+| `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |
+| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. |
+| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, a pruned tombstone answers `reason: 'pruned'` without touching the workspace, and a refusal carries `current_holder` when another generation of the name is live. |
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
 | `handoff_template` | Read, store or clear this Lead's handoff-brief template: omit `template` to read it back, pass a template to validate and store it, pass an empty string to clear it and return to the built-in brief (§4.4). One template per Lead, validated at set time; a stored value that no longer passes validation is reported by the read (`valid`, `problem`) rather than silently dropped, and the composition falls back to the built-in. |
 
@@ -475,6 +508,7 @@ and still retirable.
 | compaction | `ctx.get('compaction').compactNow(agent, signal)` |
 | membership test | `ctx.agentTeams.tryMembership(agent)` |
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
+| start a member with its own directory, model route or preset | `request.cwd` / `request.agentOptions` / `request.agentPreset` on `ctx.subagents.startActivation`; gated by the provider's advertised capabilities, and tool restriction has no other route than an agent preset (§4.1, ADR 0016) |
 | list every subagent descendant | `ctx.subagents.listDescendants(rootSessionId, signal)`; rows carry `id`, `mode`, `label?`, `parentId` and `depth` |
 | notice that a child stopped | none exists — a descendant row's `activity` is only `running` or `inactive`, and `inactive` also covers a child that never started; a lazy sweep reads the local live registry instead (§4.3.1, ADR 0013) |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
@@ -495,6 +529,10 @@ and still retirable.
   the record says `pruned` instead of pretending otherwise. The shipped catalog still knows the member
   existed, because the platform never deletes what it owns (ADR 0011). Retirement is a lifecycle fact in
   our roster, not a platform deletion.
+- **A forwarded directory, route and preset are the caller's decision, and the plugin only forwards
+  them.** It cannot tell whether a `cwd` is usable until the Harness resolves it, and it cannot tell
+  whether a preset id exists until the registry looks it up, so both refusals are the seam's answer
+  translated into a typed result rather than a pre-check that could disagree with the Host (ADR 0016).
 - **Harness API drift.** Every Service named here is read from an installed asar whose version moves;
   a Harness upgrade can invalidate this document without any change in this repository. The installed
   subagent seam is a different generation from the public source tree: the public tree has member names

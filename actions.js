@@ -25,6 +25,7 @@ import {
   adoptMember,
   checkAssignment,
   checkHandoffTemplate,
+  currentHolderOf,
   findByTarget,
   findAnyTarget,
   handoffTemplateProblem,
@@ -419,6 +420,117 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
 }
 
 /**
+ * The optional part of the Harness activation request, built from the tool's `spawn_options`.
+ *
+ * The plugin interprets none of these values. `cwd` is forwarded exactly as the model wrote it: the
+ * Harness resolves a relative path against the Lead's working directory and keeps the Lead's permission
+ * roots, so resolving or normalising it here would disagree with the Host. The tool's snake_case
+ * vocabulary is mapped to the request's own field names here and nowhere else, so the composition, the
+ * refusal and the reported `started_with` cannot drift apart.
+ * @param {{cwd?: string, agentOptions?: object, agentPreset?: string}} options - the tool's fields.
+ * @returns {object} the request fields to add; empty when the caller omitted all of them.
+ */
+function activationOptions({ cwd, agentOptions, agentPreset }) {
+  const request = {}
+  if (cwd !== undefined) request.cwd = cwd
+  if (agentOptions !== undefined) {
+    const mapped = {}
+    if (agentOptions.provider !== undefined) mapped.provider = agentOptions.provider
+    if (agentOptions.model !== undefined) mapped.model = agentOptions.model
+    if (agentOptions.reasoning_effort !== undefined) mapped.reasoningEffort = agentOptions.reasoning_effort
+    if (agentOptions.max_tokens !== undefined) mapped.maxTokens = agentOptions.max_tokens
+    request.agentOptions = mapped
+  }
+  if (agentPreset !== undefined) request.agentPreset = agentPreset
+  return request
+}
+
+/**
+ * What to report about the start: the options the member was started with, in the tool's own vocabulary,
+ * and only the ones the caller supplied.
+ *
+ * A silently applied model is how a cost surprise happens, so the caller sees what it asked for. Only
+ * the supplied fields are echoed, which is also what keeps a spawn that passes none of them producing
+ * exactly the result it produced before this release.
+ * @param {{cwd?: string, agentOptions?: object, agentPreset?: string}} options - the tool's fields.
+ * @returns {object} `{cwd?, agent_options?, agent_preset?}`, or an empty object.
+ */
+function startedWith({ cwd, agentOptions, agentPreset }) {
+  const value = {}
+  if (cwd !== undefined) value.cwd = cwd
+  if (agentOptions !== undefined) value.agent_options = agentOptions
+  if (agentPreset !== undefined) value.agent_preset = agentPreset
+  return value
+}
+
+/**
+ * Translate a Harness refusal of one start into the plugin's typed-refusal style.
+ *
+ * Routed on `error.code`, the seam's stable machine-routable failure class, never on the message. The
+ * capability codes are the ones a caller can act on, and each answer names the way out: omit the field
+ * to inherit the Lead's value, because there is no per-call tool allow/deny and no way to name a preset
+ * other than a declared id. An unrecognised code is a start failure like any other and keeps the
+ * existing thrown error.
+ * @param {unknown} error - what `startActivation` rejected with.
+ * @param {{agentOptions?: object, agentPreset?: string}} options - what was requested, so the sentence
+ *   can name the field to omit. `cwd` has no capability gate and is not needed here.
+ * @returns {{reason: string, message: string}|undefined} the typed refusal, or undefined.
+ */
+function spawnRefusal(error, { agentOptions, agentPreset }) {
+  const code = error !== null && typeof error === 'object' ? error.code : undefined
+  const details = error !== null && typeof error === 'object' ? error.details : undefined
+  const wantedPreset = typeof details?.agentPreset === 'string' ? details.agentPreset : agentPreset
+  if (code === 'UNSUPPORTED_CAPABILITY') {
+    const asked = [
+      agentOptions === undefined ? undefined : 'model options',
+      agentPreset === undefined ? undefined : 'an agent preset',
+    ].filter((field) => field !== undefined)
+    const omit = [
+      agentOptions === undefined ? undefined : 'agent_options',
+      agentPreset === undefined ? undefined : 'agent_preset',
+    ].filter((field) => field !== undefined)
+    const subject = asked.length === 0 ? 'the requested start options' : asked.join(' and ')
+    const fields = omit.length === 0 ? 'those options' : omit.join(' and ')
+    return {
+      reason: 'unsupported-capability',
+      message: `This profile's spawn provider cannot apply ${subject} to a member, so the member did not start. Start it again without ${fields} to inherit the Lead's values.`,
+    }
+  }
+  if (code === 'PRESET_UNAVAILABLE') {
+    return {
+      reason: 'preset-unavailable',
+      message: 'No agent-presets service is mounted in this profile, so a member cannot select its own preset. Start it again without agent_preset to inherit the Lead\'s preset and tool set.',
+    }
+  }
+  if (code === 'agent-preset/not-found') {
+    const available = Array.isArray(details?.available)
+      ? details.available.filter((id) => typeof id === 'string')
+      : []
+    const declared = available.length === 0
+      ? 'this profile declares none'
+      : `the declared ids are ${available.map((id) => `"${id}"`).join(', ')}`
+    return {
+      reason: 'preset-not-found',
+      message: `No agent preset with the id "${String(wantedPreset)}" is declared in this profile; ${declared}. Preset ids come from the profile's bundle patches, and a preset directory is not scanned, so use a declared id or omit agent_preset to inherit the Lead's preset.`,
+    }
+  }
+  if (code === 'agent-preset/invalid') {
+    const problem = typeof details?.reason === 'string' ? details.reason : 'it failed to activate'
+    return {
+      reason: 'preset-invalid',
+      message: `The agent preset "${String(wantedPreset)}" is declared but cannot be used: ${problem}. Use another declared id, or omit agent_preset to inherit the Lead's preset.`,
+    }
+  }
+  if (code === 'UNAUTHORIZED') {
+    return {
+      reason: 'unauthorized',
+      message: 'The Lead Session is not the exact live agent this Harness process holds, so the child could not be started. Open that Session again and retry.',
+    }
+  }
+  return undefined
+}
+
+/**
  * Reserve the next generation of a base name and start it as a continuable child, optionally retiring
  * the member it replaces in the same call.
  *
@@ -430,16 +542,22 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
  * answer says which half it was (`predecessor_retired: false`, or a thrown error that names the live
  * predecessor) instead of reporting success.
  *
+ * A start the Harness refuses for a capability reason is the one failure answered as a typed result
+ * rather than a thrown error (`started: false` and a `reason`): the reservation is already recorded as
+ * `failed`, no child exists, and the model can act on the sentence by omitting the field.
+ *
  * This is the second sweep trigger (ADR 0013): the call first retires every finished ephemeral member, so
  * the fan-out that follows sees the slots those members were holding.
  *
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   name?: string, label: string, prompt: string, assignment?: string, replace?: string,
- *   ephemeral?: boolean, signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the
+ *   ephemeral?: boolean, cwd?: string, agentOptions?: object, agentPreset?: string,
+ *   signal?: AbortSignal, trashLimit?: number}} request - `trashLimit` is the
  *   effective cap from the plugin config; the retirement half of a replacement enforces it, and it
  *   defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none. `ephemeral` records the member as
- *   one-shot (§4.3.1).
+ *   one-shot (§4.3.1). `cwd`, `agentOptions` and `agentPreset` are the tool's `spawn_options` fields;
+ *   each one omitted means the member inherits the Lead's value (ADR 0016).
  * @returns {Promise<object>} the member row the tool returns.
  */
 export async function spawnMember({
@@ -455,6 +573,9 @@ export async function spawnMember({
   assignment,
   replace,
   ephemeral = false,
+  cwd,
+  agentOptions,
+  agentPreset,
   signal,
   trashLimit = DEFAULT_TRASH_LIMIT,
 }) {
@@ -486,6 +607,7 @@ export async function spawnMember({
   // Persist the reservation before starting anything: a crash must leave a visible member,
   // never an invisible child.
   await updateRoster(table, leadSessionId, (current) => withMember(current, planned))
+  const request = { prompt: [{ type: 'text', text }], parent: caller, ...activationOptions({ cwd, agentOptions, agentPreset }) }
   let started
   try {
     started = await ctx.subagents.startActivation({
@@ -493,23 +615,45 @@ export async function spawnMember({
       childId: planned.childId,
       provider: 'spawn',
       label,
-      request: { prompt: [{ type: 'text', text }], parent: caller },
+      request,
       signal,
     })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     const failed = { ...planned, phase: PHASE.failed, note: reason }
-    await updateRoster(table, leadSessionId, (current) => {
+    const persisted = await updateRoster(table, leadSessionId, (current) => {
       const existing = current.members.find((member) => member.memberId === planned.memberId)
       // Retired while this spawn was in flight: the tombstone wins over the failed reservation.
       if (existing !== undefined && existing.phase === PHASE.retired) return current
       return withMember(current, failed)
     })
+    // A capability refusal is an answer the model can act on, not a raw host error. The reservation is
+    // already a visible `failed` record, so nothing is left `provisioning` and no child exists.
+    const refusal = spawnRefusal(error, { agentOptions, agentPreset })
+    if (refusal !== undefined) {
+      const record = persisted.members.find((member) => member.memberId === planned.memberId) ?? failed
+      const value = {
+        ...memberRow(ctx, record),
+        ...swept,
+        started: false,
+        reason: refusal.reason,
+        message: refusal.message,
+      }
+      if (predecessor !== undefined) {
+        value.replaced = replace
+        value.predecessor_retired = false
+        value.message = `${refusal.message} The predecessor "${replace}" was NOT retired and is still live.`
+      }
+      return value
+    }
     if (predecessor === undefined) throw error
     throw new Error(
       `spawn_member: the successor could not start (${reason}); the predecessor "${replace}" was NOT retired and is still live. Its failed reservation is recorded as "${successorTarget}".`,
     )
   }
+  // What the member was started with, in the tool's vocabulary, only for the fields the caller supplied.
+  const applied = startedWith({ cwd, agentOptions, agentPreset })
+  const reported = Object.keys(applied).length === 0 ? {} : { started_with: applied }
   // `startedAt` is the evidence the lazy sweep requires: the child was started, so a later observation
   // that it is no longer resident means it ran and stopped (ADR 0013). A non-ephemeral record is
   // unchanged, which is why the field is written only here.
@@ -541,16 +685,18 @@ export async function spawnMember({
     return {
       ...successor,
       ...swept,
+      ...reported,
       ...predecessor === undefined ? {} : { replaced: replace, predecessor_retired: false },
       message: `The member was retired while its spawn was in flight; the record stays retired and the child it published was drained.${predecessor === undefined ? '' : ` The predecessor "${replace}" was NOT retired.`}`,
     }
   }
-  if (predecessor === undefined) return { ...successor, ...swept }
+  if (predecessor === undefined) return { ...successor, ...swept, ...reported }
 
   if (predecessor.phase === PHASE.retired) {
     return {
       ...successor,
       ...swept,
+      ...reported,
       replaced: replace,
       predecessor_retired: true,
       message: `Successor ${successorTarget} started from the tombstone's handoff brief; "${replace}" was already retired.`,
@@ -575,6 +721,7 @@ export async function spawnMember({
     return {
       ...successor,
       ...swept,
+      ...reported,
       replaced: replace,
       predecessor_retired: false,
       message: `Successor ${successorTarget} is active, but the predecessor "${replace}" could NOT be retired (${reason}). It is still live; retire it with retire_member.`,
@@ -584,6 +731,7 @@ export async function spawnMember({
     return {
       ...successor,
       ...swept,
+      ...reported,
       replaced: replace,
       predecessor_retired: false,
       message: `Successor ${successorTarget} is active, but the predecessor "${replace}" was not retired: ${retirement.message ?? 'no reason reported'}. Retire it with retire_member.`,
@@ -592,6 +740,7 @@ export async function spawnMember({
   return {
     ...successor,
     ...swept,
+    ...reported,
     replaced: replace,
     predecessor_retired: true,
     message: `Successor ${successorTarget} started from the handoff brief and the predecessor "${replace}" is retired. ${retirement.message}`,
@@ -665,13 +814,15 @@ export async function retireMember({
   if (member.phase === PHASE.retired) {
     // The `retired` row of the state matrix: a repeat is a no-op, not a failure and not an unknown
     // target. Nothing is drained, nothing is moved, and the tombstone is left exactly as it is.
+    const { fields, notice } = retargetNotice(roster, target)
     return {
       target: targetOf(member),
       retired: true,
       drained: false,
       pruned: 0,
       reason: 'already-retired',
-      message: `"${target}" is already retired; nothing was drained and no artifact was moved.`,
+      message: `"${target}" is already retired; nothing was drained and no artifact was moved.${notice}`,
+      ...fields,
     }
   }
 
@@ -842,11 +993,13 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
         message: `"${target}" is already active; there is no tombstone to restore.`,
       }
     }
+    const { fields, notice } = retargetNotice(roster, target)
     return {
       target: targetOf(member),
       restored: false,
       reason: 'not-retired',
-      message: `"${target}" is ${member.phase}, not retired; there is nothing to restore.`,
+      message: `"${target}" is ${member.phase}, not retired; there is nothing to restore.${notice}`,
+      ...fields,
     }
   }
   if (hasLiveTarget(roster, target)) {
@@ -856,11 +1009,13 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
     // The retention cap removed the artifact, so there is nothing to move back — and the workspace
     // must not be asked to unhide a session it never hid. The tombstone keeps its `trashPath`, which
     // is why this check comes before the trash-path branch below (ADR 0011).
+    const { fields, notice } = retargetNotice(roster, target)
     return {
       target: targetOf(member),
       restored: false,
       reason: 'pruned',
-      message: `"${target}" was pruned by the trash retention cap: the artifact at ${String(member.trashPath)} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue.`,
+      message: `"${target}" was pruned by the trash retention cap: the artifact at ${String(member.trashPath)} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue.${notice}`,
+      ...fields,
     }
   }
 
@@ -962,29 +1117,55 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
 }
 
 /**
+ * What a refusal for a stale target adds when another generation of that name is live now.
+ *
+ * A target is namespaced by generation, so a caller holding the predecessor's target after a
+ * replacement is refusing the *name*, not the member: naming the live holder is what lets it retarget
+ * without re-reading the roster. The refusal itself is unchanged — only what it tells the caller.
+ * @param {object} roster - one Lead's roster.
+ * @param {string} target - the stale model-facing target.
+ * @returns {{fields: object, notice: string}} the result field to merge, and the sentence to append;
+ *   both empty when no other generation of the name is live.
+ */
+function retargetNotice(roster, target) {
+  const holder = currentHolderOf(roster, target)
+  if (holder === undefined) return { fields: {}, notice: '' }
+  const stale = findAnyTarget(roster, target)
+  const name = stale === undefined ? target : stale.name
+  return {
+    fields: { current_holder: holder },
+    notice: ` The name "${name}" is now held by "${holder.target}" (generation ${holder.generation}); retarget to that member.`,
+  }
+}
+
+/**
  * The refusal one delivery-shaped operation answers for a target it cannot act on.
  *
  * The addressable set is `provisioning | active`; everything else is named by the state it is in, so a
  * message to a tombstone can never read like a message to a target that never existed. The operation,
- * not the caller, composes the sentence: the callers are the tools and a refusal is a result.
+ * not the caller, composes the sentence: the callers are the tools and a refusal is a result. When the
+ * name has moved on to another generation, the refusal also carries that holder (`current_holder`).
  * @param {object} roster - one Lead's roster.
  * @param {string} target - model-facing target.
- * @returns {{reason: 'retired'|'failed'|'missing', message: string, member?: object}}
+ * @returns {{reason: 'retired'|'failed'|'missing', message: string, current_holder?: object}}
  */
 function refusalFor(roster, target) {
   const member = findAnyTarget(roster, target)
   if (member === undefined) {
     return { reason: 'missing', message: `No member named "${target}" is in this roster.` }
   }
+  const { fields, notice } = retargetNotice(roster, target)
   if (member.phase === PHASE.retired) {
     return {
       reason: 'retired',
-      message: `"${target}" is retired and cannot be reached. A retired member keeps its tombstone; spawn_member with replace starts its successor.`,
+      message: `"${target}" is retired and cannot be reached. A retired member keeps its tombstone; spawn_member with replace starts its successor.${notice}`,
+      ...fields,
     }
   }
   return {
     reason: 'failed',
-    message: `"${target}" is failed and cannot be reached. Retire it with retire_member, or replace it with spawn_member.`,
+    message: `"${target}" is failed and cannot be reached. Retire it with retire_member, or replace it with spawn_member.${notice}`,
+    ...fields,
   }
 }
 
@@ -1007,8 +1188,8 @@ export async function messageMember({ ctx, table, leadSessionId, leadAgent, targ
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const member = findByTarget(roster, target)
   if (member === undefined) {
-    const refusal = refusalFor(roster, target)
-    return { target, sent: false, reason: refusal.reason, message: refusal.message }
+    // The refusal carries its own fields, including the current holder of a name that moved on.
+    return { target, sent: false, ...refusalFor(roster, target) }
   }
   const recorded = assignment === undefined ? undefined : checkAssignment(assignment, 'message_member')
   let messageId
@@ -1055,8 +1236,8 @@ export async function stopMember({ ctx, table, leadSessionId, leadAgent, target 
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
   const member = findByTarget(roster, target)
   if (member === undefined) {
-    const refusal = refusalFor(roster, target)
-    return { target, stopped: false, reason: refusal.reason, message: refusal.message }
+    // The refusal carries its own fields, including the current holder of a name that moved on.
+    return { target, stopped: false, ...refusalFor(roster, target) }
   }
   if (ctx.agents.get(member.childId) === undefined) {
     return {

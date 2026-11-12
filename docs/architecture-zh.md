@@ -28,6 +28,7 @@
 - **v0.9**——临时成员：创建时可标记为一次性，模型本来就会调用的那些花名册操作会在它运行过并停止后，用惰性清扫把它退役（§4.3.1、ADR 0013）。
 - **v0.10**——改名：包名、补丁行的 `name` 与显示标题变为 `dsh-team` /「团队」，而存储域、补丁行 id 与回收站目录保留改名前的名字（§1、ADR 0014）。
 - **v0.11**——每个 Lead 一份可复用的交接书模板，由一个工具写入，替换交接用它合成继任者的交接书（§4.4、§4.5、ADR 0015）。
+- **v0.12**——成员可以用自己的 cwd、模型路由或 agent preset 启动；Harness 拒绝的启动变成带类型的结果；陈旧 target 的拒绝会指出该名字现在的活持有者（§4.1、§4.3、§4.4、§4.5、ADR 0016）。
 
 ### 2.1 启用压缩
 
@@ -95,6 +96,8 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 ```
 
 没有 `name` 字段，也没有 `resolveName`／`namesOf`。因此名字属于我们：插件生成一个 UUID `childId` 传给 `startActivation`，把 name→childId 的映射放在自己的花名册里——与官方 Team 的做法一致。并发上限是 `maxActiveSubagents`（默认 8），按子代理树、进程内计数；排空一个子代理解放它的名额。
+
+**request 的组合规则。** 插件发送 `{ prompt, parent }`，再加上模型通过 `spawn_member.spawn_options`（§4.5）点名的可选字段：`cwd`、`agentOptions` 与 `agentPreset`。任何一个字段省略，都表示该成员继承 Lead 的值，因此什么都不传的 spawn 组合出的 request 与以前完全一样——有测试钉住这个对象。`cwd` 原样转发：seam 会把相对路径解析到父代理的 cwd 上（`resolveDirectory`），而子代理保留父代理的权限根，因此沙箱授权之外的目录仍会被拒绝；如果插件自己先解析路径，就会与 Host 的判断不一致。两个能力门属于 provider：`agentOptions` 需要 `provider.capabilities.agentOptions`，`agentPreset` 需要 `provider.capabilities.agentPreset`——进程内的 spawn/fork provider 为 true，所有外部后端为 false（其能力声明就是 `NO_START_CAPABILITIES`）——两者都在 manager 预留任何资源之前断言。有三个 Harness 事实塑造了这个接口，写在这里是因为读者不会预期它们：**没有按次调用的工具白/黑名单**，因此 `agentPreset` 是获得工具受限或只读成员的唯一途径，seam 也明确拒绝 `toolFilter`；**preset id 必须由 profile 的 bundle 补丁声明**，因为注册表既不扫描目录也不接受路径；**没有 worktree 字段**，worktree 是先 `ctx.worktrees.create(...)`、再把它的 `path` 当 `cwd` 传，而那个服务是可选的、实验性的，所以本插件不自己创建（ADR 0016）。
 
 有两个 Harness 事实塑造了退役流程：
 
@@ -176,6 +179,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 - **没有 `dormant`，P4-01 也没有新增相态。** 上面四个相态就是 `roster.js` 里 `PHASE` 的全部；实时状态（`running`、`idle`、`unloaded`）在调用时从 Harness 读取，从不存储。临时成员不需要一个存储的“已完成”相态：`ephemeral` 标记挂在记录上，只要存在“它运行过并已停止”的正面证据，惰性清扫就会退役它（§4.3.1）。这段注释过去期待的完成钩子在 Harness 里并不存在（ADR 0013）。
 - **`replace` 是一次模型调用，由 `spawn` 与 `retire` 合成。** 每个格子里都先启动继任者，因此启动失败时这一行原封不动，而退役失败会返回 `predecessor_retired: false` 并说明原因。
+- **Harness 拒绝的启动就是同一种启动失败，只是以带类型的结果作答。** 能力门在预留任何子代理之前断言，因此没有任何东西在运行：插件先前写下的预留变成一条 `failed` 记录，不会有任何东西停在 `provisioning`，`spawn_member` 返回 `started: false` 与一个模型能据以行动的原因，而不是宿主错误（ADR 0016）。在 `replace` 的格子里，这正是上文已经写明的顺序：前任原封不动，结果说明 `predecessor_retired: false`。
 - **带已存模板的 `replace` 仍是同一个格子。** 相态与两半的顺序都不变：继任者从交接书启动，只是交接书由该 Lead 的 `handoffTemplate` 渲染，而不是内置形状（§4.4）。新增的两处拒绝都发生在任何东西启动之前——模板在写入时就校验，渲染结果超过上限则拒绝该次调用——因此格子保持原样，记录也不被改动。
 - **同一模型轮次里的两个工具。** 每次调用都重读花名册，每次改动都是花名册表上的一次原子 `update`（§4.2），因此第二次调用是在第一次的结果上行动：同一轮里先 `message_member` 再 `retire_member` 会先投递再立碑，反过来则拒绝 `retired`，先 `retire_member` 再 `spawn_member` 会启动下一代次。并行的工具调用由存储表串行化，而不是由调用方。
 - **已退役或失败的成员仍是一条可控记录。** 它可以被列出、退役、替换：`retire_member` 与 `restore_member` 的查找覆盖任何相态。只有需要活子代理的 `message_member` 与 `stop_member` 是窄的，它们以带类型的原因 `retired`、`failed` 或 `missing` 拒绝。
@@ -225,6 +229,8 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 **替换。** `spawn_member` 带 `replace: <target>` 会为继任者合成一份简短、自足的提示词：继任者的名字、前任的 target 与 label、记录在案的职责、前任已离场这一事实，以及按前任名字指向共享团队任务板的指针。任务板不复制、不重复。之后它会对前任执行第 2–6 步。**同一次调用里先启动继任者、再退役前任**：启动失败则前任原封不动且仍然活着；退役失败则返回 `predecessor_retired: false` 与原因，再调一次 `retire_member` 即可收尾。目标已经退役时同样接受，由墓碑提供交接书。ADR 0009 记录了该顺序以及被否掉的替代方案。
 
+**继任者按调用方为它点名的选项启动。** `spawn_options` 对替换的作用与对普通 spawn 完全相同；前任的活记录以及它日后的墓碑都不受影响。Harness 拒绝的启动——profile 没有声明该 preset id，或 provider 不具备所请求的能力——就是上文顺序已经覆盖的启动失败：前任保持活着，结果说明 `predecessor_retired: false`，失败的预留会被列出，便于重试时换一个已声明的 preset 或干脆省略该字段（ADR 0016）。
+
 继任者拿到的是被继承的工作，而不是前任状态的副本：除非模型重新记录，继任者继承前任的
 `assignment`，因此反复替换不会让记录一代比一代更薄。
 
@@ -238,12 +244,12 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `replace` 时，让继任者从交接书启动，并在同一次调用里退役前任（§4.4）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
+| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `replace` 时，让继任者从交接书启动，并在同一次调用里退役前任（§4.4）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options` 或 `agent_preset` 启动；省略的字段继承 Lead 的值，结果在 `started_with` 里报告实际用了什么。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误（ADR 0016）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
 | `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`。 |
-| `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。给临时成员发消息会清掉它的标记，因此它不会被清扫。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。 |
-| `stop_member` | 只取消目标当前轮，保留激活与收件箱；对已退役或已失败的目标按与 `message_member` 相同的带类型原因拒绝。 |
-| `retire_member` | 排空、立碑、把会话产物移入回收站、执行每个 Lead 的保留上限并刷新宿主侧效果（§4.4）；结果报告 `pruned`，重复调用是无操作，返回 `reason: 'already-retired'`。 |
-| `restore_member` | 把回收站里的产物移回，记录转回 `active`；结果会说明实际走了哪条分支，记录本来就处于活动状态时是无操作成功而不是报错，被剪除的墓碑则回答 `reason: 'pruned'` 且不触碰工作区。 |
+| `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。给临时成员发消息会清掉它的标记，因此它不会被清扫。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。当该名字的另一个代次还活着时，拒绝还会带上 `current_holder` 并在消息里说明。 |
+| `stop_member` | 只取消目标当前轮，保留激活与收件箱；对已退役或已失败的目标按与 `message_member` 相同的带类型原因拒绝，并以同样方式携带 `current_holder`。 |
+| `retire_member` | 排空、立碑、把会话产物移入回收站、执行每个 Lead 的保留上限并刷新宿主侧效果（§4.4）；结果报告 `pruned`，重复调用是无操作，返回 `reason: 'already-retired'`，此时若名字已被另一代次接手，结果会指出那个活持有者。 |
+| `restore_member` | 把回收站里的产物移回，记录转回 `active`；结果会说明实际走了哪条分支，记录本来就处于活动状态时是无操作成功而不是报错，被剪除的墓碑则回答 `reason: 'pruned'` 且不触碰工作区；该名字的另一代次还活着时，拒绝会带上 `current_holder`。 |
 | `compact_member` | 对驻留且空闲的目标调用 `ctx.compaction.compactNow(agent, signal)` 强制压缩一次，返回结构化结果而不是抛异常：`done`、`busy`、`not-resident`、`nothing-to-compact`、`failed`。 |
 | `handoff_template` | 读取、保存或清除这个 Lead 的交接书模板：省略 `template` 读取已存的那份，给一个模板则在校验后保存，给空字符串则清除并回到内置交接书（§4.4）。每个 Lead 一份，写入时校验；已存的值一旦不再通过校验，读取会报告 `valid` 与 `problem` 而不是悄悄丢掉，合成则退回内置形状。 |
 
@@ -264,6 +270,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 | 压缩 | `ctx.get('compaction').compactNow(agent, signal)` |
 | 成员判定 | `ctx.agentTeams.tryMembership(agent)` |
 | 子代理生命周期 | `ctx.subagents.startActivation`、`sendMessage`、`interrupt`、`drainChildren` |
+| 让成员用自己的目录、模型路由或 preset 启动 | `ctx.subagents.startActivation` 上的 `request.cwd`／`request.agentOptions`／`request.agentPreset`；受 provider 声明能力的约束，而工具限制除了 agent preset 没有别的途径（§4.1、ADR 0016） |
 | 列出全部子代理后代 | `ctx.subagents.listDescendants(rootSessionId, signal)`；行带 `id`、`mode`、`label?`、`parentId`、`depth` |
 | 得知某个子代理已停止 | 不存在这样的机制——后代行的 `activity` 只有 `running` 与 `inactive`，而 `inactive` 也涵盖从未启动的子代理；因此改由惰性清扫读取本地实时注册表（§4.3.1、ADR 0013） |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
@@ -277,6 +284,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 - **没有应用内视图。** 花名册只通过 `list_members` 对模型可见，没有设置页。宿主自有的子代理选择器仍照旧渲染，只是少了已退役 id（ADR 0008）。
 - **迁移期两个花名册并存**——在 P2-07 落地前，官方花名册和我们自己的都可能对模型可见。补丁步骤是阶段门禁的一部分，不是事后补丁。
 - **恢复有界，平台记录没有真正抹除**——已退役成员的会话在这个 Lead 的回收站未超上限前都可恢复；被剪除的产物字节则永久消失，记录会如实说 `pruned` 而不是假装还在。官方 catalog 仍知道该成员存在过，因为平台从不删除它自己的东西（ADR 0011）。退役是我们花名册里的生命周期事实，不是平台的删除。
+- **转发的目录、路由与 preset 由调用方决定，插件只负责转发。** 在 Harness 解析之前，插件无法判断某个 `cwd` 是否可用；在注册表查询之前，它也无法判断某个 preset id 是否存在，因此两处拒绝都是把 seam 的答案翻译成带类型的结果，而不是一个可能与 Host 判断不一致的预检（ADR 0016）。
 - **Harness API 漂移**——本文点到的每个 Service 都来自已安装的 asar，版本会变；一次 Harness 升级就能让本文作废，而本仓库什么都没改。安装版的子代理 seam 与公开源码树不是同一代：公开树有成员 `name` 和 `resolveName`，安装版没有。采信任何公开示例之前，先读安装版的 `lib/index.js`。
 - **交接质量取决于记录在案的职责**——插件读不到共享任务板，也读不到前任的对话，因此继任者的交接书只能由记录合成。一个从未记录过 `assignment` 的成员，交接出去的是标签和任务板指针，而不是摘要。
 - **压缩是 profile 级的**——启用后端会改变该 profile 内每个会话的行为。这是把官方特性打开，不是自研代码，但它并不只作用于本插件的成员。

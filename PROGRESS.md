@@ -629,3 +629,57 @@
   still list seven tools and do not describe how to fix the brief shape; they belong to another lane in
   this change, so the tool row and the short "how to fix the brief shape" note are recorded here instead
   of being silently assumed.
+
+## 2026-11-12 — spawn capabilities, typed start refusals, and a refusal that names the current holder (v0.12.0)
+
+- **The three fields the installed seam already accepted are now reachable from `spawn_member`.** The
+  installed `dsh-subagent` 0.2.2-rc.1 activation request already took `cwd`, `agentOptions` and
+  `agentPreset`; the plugin sent only `{ prompt, parent }`, so every member silently inherited the Lead's
+  working directory, model route and tool set. One nested `spawn_options` parameter now forwards them,
+  and omission of the object or of any field means inherit: a spawn that passes none composes exactly
+  the request it composed before, pinned by a test that asserts the exact object. ADR 0016 records the
+  surface decision.
+- **Nested rather than six flat parameters.** `spawn_member` already carries six roster parameters, and
+  these three are not roster concepts — the plugin interprets none of their values. One pass-through
+  object makes "the caller supplied none" one structural test instead of six undefined checks, and keeps
+  a spawn that does not use the feature invisible in both the request and the result. Inside it the
+  fields are `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) and
+  `agent_preset`; `activationOptions` is the single place they map to the request's
+  `cwd`/`agentOptions`/`agentPreset`.
+- **`cwd` is forwarded as a path, not interpreted.** It is validated as a non-empty string and passed
+  verbatim: the seam resolves a relative path against the Lead's cwd and keeps the Lead's permission
+  roots, so a plugin that pre-resolved it would disagree with the Host.
+- **The refusals are probed, not predicted.** The plugin starts the member and routes the seam's typed
+  failure on `error.code`: `UNSUPPORTED_CAPABILITY` → `unsupported-capability`,
+  `PRESET_UNAVAILABLE` → `preset-unavailable`, `agent-preset/not-found` → `preset-not-found` (the
+  registry's `details.available` names the ids a profile does declare), `agent-preset/invalid` →
+  `preset-invalid`, and `UNAUTHORIZED` → `unauthorized`. The probe corrected the brief: an unknown preset
+  id is `agent-preset/not-found`; `PRESET_UNAVAILABLE` is the missing `agentPresets` service. Each
+  refusal is a result (`started: false`, a `reason` and a sentence naming the way out), never a raw host
+  error, and the reservation is already a visible `failed` record, so no member is left `provisioning`.
+  On a `replace`, the refusal also answers `predecessor_retired: false` and says the predecessor is live.
+- **The result reports what was applied.** `started_with` echoes only the supplied fields in the
+  parameter's vocabulary; a plain spawn adds nothing, and a refused start adds nothing. It reports what
+  the plugin forwarded rather than a read-back of the child's resolved options, because the seam exposes
+  no supported read of them and its Session metadata copies the parent's cwd.
+- **A refusal for a stale target now names the live holder of the name.** `retire_member`,
+  `restore_member`, `message_member` and `stop_member` keep the refusal they already gave and add
+  `current_holder: { target, generation }` plus a sentence pointing at it, whenever another generation of
+  that base name is live. The holder is read from the stale record's `name` (not by stripping a `-g<N>`
+  suffix, because a base name may legally end in `-g2`), and the highest live generation wins. Which
+  refusals happen does not change, and a name with no live other generation keeps the old answer.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node --test --test-isolation=none tests/*.test.mjs` is 107 tests, 107 passing — the 97
+  that existed plus ten: nine in `tests/spawn-capabilities.test.mjs` (the exact no-argument request, each
+  field forwarded and reported, an option supplied alone, the typed refusals with no member left
+  provisioning, a non-typed start failure still throwing, a refused successor leaving its predecessor
+  live, the stale-target holder on message/stop/retire, holder absence while no other generation is live,
+  and the restore refusals) and one in `tests/entry.test.mjs` pinning the wrapper's `spawn_options`
+  validation and forwarding; `node scripts/check.mjs` passes. The README pair was measured before and
+  after: 14 `##` headings on each side before and after, and the pair's distinct backtick identifiers
+  stay equal to each other.
+- **What stays unverified.** The bundle was not installed and no `plugin_manager` call was made, so a
+  live activation with a forwarded `cwd`, `agentOptions` or `agentPreset`, the seam's actual refusal
+  payloads in a real profile, and the typed result reaching a real model are covered by fakes and the
+  unit tests, not by a running profile. The Lead's live check is one `spawn_member` with a preset and a
+  model, then a second with neither.
