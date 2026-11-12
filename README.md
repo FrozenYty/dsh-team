@@ -2,9 +2,12 @@
 
 [中文](README-zh.md)
 
-A DeepSeek Harness profile bundle that gives an agent team the lifecycle the shipped roster lacks: a Lead
-can retire a member, restore it from a recoverable session trash, and replace it with a successor that
-starts from a handoff brief. It owns the roster and has no browser half.
+> Change the person, not the work.
+
+A DeepSeek Harness profile bundle for the one thing the shipped agent-team roster cannot do: let a member
+go. A Lead can retire one, restore it from a trash it controls, or replace it with a successor that inherits
+the assignment, what was already in flight, and a pointer to the shared task board. It owns the roster and
+has no browser half.
 
 [github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
 
