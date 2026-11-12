@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.19.0.
+- Current version: v0.20.0.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -50,6 +50,11 @@ directory did not, on purpose (ADR 0014).
   removed (same version; `scripts/check.mjs` now refuses that keyword), and v0.13.0's replacement answered
   with a result the host refused until v0.13.2 declared the fields (`tests/entry.test.mjs` now validates
   every answer against its own tool's declared output schema).
+- **A live run found the gap this release closes.** A successor enumerated its tools, found no roster
+  tool (every one was Lead-scoped), and read `~/.dsh/storages/team_roster.json` directly to discover the
+  task body it had inherited. v0.20.0 registers one read-only tool in the member scope, `list_my_tasks`,
+  and corrects the `{task_board}` pointer, which had named the shipped board and told the member to ask the
+  Lead. The live call from inside a real member remains the owner's install check (ADR 0022).
 - **Unit-tested only**, with no live profile having exercised them: the write-time `label` and
   `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
   operations overlap; that a member still running is never swept; the exact request a spawn with no
@@ -58,9 +63,12 @@ directory did not, on purpose (ADR 0014).
   write — an interleaving a live run cannot be made to produce, so the test drives the table's own
   serialized `update` hook — and the rule that a board write cannot undo a handover; `wait_members`' event
   wiring, timeout, cancellation and no-progress paths; the whole definition layer (v0.16.0) — reading
-  a file, the precedence report, and every refusal; and the team-file layer (v0.19.0) — the three-source
-  precedence, the store-write refusal, the placeholder fallback and the reserved filename. A live start
-  from a definition or a live team-file read is the owner's install check (ADR 0018, ADR 0021).
+  a file, the precedence report, and every refusal; the team-file layer (v0.19.0) — the three-source
+  precedence, the store-write refusal, the placeholder fallback and the reserved filename; and the member
+  scope (v0.20.0) — the owner filter, the empty answer, the non-member refusal, the registration on a
+  member Agent and the schema conformance of a real answer. A live start from a definition, a live
+  team-file read or a live `list_my_tasks` call from inside a member is the owner's install check
+  (ADR 0018, ADR 0021, ADR 0022).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -92,6 +100,7 @@ that is a move rather than a deletion.
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to store it, pass an empty string to return to the built-in. A `team/team.md` in the Lead's project wins while it exists, so a store or clear is refused with that file's path and the instruction to edit it. |
 | `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, a bounded body (what "done" means and where the work stopped), `open` or `done`, and an optional member `owner`; the open ones move with a replacement, body included. |
+| `list_my_tasks` | **A member's own tool, not the Lead's**: the read-only rows whose `owner` is that member's own target, each with its id, title, body, status and timestamps, and how many are still open. It takes no argument — the caller's Session is the selector. A member owning nothing gets an empty list, not an error; another member's rows, unowned rows and the Lead's whole board are invisible. Only the Lead writes the board, so a member reports finished work and the Lead marks it done. |
 
 **A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
 forwards three things the Harness already supports, and every field omitted inherits the Lead's value —
@@ -204,8 +213,8 @@ keeps one file from being reported as a broken definition on every spawn (ADR 00
 
 `spawn_member` with `replace: <target>` is the whole replacement. The successor's prompt is composed from
 the predecessor's record — its name, the target and label, the recorded assignment, the fact that the
-predecessor is gone, and its open tasks by id and title. The successor inherits the assignment unless the
-model records a different one.
+predecessor is gone, its open tasks by id and title, and a pointer to this Lead's own board that names the
+member's read tool. The successor inherits the assignment unless the model records a different one.
 
 **What a retirement does to the work.** The work is not a sentence: since v0.13.0 it is rows on this
 plugin's own board, and the two lifecycle events treat them as the point of the operation. A replacement
@@ -220,7 +229,8 @@ move: finished work stays on the record that finished it, and it is `task_board`
 Since v0.18.0 a task also carries a **body** — up to 2000 characters of what "done" means for it and
 where the predecessor stopped — set with `create` or `update` and cleared with `body: null`. The brief
 still names only the id and the title, because a cold child pays for every word and five maximal bodies
-would break the line's bound; the successor reads the bodies from the board with `action: list`. And a
+would break the line's bound; the successor reads the bodies from the board with `list_my_tasks`, which
+returns exactly the rows it owns and nothing else (the Lead reads the same bodies with `task_board`). And a
 board write can no longer undo a handover: `update` applies only the fields the call named, so a task whose
 owner a replacement just changed keeps that owner, and a `release` or `delete` whose row changed since the
 call read it answers `changed: false` with the row it found — naming the owner that took it — instead of
@@ -395,9 +405,15 @@ projects, and a zero-import bundle (ADR 0002) cannot import one (ADR 0012).
 No browser half, no HTTP bridge, no client bundle; the v0.3 Settings panel was never rendered and did not
 work in use, so it was removed rather than repaired (ADR 0008). `list_members` is the control surface: it
 covers the shipped roster's members and every child spawned with the shipped `subagent` tools, and every
-other tool works from what it reports — the member-scoped ones take a row's `target`, while `task_board`,
-`handoff_template` and `wait_members` read or write the Lead's own record and the live state those rows
-describe.
+other Lead tool works from what it reports — the target-taking tools take a row's `target`, while
+`task_board`, `handoff_template` and `wait_members` read or write the Lead's own record and the live state
+those rows describe.
+
+The other scope is the member's. `list_my_tasks` is registered on a member Agent, not on the Lead, takes
+no argument, and is read-only: the caller's Session picks the roster row and therefore the rows, so a
+member sees the work it owns and the Lead's tool list is unchanged. That is what makes "a successor reads
+the bodies from this board" true — a successor with rows no longer has to ask the Lead or read the
+plugin's storage file (ADR 0022).
 
 The shipped team tool row is disabled by the patch (P2-07), so the roster calls a Lead has are this
 plugin's own ten tools. The row's `spawn_teammate`, `wait_agent` and `team_task_*` tools are gone —

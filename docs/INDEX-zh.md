@@ -46,6 +46,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 继任者拿到哪一个 assignment，以及定义在 replace 时意味着什么？ | `docs/adr/0019-definition-precedence-on-replace.md` | 英文 |
 | 为什么一条任务带有正文，以及为什么工作板上的写入不能把交接抹掉？ | `docs/adr/0020-task-body-and-write-integrity.md` | 英文 |
 | 为什么交接书是一个团队文件，以及为什么文件存在时写入存储会被拒绝？ | `docs/adr/0021-team-file-handoff-template.md` | 英文 |
+| 为什么成员能读到自己名下的工作，以及为什么工作板只有一个写入者？ | `docs/adr/0022-member-reads-its-work.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
@@ -67,6 +68,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 若你改了 | 同时更新 |
 |---|---|
 | 工具名、参数或返回字段 | `docs/architecture-zh.md` §2 或 §4.5、`actions.js`、`README.md` + `README-zh.md`、`PLAN.md` 对应任务文字 |
+| 哪件工具注册到哪个作用域，或成员能读什么 | `index.js`、`actions.js`、`docs/architecture-zh.md` §4.5 与 §4.5.2、`README.md` + `README-zh.md`、ADR 0022 |
 | 某个操作的行为或失败原因 | `actions.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §4 |
 | 收养覆盖什么，或它消费的发现行形状 | `actions.js`、`roster.js`、`docs/architecture-zh.md` §4.5.1、`README.md` + `README-zh.md` |
 | 花名册相态或转移 | `docs/architecture-zh.md` §4.3 的状态矩阵；若模型变了，另写 ADR |
