@@ -132,7 +132,15 @@ const COMPACT_VALUE = {
   },
 }
 
-/** The `spawn_member.spawn_options.agent_options` value, used both as a parameter and as the report. */
+/**
+ * The `spawn_member.spawn_options.agent_options` value, used both as a parameter and as the report.
+ *
+ * This object reaches the host twice, and the second time is stricter: a result schema may only use
+ * `type`, `oneOf`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const` and
+ * annotations. A validation keyword here — `minimum` was the first one — is rejected while the plugin
+ * loads, which does not fail this tool: it stops every tool in the plugin from registering. Keep the
+ * range in the description instead; `scripts/check.mjs` rejects a keyword outside that subset.
+ */
 const AGENT_OPTIONS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -140,7 +148,7 @@ const AGENT_OPTIONS_SCHEMA = {
     provider: { type: 'string', description: 'Provider id for the member\'s model requests. Omit to inherit the Lead\'s provider.' },
     model: { type: 'string', description: 'Model id for the member\'s model requests: the place a cheaper or larger model is chosen for delegated work. Omit to inherit the Lead\'s model.' },
     reasoning_effort: { type: 'string', description: 'Reasoning effort for the member\'s requests, where the model exposes one. Omit to inherit the Lead\'s effort, or let a changed provider or model resolve its own default.' },
-    max_tokens: { type: 'integer', minimum: 1, description: 'Output-token limit for the member\'s requests. Omit to inherit the Lead\'s limit.' },
+    max_tokens: { type: 'integer', description: 'Output-token limit for the member\'s requests, a positive integer. Omit to inherit the Lead\'s limit.' },
   },
 }
 

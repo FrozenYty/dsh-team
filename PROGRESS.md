@@ -683,3 +683,27 @@
   payloads in a real profile, and the typed result reaching a real model are covered by fakes and the
   unit tests, not by a running profile. The Lead's live check is one `spawn_member` with a preset and a
   model, then a second with neither.
+## 2026-11-12 - v0.12.0 did not activate, and a check now refuses that keyword
+
+- **The bundle installed and did not activate.** `plugin_manager install_bundle` for v0.12.0 answered
+  `application: failed` with a host diagnostic: `JsonSchemaError: unsupported JSON schema:
+  ...started_with.properties.agent_options.properties.max_tokens.minimum is not a supported keyword
+  (subset: type/oneOf/properties/required/additionalProperties/items/enum/const + annotations)`. The
+  cause was one word: `AGENT_OPTIONS_SCHEMA` is the same object in a parameter schema and in the
+  `spawn_member` result schema, and the result side is validated against that narrow subset. A rejected
+  keyword there does not break one tool; it stops the whole plugin from registering, so every roster
+  tool was missing while the unit tests were green.
+- **Why nothing local caught it, and what does now.** The unit tests call `actions.js` and never load the
+  host, `node --check` is a parse, and `scripts/check.mjs` had no rule about schema keywords. It has one
+  now: any of `minimum`, `maximum`, `minLength`, `pattern`, `format`, `minItems`, `default`, `allOf`,
+  `$ref` and their neighbours in `index.js` fails the check and names the line. The rule was written
+  first and proved against the broken tree - it failed with `index.js:143: "minimum" is not in the
+  schema subset the host validates` - and only then was the keyword removed, so the check is known to
+  catch the fault rather than to have been written around it. `maxLength` stays allowed: its three uses
+  are parameter properties, which the host tolerates, and they carry a documented range to the model.
+- **The constant now says why.** `AGENT_OPTIONS_SCHEMA` carries the subset in its JSDoc, with the
+  instruction to express a range in the description instead, because the next person to add `minimum`
+  would otherwise have no reason to suspect it.
+- **Version.** The fix stays inside `0.12.0`: no profile ever activated that release, so there is no
+  installed state to distinguish. `node scripts/check.mjs` passes, `node --check index.js` exits clean,
+  and the suite is 107 tests, 107 passing.

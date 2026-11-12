@@ -103,6 +103,28 @@ for (const match of entry?.matchAll(/async\s+execute\s*\(([^)]*)\)/g) ?? []) {
   }
 }
 
+// A tool schema is validated by the host, and a keyword outside its accepted subset does not fail one
+// tool: it fails the plugin. v0.12.0 shipped `minimum` on a constant that a parameter schema and a
+// result schema shared, so the bundle installed and then did not activate -- `JsonSchemaError:
+// unsupported JSON schema: ... max_tokens.minimum is not a supported keyword (subset:
+// type/oneOf/properties/required/additionalProperties/items/enum/const + annotations)`. Nothing local
+// caught it: the unit tests call actions.js and never load the host, and the entry itself parses fine.
+// `maxLength` is deliberately absent from this list: the three uses are parameter properties, which the
+// host tolerates, and dropping them would lose the range from the model-facing description.
+const FORBIDDEN_SCHEMA_KEYWORDS = [
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'pattern',
+  'format', 'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties', 'default',
+  'examples', 'allOf', 'anyOf', 'not', '$ref', 'definitions', '$defs',
+]
+const entryLines = entry?.split(/\r?\n/) ?? []
+for (const keyword of FORBIDDEN_SCHEMA_KEYWORDS) {
+  const pattern = new RegExp(`(^|[{,\\s])${keyword.replace('$', '\\$')}\\s*:`)
+  const at = entryLines.findIndex((text) => pattern.test(text))
+  if (at !== -1) {
+    fail(`index.js:${at + 1}: "${keyword}" is not in the schema subset the host validates; the plugin will not activate`)
+  }
+}
+
 // 3. Locale parity.
 const keysOf = (value, prefix = '') => Object.entries(value ?? {})
   .flatMap(([key, child]) => {
