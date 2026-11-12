@@ -231,3 +231,83 @@ test('the loader path reads the trash cap from the config and refuses a bad one 
     assert.equal(childTools.size, 0)
   }
 })
+
+/**
+ * Validate a tool result against the schema that tool declares for it.
+ *
+ * The host validates a result when the tool returns, and a property the operation produces but the
+ * schema does not declare is rejected *after* the side effect has already happened. v0.13.0 shipped
+ * exactly that: `spawn_member` answered with `transferred`, `MEMBER_ROW` did not declare it, and a
+ * replacement moved the predecessor's work while the model was told the call failed. Every unit test
+ * stayed green because they call `actions.js` directly and never go through a declared schema.
+ *
+ * Implements the subset the host accepts, which is also the subset `scripts/check.mjs` enforces.
+ */
+function assertMatchesSchema(value, schema, at = 'value') {
+  if (schema.oneOf !== undefined) {
+    const matched = schema.oneOf.filter((option) => {
+      try {
+        assertMatchesSchema(value, option, at)
+        return true
+      } catch {
+        return false
+      }
+    })
+    assert.equal(matched.length, 1, `${at}: expected exactly one oneOf branch, matched ${matched.length}`)
+    return
+  }
+  const types = {
+    object: () => value !== null && typeof value === 'object' && !Array.isArray(value),
+    array: () => Array.isArray(value),
+    string: () => typeof value === 'string',
+    integer: () => Number.isInteger(value),
+    number: () => typeof value === 'number' && Number.isFinite(value),
+    boolean: () => typeof value === 'boolean',
+    null: () => value === null,
+  }
+  assert.ok(types[schema.type]?.(value), `${at}: expected ${schema.type}, saw ${JSON.stringify(value)}`)
+  if (schema.enum !== undefined) assert.ok(schema.enum.includes(value), `${at}: ${JSON.stringify(value)} is not in the enum`)
+  if (schema.const !== undefined) assert.deepEqual(value, schema.const, `${at}: const`)
+  if (schema.type === 'object') {
+    for (const key of schema.required ?? []) assert.ok(key in value, `${at}: missing required "${key}"`)
+    for (const [key, child] of Object.entries(value)) {
+      if (child === undefined) continue
+      const declared = schema.properties?.[key]
+      if (declared === undefined) {
+        assert.notEqual(schema.additionalProperties, false, `${at}.${key}: not declared in the output schema`)
+        continue
+      }
+      assertMatchesSchema(child, declared, `${at}.${key}`)
+    }
+  }
+  if (schema.type === 'array' && schema.items !== undefined) {
+    value.forEach((item, index) => assertMatchesSchema(item, schema.items, `${at}[${index}]`))
+  }
+}
+
+test('every answer conforms to the output schema its own tool declares', async () => {
+  const { tools, lead } = harness()
+  const exec = { agent: lead }
+  const answer = async (name, args) => {
+    const definition = tools.get(name)
+    assert.ok(definition, `${name} is registered`)
+    const result = await definition.execute(args, exec)
+    assertMatchesSchema(result, definition.output.schema, name)
+    return result
+  }
+
+  const born = await answer('spawn_member', { name: 'reviewer', label: 'Reviewer', prompt: 'Review the parser.' })
+  assert.equal(born.target, 'reviewer')
+  const task = await answer('task_board', { action: 'create', title: 'Recheck the curve', owner: 'reviewer' })
+  await answer('list_members', {})
+
+  // The exact shape v0.13.0 lost: a replacement that moves work answers with the transfer.
+  const successor = await answer('spawn_member', { replace: 'reviewer', label: 'Reviewer II', prompt: 'Take over.' })
+  assert.deepEqual(successor.transferred_tasks, [task.task.id])
+  assert.equal(successor.transferred, 1)
+  assert.equal(successor.predecessor_retired, true)
+
+  await answer('task_board', { action: 'list' })
+  await answer('task_board', { action: 'update', task_id: task.task.id, status: 'done' })
+  await answer('handoff_template', {})
+})
