@@ -419,8 +419,8 @@ never sets the flag behaves exactly as it did before. `message_member` to an eph
 the flag**: messaging it again is a declaration that it is not one-shot after all, and this is the one
 case where a later sweep would otherwise retire work the model intended to keep.
 
-**There is no completion event, so the sweep carries its own evidence.** The notices table above records
-that nothing durable happens when an active child finishes its turn. The installed subagent seam
+**There is no durable completion event, so the sweep carries its own evidence.** The notices table above
+records that nothing durable happens when an active child finishes its turn. The installed subagent seam
 (`dsh-subagent` 0.2.2-rc.1) reports a descendant row's `activity` as `running` or `inactive`
 (`lib/index.js:2435`, `sessions.get(entry.id) === undefined ? "inactive" : "running"`), and `inactive`
 also describes a child that never started, so it cannot prove completion by itself — only `running` is
@@ -437,8 +437,9 @@ task, timer or model call is involved. It runs before the triggering operation's
 `list_members` result already shows a swept member as `retired`, and `spawn_member` can reuse the freed
 target. It returns immediately — no read of the subagent registry, no write — when no member is
 ephemeral. Every other tool is either target-scoped (`message_member`, `stop_member`, `retire_member`,
-`restore_member`, `compact_member`) or touches no member at all (`handoff_template`), so a sweep there
-would be an unrelated retirement on a result that does not report it.
+`restore_member`, `compact_member`), reads live state without writing (`wait_members`), or touches no
+member at all (`handoff_template`), so a sweep there would be an unrelated retirement on a result that
+does not report it.
 
 **Retirement stays one implementation.** A swept member goes through `retireMember` exactly like a
 model-invoked retirement — drain, tombstone-first, artifact move, retention cap, host effects — and its
@@ -565,6 +566,7 @@ the Lead, so a failed projection cannot disable every tool.
 |---|---|
 | `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default — and `started_with` reports back what the plugin forwarded, not what the child resolved. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
+| `wait_members` | One bounded wait on the live status of this Lead's members: it answers when a member's `agent/status` transitions (`idle` ⇄ `running`) or after the timeout, and reports the member and the status it entered. The timeout defaults to 30 s and is refused above 1 h; a roster with no `running` member and no `provisioning` reservation answers `no_progress` at once, because a blocked Lead cannot wake an idle member. It observes only post-call transitions and never wakes anyone (§4.5). |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |
 | `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. It is a retirement with no successor, so the member's open tasks lose their owner and the result names them in `unowned`/`unowned_tasks` (§4.3.2). |
@@ -586,9 +588,12 @@ The shipped roster's spawn, wait and task tools are disabled by the bundle patch
 a Lead acts through; the patch entry itself states what it removes and what it costs
 (`cordis.patch.yml`). Three tools the shipped `agent-team` service publishes stay in the list:
 `list_agents`, `send_message` and `interrupt_agent`, because disabling that service row would take
-adoption, the membership test and the projection filter with it. Every tool the disabled row owned has an
-equivalent here except `wait_agent`, which has none: there is no blocking wait, so a Lead re-reads
-`list_members` and wakes a member with `message_member`, reading `inactive` as "no turn is executing".
+adoption, the membership test and the projection filter with it. Every tool the disabled row owned has a
+replacement here, `wait_agent` included: `wait_members` observes the Harness's `agent/status` event,
+filtered by the child ids on this Lead's roster. The shipped `agentTeams.waitForChange` is notified from
+that same event, but only for an agent its own membership test resolves, and a member spawned through
+`ctx.subagents` is not in its journal — which is why the wait is this plugin's own listener rather than a
+call to that service.
 
 #### 4.5.1 Adoption is the control surface
 
@@ -620,7 +625,8 @@ and still retirable.
 | child lifecycle | `ctx.subagents.startActivation`, `sendMessage`, `interrupt`, `drainChildren` |
 | start a member with its own directory, model route or preset | `request.cwd` / `request.agentOptions` / `request.agentPreset` on `ctx.subagents.startActivation`; gated by the provider's advertised capabilities, and tool restriction has no other route than an agent preset (§4.1, ADR 0016) |
 | list every subagent descendant | `ctx.subagents.listDescendants(rootSessionId, signal)`; rows carry `id`, `mode`, `label?`, `parentId` and `depth` |
-| notice that a child stopped | none exists — a descendant row's `activity` is only `running` or `inactive`, and `inactive` also covers a child that never started; a lazy sweep reads the local live registry instead (§4.3.1, ADR 0013) |
+| notice that a child stopped | `subagent/end` (published when a run settles) and the `idle` edge of `agent/status`; neither is durable, so the ephemeral sweep still carries its own evidence (§4.3.1, ADR 0013) |
+| wait on a member's live status | `ctx.on('agent/status', ({ agent, status }))` from the plugin's own context, filtered by the child ids this roster holds; the dispatch is scope-filtered and an unscoped listener is admitted to it (§4.5) |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |

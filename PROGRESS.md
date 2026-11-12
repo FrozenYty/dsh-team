@@ -944,3 +944,57 @@
   where the Loader is expected to warn about the missing `tool-agent-team` target and skip the entry.
 - **Version.** `0.14.1`: a documentation and comment correction, but the published bundle's version moves
   so the corrected claim can be told apart from the one it replaces.
+
+## 2026-11-12 — the blocking wait comes back on this plugin's own surface (P2-15, v0.15.0)
+
+- **The investigation found an event, and the shipped reader of it cannot see these members.** The Event
+  provider lists `agent/status` (`idle` ⇄ `running`, scope-filtered to one Agent) and `subagent/end` ("a
+  published child settled", published from `dsh-subagent`'s lifecycle observer). A plugin does receive
+  them: `scopeTarget` admits an untagged listener to a scoped dispatch (`@deepseek-ai/dsh-scope`
+  `lib/index.js:327-338`), and the shipped `agent-team` service is itself such a listener for
+  `agent/status` (`dsh-experimental-agent-team` `lib/index.js:1477-1480`). Its public
+  `agentTeams.waitForChange` is therefore notified only for an agent its own membership test resolves, and
+  `tryMembership` answers `undefined` for a subagent its journal does not own
+  (`lib/types/roster.js:75-79`) — which is every member this plugin spawns through `ctx.subagents`. So the
+  wait is this plugin's own listener on `agent/status`, filtered by the child ids on the Lead's roster.
+- **`wait_members` is that tool (P2-15).** It blocks one turn until a watched member's live status
+  changes, or a timeout; it reports the member and the status it entered (`target`, `status`), and a
+  timeout, a cancellation and an impossible wait each answer differently (`timed_out`, rejection,
+  `no_progress`). The bound is documented and enforced: 30 s by default, refused above 1 h. It observes
+  only post-call transitions, never wakes anybody, refuses a non-Lead caller like every other tool, and
+  its description says what it does not wait for: a `task_board` write, a delivered message being
+  processed, a member's whole assignment, or a retired member's state.
+- **The README pair gained three sections, in both languages.** "Limits and deliberate omissions" — the
+  single-file per-Lead store with no cross-process lock (ADR 0010), no browser half (ADR 0008), the kept
+  `agent-team` service row and its three surviving tools (ADR 0017), a pruned tombstone that cannot be
+  restored (ADR 0011), and the board's deliberate lack of priorities, dependencies, comments, sub-tasks
+  and due dates (ADR 0017). "Requirements and compatibility" — what the host must provide to run, then
+  what the test suite needs, citing the CI pin (`.github/workflows/ci.yml`, `node-version: "24"`) and why
+  `--test-isolation=none` is not optional. "Upgrading from v0.13 or earlier" — a table naming each tool
+  v0.14.0 removed (`spawn_teammate`, `wait_agent`, `team_task_create`, `team_task_list`, `team_task_get`,
+  `team_task_update`) and its replacement, including the edits that have none (dependencies, priorities,
+  comments).
+- **Present-tense claims the new tool falsifies were corrected; history was left alone.**
+  `docs/architecture-en.md`/`-zh.md` §4.5 gained the `wait_members` row and now say the disabled row's
+  tools all have replacements; §5's "notice that a child stopped — none exists" row became the two events
+  that do exist (`subagent/end`, and the `idle` edge of `agent/status`), neither durable, so the ephemeral
+  sweep keeps its own evidence, and §4.3.1 now says "no durable completion event" for the same reason.
+  `cordis.patch.yml`'s entry-3 comment lost its "no blocking wait" sentence; its three entries are
+  unchanged. `PLAN.md` gains P2-15 with its done-when. ADR 0013 (accepted, closed), P2-07's delivered
+  text and the v0.14.x entries above keep their wording: they were true when written.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node scripts/check.mjs` passes after the last edit; `node --test --test-isolation=none
+  tests/*.test.mjs` is 136 tests, 136 passing — the 130 that existed plus 6 (5 in `tests/wait.test.mjs`,
+  1 in `tests/entry.test.mjs`), with no existing test edited. The new wait's main test was proved able to
+  fail: `watched.get(payload?.agent?.id)` in `nextMemberStatus` was replaced with a key that is never
+  present, the named test failed on `timed_out` (`true !== false`, `tests/wait.test.mjs:83`), the line was
+  restored, and the test then passed. `tests/wait.test.mjs` hashed
+  `20C292027658738A1EA949BD93263671B5DF18F6B01C11C3BE281F2E4ADEB48F` before and after that proof, so the
+  proof edited the operation, not the test. Bilingual parity was measured before and after rather than
+  assumed: the README pair went from 14 `##` headings and 130 distinct backtick identifiers per side with
+  identical sets to 17 headings and 156 identifiers per side with identical sets.
+- **What stays unverified.** No install and no `plugin_manager` call was made. The wait's live wiring is
+  therefore unproven in the only place it can be observed: that a real Lead's `wait_members` call receives
+  `agent/status` from the installed Harness and returns when a member's turn ends. That is the owner's
+  install check, and the README's install-verification list carries the exact call to make.
+- **Version.** `0.15.0`: the model's tool surface gains a tool, so this is not a documentation patch.

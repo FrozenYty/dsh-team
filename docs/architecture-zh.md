@@ -246,9 +246,9 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 **这是记录上的属性，不是新相态。** `spawn_member.ephemeral: true` 会在成员记录上写入 `ephemeral: true`，并在子代理启动时写入 `startedAt`；每一行 `list_members` 都会报告 `ephemeral: true`，因此模型能看出哪些成员会自行离开。默认是 false，不新增相态，从不设置该标记的 profile 与之前完全一致。对临时成员调用 `message_member` 会**清掉该标记**：再次给它发消息就是在声明它不再是一次性的；这也是唯一一种“后续清扫会吃掉模型本想保留的工作”的情形。
 
-**没有完成事件，所以清扫必须自带证据。** 上面的通知表已经写明：活动中的子代理结束本轮时，什么持久变化都不会发生。安装版的子代理 seam（`dsh-subagent` 0.2.2-rc.1）把后代行的 `activity` 报成 `running` 或 `inactive`（`lib/index.js:2435`，`sessions.get(entry.id) === undefined ? "inactive" : "running"`），而 `inactive` 同样描述一个从未启动过的子代理，因此它本身证明不了“已完成”——只有 `running` 是可信的正面证据。插件因此要求它自己记录下来的证据：`startedAt`，在激活返回时写入，从未发布过的预留没有它；外加本地实时注册表（`liveStateOf`：`ctx.agents.get(childId)`）报该成员不再驻留。这两者合起来就是“它运行过、然后停了”——从未启动的成员与仍在运行的成员都会被留下。ADR 0013 记录了这个信号，以及为什么单凭 `activity` 不够。
+**没有持久的完成事件，所以清扫必须自带证据。** 上面的通知表已经写明：活动中的子代理结束本轮时，什么持久变化都不会发生。安装版的子代理 seam（`dsh-subagent` 0.2.2-rc.1）把后代行的 `activity` 报成 `running` 或 `inactive`（`lib/index.js:2435`，`sessions.get(entry.id) === undefined ? "inactive" : "running"`），而 `inactive` 同样描述一个从未启动过的子代理，因此它本身证明不了“已完成”——只有 `running` 是可信的正面证据。插件因此要求它自己记录下来的证据：`startedAt`，在激活返回时写入，从未发布过的预留没有它；外加本地实时注册表（`liveStateOf`：`ctx.agents.get(childId)`）报该成员不再驻留。这两者合起来就是“它运行过、然后停了”——从未启动的成员与仍在运行的成员都会被留下。ADR 0013 记录了这个信号，以及为什么单凭 `activity` 不够。
 
-**清扫是惰性的，且只有两个触发点。** 它在 `list_members`（模型回收结果的读取）与 `spawn_member`（名额重新变得要紧的那次扇出）的开头运行，别处都不运行。这两个操作本来就会重读花名册；没有插件自己的时钟，没有后台任务、定时器或模型调用。它先于触发操作自己的读取执行，因此 `list_members` 的结果里被清扫的成员已经是 `retired`，而 `spawn_member` 可以复用被释放的 target。当没有任何临时成员时，它立刻返回——不读子代理注册表，也不写任何东西。其余工具要么面向单个目标（`message_member`、`stop_member`、`retire_member`、`restore_member`、`compact_member`），要么根本不碰成员（`handoff_template`），在那里清扫会变成一次结果里根本没报告的、不相干的退役。
+**清扫是惰性的，且只有两个触发点。** 它在 `list_members`（模型回收结果的读取）与 `spawn_member`（名额重新变得要紧的那次扇出）的开头运行，别处都不运行。这两个操作本来就会重读花名册；没有插件自己的时钟，没有后台任务、定时器或模型调用。它先于触发操作自己的读取执行，因此 `list_members` 的结果里被清扫的成员已经是 `retired`，而 `spawn_member` 可以复用被释放的 target。当没有任何临时成员时，它立刻返回——不读子代理注册表，也不写任何东西。其余工具要么面向单个目标（`message_member`、`stop_member`、`retire_member`、`restore_member`、`compact_member`），要么只读实时状态而不写（`wait_members`），要么根本不碰成员（`handoff_template`），在那里清扫会变成一次结果里根本没报告的、不相干的退役。
 
 **退役仍是同一套实现。** 被清扫的成员走的是与模型主动退役完全相同的 `retireMember`——排空、先立碑、移动产物、保留上限、宿主侧效果——它的墓碑记录 `retireReason: 'ephemeral member: its turn ended'`。清扫确实退役了东西时，触发操作的结果会加上 `swept` 与 `swept_targets`；什么都没退役时，结果与加这个特性之前逐字节相同。
 
@@ -299,6 +299,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 |---|---|
 | `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `replace` 时，让继任者从交接书启动、把前任的未完成任务交给它，并在同一次调用里退役前任（§4.4、§4.3.2）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options`（`provider`、`model`、`reasoning_effort`、`max_tokens`）或 `agent_preset` 启动；省略的字段继承 Lead 的值——但改了 `provider` 或 `model` 却未给 `reasoning_effort` 时，新路由解析自己的默认值——而 `started_with` 报告的是插件转发出去的内容，不是子代理解析出的结果。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误（ADR 0016）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
 | `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`——被清扫的成员留下未完成任务时，再加 `unowned`/`unowned_tasks`（§4.3.2）。 |
+| `wait_members` | 对这个 Lead 成员的实时状态做一次有界等待：某个成员的 `agent/status` 在 `idle` ⇄ `running` 之间变化时返回，或超时后返回，并报告是哪个成员、变成了什么。超时默认 30 秒，超过 1 小时即拒绝；若没有 `running` 成员也没有 `provisioning` 预留，则立刻回答 `no_progress`，因为被阻塞的 Lead 无法唤醒空闲成员。它只观察调用之后的变化，绝不唤醒任何人（§4.5）。 |
 | `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。给临时成员发消息会清掉它的标记，因此它不会被清扫。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。当该名字的另一个代次还活着时，拒绝还会带上 `current_holder` 并在消息里说明。 |
 | `stop_member` | 只取消目标当前轮，保留激活与收件箱；对已退役或已失败的目标按与 `message_member` 相同的带类型原因拒绝，并以同样方式携带 `current_holder`。 |
 | `retire_member` | 排空、立碑、把会话产物移入回收站、执行每个 Lead 的保留上限并刷新宿主侧效果（§4.4）；结果报告 `pruned`，重复调用是无操作，返回 `reason: 'already-retired'`，此时若名字已被另一代次接手，结果会指出那个活持有者。它是一次没有继任者的退役，因此该成员的未完成任务会失去 owner，结果用 `unowned`/`unowned_tasks` 点出它们（§4.3.2）。 |
@@ -309,7 +310,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 操作体在 `actions.js`；`index.js` 只保留参数校验、Lead 专属权限检查与工具结果 schema。替换刻意不新增工具：`spawn_member` 与 `message_member` 各多一个参数，而不是让模型为同一件事再学第三个名字（ADR 0009）。交接书的**形状**则多了一个工具，而不是 `spawn_member` 的又一个参数，因为一个持久偏好不该作为创建成员的副作用而改变（ADR 0015）。任务板是一个工具而不是五个，理由正相反：五个名字会让接口为同一种行形状翻三倍（ADR 0017），而它的两件事——工作板与交接——以同一套词汇到达模型。
 
-官方花名册的 spawn、等待与任务工具已由 bundle 补丁禁用（P2-07，v0.14.0）——`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具——本插件的工具就是 Lead 用来操作花名册的那套界面；补丁条目本身写明了它移除了什么、代价是什么（`cordis.patch.yml`）。官方 `agent-team` 服务发布的三件工具仍留在列表里：`list_agents`、`send_message`、`interrupt_agent`，因为禁用那条服务行会连收养、成员判定与投影过滤一起带走。被禁用那行拥有的工具在这里都有对应物，唯独 `wait_agent` 没有：本插件没有阻塞式等待，所以 Lead 改为重读 `list_members`、用 `message_member` 唤醒成员，并把 `inactive` 读作“当前没有轮次在执行”。
+官方花名册的 spawn、等待与任务工具已由 bundle 补丁禁用（P2-07，v0.14.0）——`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具——本插件的工具就是 Lead 用来操作花名册的那套界面；补丁条目本身写明了它移除了什么、代价是什么（`cordis.patch.yml`）。官方 `agent-team` 服务发布的三件工具仍留在列表里：`list_agents`、`send_message`、`interrupt_agent`，因为禁用那条服务行会连收养、成员判定与投影过滤一起带走。被禁用那行拥有的工具在这里都有替代，`wait_agent` 也不例外：`wait_members` 监听的是 Harness 的 `agent/status` 事件，并按本 Lead 花名册上的子会话 id 过滤。官方的 `agentTeams.waitForChange` 同样由这个事件驱动，但只对它自己的成员判定能解析出的 Agent 生效，而通过 `ctx.subagents` 启动的成员不在它的日志里——所以这里的等待是本插件自己的监听，而不是对那项服务的一次调用。
 
 #### 4.5.1 收养就是控制面
 
@@ -328,7 +329,8 @@ Harness 通知是任何插件操作都无法阻止的事件：
 | 子代理生命周期 | `ctx.subagents.startActivation`、`sendMessage`、`interrupt`、`drainChildren` |
 | 让成员用自己的目录、模型路由或 preset 启动 | `ctx.subagents.startActivation` 上的 `request.cwd`／`request.agentOptions`／`request.agentPreset`；受 provider 声明能力的约束，而工具限制除了 agent preset 没有别的途径（§4.1、ADR 0016） |
 | 列出全部子代理后代 | `ctx.subagents.listDescendants(rootSessionId, signal)`；行带 `id`、`mode`、`label?`、`parentId`、`depth` |
-| 得知某个子代理已停止 | 不存在这样的机制——后代行的 `activity` 只有 `running` 与 `inactive`，而 `inactive` 也涵盖从未启动的子代理；因此改由惰性清扫读取本地实时注册表（§4.3.1、ADR 0013） |
+| 得知某个子代理已停止 | `subagent/end`（一次运行结算时发布）以及 `agent/status` 的 `idle` 边沿；两者都不持久，所以临时成员清扫仍自带证据（§4.3.1、ADR 0013） |
+| 等待成员的实时状态 | 在插件自己的上下文里 `ctx.on('agent/status', ({ agent, status }))`，并按本花名册持有的子会话 id 过滤；该分发带作用域过滤，而未加作用域的监听者会被放行（§4.5） |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
 | 隐藏产物移不动的会话 | `ctx.workspaceRegistry.archiveSession`／`unarchiveSession`（可逆，不删除；退役与恢复的兜底分支） |
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
