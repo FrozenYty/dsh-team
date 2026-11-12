@@ -1808,3 +1808,67 @@
   parallel split branch is its first real test; if it adds a document the rule cannot classify, the check
   will say so by name and the entry belongs in the allow-list with its reason.
 - **Version.** `0.25.2`: a check that ignores new files is a promise the repository was not keeping.
+
+## 2026-11-13 — the architecture document splits by subject (v0.25.3)
+
+- **One filename carried five documents.** `docs/architecture-en.md` was 1167 lines, 1010 of them
+  non-blank, and 110 KB: a reader who started at the first line had forgotten it by the thousandth, and
+  changing one behaviour meant finding passages far apart in one file. It is now five bilingual pairs —
+  `member-lifecycle` (311/132 lines), `task-board` (91/58), `handoff` (124/52) and `roster-storage`
+  (109/83) — and `architecture-` (610/279) keeps the layers, the Harness substrate, the released surface
+  and the risks, which is what its name says. The external review's first point is what this answers.
+- **Four subjects moved and three stayed, each for a stated reason rather than by line count.** The
+  model-facing surface stayed in `architecture-` (§4.5 → §5) because its table has one row per tool and
+  those rows span every subject, so moving it would mean cutting rows mid-sentence. Member definitions
+  stayed (§4.6 → §6), together with the definition-precedence matrix (§4.3.3 → §6.1), because they are one
+  subject with ADR 0018 and ADR 0019 and were not on the review's list. The release map stayed because it
+  is the index of the design, not a subject of it. That judgement is the whole change: the review's own
+  criterion was "split where changing one behaviour means editing several far-apart passages", not a row
+  count, and a fifteen-line file is not worth opening.
+- **The retirement protocol could not move whole, so a section was divided rather than relocated.** Its
+  retention step became `roster-storage` §3, with a one-line pointer left in its place so the protocol
+  keeps the step numbers its own prose and the ADRs cite; its brief-shape block became `handoff` §1; the
+  protocol itself is `member-lifecycle` §3. The same was true of §4.2, whose record block went to
+  `roster-storage` §1 while its task and template passages went to `task-board` §1/§3 and `handoff` §3.
+- **The move is byte-identical, and that is proved rather than asserted.** Every destination was assembled
+  from line ranges of the source, and a tiling assertion shows every non-blank line of both languages
+  landing in exactly one destination: 1139 English lines and 532 Chinese lines, none lost, none
+  duplicated. A second assertion pins the list-marker count at 64 per language — it caught a real defect
+  in the generator's own re-flow pass, which had folded the release list into a single paragraph, and it
+  exists so that class of damage cannot ship quietly again.
+- **Every section of the old document is accounted for.** All 26 headings are present in the new document
+  set, moved, renumbered, renamed (four) or superseded (the old `## 4. v0.2, in progress` heading). The six
+  headings with no counterpart are exactly the sub-sections created because a section carrying several
+  subjects was divided, which is what a subject split is supposed to produce.
+- **The references were the real work, and a machine checked them.** 188 section references across 44
+  documents resolve, in both languages: a path-qualified reference resolves inside the document it names,
+  and a bare one either continues the citation before it or resolves in its own document. 27 references
+  were retargeted in ADR 0008, 0009, 0011, 0013, 0017, 0019, 0022, 0024 and 0026, `PLAN.md` and
+  `docs/upstream-lifecycle-gap.md`, plus the index pair's document map, reading order and coupling table,
+  the README pair's pointer and `AGENTS.md` §4.8, which names the document the state matrix now lives in.
+- **`upstream-lifecycle-gap.md` lost the line ranges in its citations, and they were already wrong.** It
+  cited `docs/architecture-en.md:170-175` for §4.1, a section that spans 293-343: the ranges had rotted
+  before this change and any edit moves them. A section number is the locator that survives an edit, so
+  the ranges were dropped rather than recomputed. It is the only prose edited beyond heading renumbering
+  and the cross-reference rewrites the split forced.
+- **Parity was measured per pair before and after, not assumed.** Before: 3 pairs, 55 headings per side.
+  After: 7 pairs, 64 headings per side, none divergent — README 23/23, `INDEX` 6/6, `architecture` 26/26
+  (h1=1 h2=6 h3=13 h4=6) → 18/18 (h1=1 h2=8 h3=8 h4=1), and 5/5, 4/4, 4/4, 4/4 for the four new pairs.
+  Locale keys are unchanged at two per language. `node scripts/check.mjs` prints `check passed` and the
+  suite is 212 tests, 212 passing.
+- **The new pairs are inside the rule that landed while this was being written.** `main` moved to
+  `b3a94f9` (v0.25.2) mid-branch, which replaced the hardcoded pair list with a directory scan. This
+  branch had added four entries to the old list; the scan classifies them without an edit, so the merge
+  took main's `check.mjs` and dropped those four, and the merge commit records why. Proved again on the
+  merged tree: moving `docs/member-lifecycle-zh.md` aside makes the check exit 1 with
+  `docs/member-lifecycle-en.md: has no docs/member-lifecycle-zh.md (bilingual pair)`, and restoring it
+  prints `check passed`.
+- **What stays undone, and where it goes next.** The checker that proves a `§X` citation resolves lives
+  outside the repository in the session's scratch folder. A citation to a section that does not exist is
+  the defect class that already bit this project once, when ADR 0025 was cited in 17 places before the
+  document existed, so it is assigned to its own small PR rather than folded into this one. Nothing about
+  the plugin changed, so nothing here needed an install: `check.mjs` still cannot prove the plugin
+  activates, and this release does not pretend otherwise.
+- **Version.** `0.25.3`: a reader asking six months from now which release split the architecture document
+  should find the answer in the changelog, and PR 47 set the precedent that a documents-and-manifest
+  change still ships a version.
