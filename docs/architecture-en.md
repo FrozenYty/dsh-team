@@ -50,6 +50,9 @@ A short map, not a changelog: each release below names what it added and the sec
 - **v0.12** — a member can start with its own working directory, model route or agent preset, a start
   the Harness refuses is a typed result, and a refusal for a stale target names the live holder of its
   name (§4.1, §4.3, §4.4, §4.5, ADR 0016).
+- **v0.13** — the plugin owns the work, not only the member: a task board on the Lead's roster record,
+  a replacement that hands the predecessor's open tasks to the successor, and a retirement without a
+  successor that leaves them unowned and names them (§4.2, §4.3.2, §4.4, §4.5, ADR 0017).
 
 ### 2.1 Compaction is enabled
 
@@ -99,6 +102,12 @@ The shipped team roster and this roster coexist until P2-07 disables the shipped
 is the shipped tool and reports the shipped roster; `list_members` reports that roster's members **plus**
 every adopted descendant and every member this plugin spawned, so it is a superset of `list_agents`, not a
 disjoint set.
+
+The **work** does not coexist: since v0.13.0 the tasks a replacement hands over are rows on this Lead's own
+board (`task_board`), stored beside the roster record, and the plugin's handover no longer reads or points
+at the shipped board (§4.3.2). The shipped board's existing rows are not migrated and not readable by this
+plugin — a Lead that wants them on the owned board creates them again, which is why P2-07 can only disable
+the shipped row after this one exists.
 
 ### 2.4 Host-side effects
 
@@ -229,6 +238,13 @@ startedAt     ISO timestamp on an ephemeral member: when its child was started. 
 handoffTemplate  on the roster record, not on a member: this Lead's handoff-brief template, whose
               placeholders a replacement interpolates (§4.4); optional, so every record written before
               P4-02 loads and behaves exactly as it did
+tasks         on the roster record, not on a member: this Lead's work board, an array of task rows. Each
+              row is `{ id, title, status, owner?, created_at, updated_at? }`: `id` is a UUID generated
+              when the task is created, `title` is bounded display text (`TASK_TITLE_MAX`, 200), `status`
+              is `open | done`, `owner` is the target of the member carrying the work, `created_at` is an
+              ISO timestamp and `updated_at` appears after the first change. Optional, so every record
+              written before P2-09 loads and behaves exactly as it did, and a Lead with an empty board is
+              a record that never gained the field (ADR 0017)
 ```
 
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
@@ -247,6 +263,16 @@ form (§4.5). That split is deliberate: the storage facility validates every rec
 opens the domain, so refusing a whole roster over one Lead's brief preference would hide every team. A
 stored template that no longer passes validation is reported, never silently dropped, and the
 composition falls back to the built-in brief instead of writing the offending token into a child.
+
+`tasks` follows the same split for the same reason, and goes one step further. Its **structure** is
+validated on load — an array, every row an object with an `id` string, a known `status`, a non-empty
+`owner` when present, and no id twice — because a roster that cannot represent a task cannot answer for
+one. Its **content** is not: a title that is merely too long, or a list that grew past the write-time cap
+before this release existed, loads and is reported by the read (`problem` on the row, §4.5) rather than
+refusing the domain. That is the `handoffTemplate` precedent applied where it matters most: one Lead's
+stale task would otherwise hide every roster in the profile, including the retirement that exists to
+repair that team. The two write-time caps are refused, never truncated: `TASK_TITLE_MAX` (200) and
+`TASK_LIMIT` (200 tasks per Lead, `done` included).
 
 `assignment` is the durable statement a successor is briefed with. It is set with
 `spawn_member.assignment`, replaced with `message_member.assignment`, reported on every `list_members`
@@ -321,8 +347,50 @@ Two cells are the expensive ones and are called out deliberately:
   drained when it publishes. A member must never come back to life after retirement. `replace` on a
   provisioning member does the same to the predecessor, after the successor has started.
 - **retire while active** — retirement wins over in-flight work. The record's `assignment` is the brief
-  (§4.4); if the model never recorded one, the successor's prompt says so and sends it to the shared
+  (§4.4); if the model never recorded one, the successor's prompt says so and sends it to the Lead's own
   task board instead of inventing a summary.
+
+#### 4.3.2 The transfer matrix (P2-09)
+
+The work a member carries is not only its `assignment`. It is the open tasks on this Lead's board that
+name it as their owner (§4.2), and what happens to those rows at each event is decided here, before the
+code (AGENTS.md §4.8). Three questions per cell, and all three have an answer:
+
+- what happens to the member's **open** tasks;
+- what the call **reports** about them;
+- whether its **done** tasks move.
+
+**No cell moves a `done` task.** Finished work belongs to the record that finished it, so a `done` row
+keeps its owner through every event in the table, including the events that retire that owner. That is the
+one rule the whole matrix rests on: a handover hands over *work still owed*, not a history.
+
+| Event | The member's open tasks | Result fields | Done tasks |
+|---|---|---|---|
+| `spawn_member` with `replace` succeeds, and the predecessor retires | re-addressed to the successor before the tombstone is written: the same rows, a new `owner` | `transferred` (count) and `transferred_tasks` (ids); the retirement record contributes no second copy | stay with the predecessor's tombstone |
+| `spawn_member` with `replace` on an **already-retired** predecessor | re-addressed to the successor, together with every other open task nobody owns — the work was left unowned by the earlier retirement, and this is the successor it was waiting for | `transferred` and `transferred_tasks`, and the message names them; the retire half answers `already-retired` and adds nothing | stay where they are |
+| a **failed successor start** | nothing moves: the predecessor is untouched and still live | the thrown error says the predecessor was **not** retired, and no task field appears because no task moved | unchanged |
+| a **failed retirement behind a started successor** | already moved: the handover is the first write, so the successor the caller started still carries its work | `predecessor_retired: false`; `transferred` is **absent**, because this call transferred nothing (a previous attempt did) | unchanged |
+| `retire_member` with **no successor** | the owner is cleared: the rows stay `open` and become unowned, because the work is still owed | `unowned` (count), `unowned_tasks` (ids), and the message says nobody will carry them | stay with the tombstone |
+| **restore** of a member whose tasks were transferred | unchanged: a restore recovers a lifecycle record and an artifact, it does not re-assign work | `unowned` / `unowned_tasks` report the work still waiting for an owner — a fact, not a claim; no owner is written | unchanged |
+| retirement by the **ephemeral sweep** | the owner is cleared, through the same retirement the model would have called | the triggering call's `swept`/`swept_targets` gain `unowned`/`unowned_tasks` for the rows the sweep orphaned | stay with the tombstone |
+| an open task whose **owner name was later reused** by a new generation | nothing happens by name: `owner` is a *target*, and generation 2 of a name is `reviewer-g2`, a different target. A new generation inherits nothing by name alone, and the old target still resolves for re-assignment because a retired member is a valid owner handle | none | unchanged |
+
+What the cells depend on:
+
+- **The handover is the first write of a replacement, before the tombstone.** A successful start, then one
+  mutation that re-addresses the rows, then the retirement record. A failed start therefore moves nothing,
+  and a failed tombstone leaves a live member whose work already belongs to its successor — a partial
+  lifecycle whose next step is one more `retire_member`, not a lost task. The order is the reverse of the
+  retirement's own tombstone-first rule (§4.4), and for the same reason: the operation that can fail must
+  fail on the half that is recoverable.
+- **Unowned work is adopted only by a replacement.** A retirement creates unowned rows and a replacement
+  consumes them, so a `spawn_member` with `replace` picks up every open row nobody owns, including rows it
+  did not orphan. Nothing else claims them, and no read ever assigns an owner.
+- **A transfer writes ownership, never status.** A row stays `open` through a handover; only `task_board`
+  with `action: update` turns it `done`, which is also the only way a row stops being inherited.
+- **Two tools in one model turn.** Every task mutation is one atomic `update` on the roster table, like
+  every member mutation (§4.2), so a `task_board` call and a replacement in the same turn see each other's
+  write instead of overwriting it.
 
 #### 4.3.1 Ephemeral members (P4-01)
 
@@ -435,7 +503,7 @@ thin the record out one generation at a time.
 repeatedly stores a template with `handoff_template` (§4.5) and the composition uses it; a Lead that
 stores none gets the built-in shape. The placeholders are `{successor}` and `{predecessor}` (the two
 targets), `{label}` (the predecessor's role), `{assignment}` (what it was recorded as doing) and
-`{task_board}` (the pointer to the shared team task board). `{assignment}` is required, because a brief
+`{task_board}` (the pointer to the Lead's own task board). `{assignment}` is required, because a brief
 that omits it hands the successor a role and a board pointer but not the work it inherited — which is the
 whole point of the handoff. The template is validated when it is stored: an unknown placeholder is refused
 by name, so a typo cannot reach a child as literal text. The successor's own task is always appended after
@@ -444,11 +512,27 @@ refused rather than truncated, measured only when a template is stored — which
 path byte-identical to the release before P4-02. The template belongs to one Lead's roster record, so two
 Leads never share one, and `list_members` rows never carry it.
 
+**The board travels with the brief, bounded.** A brief is not a workspace dump: a member starting with a
+200-line backlog is worse off than one starting with five ids. So the composition adds **one line** naming
+the predecessor's open tasks by id *and* title — either alone is unusable, because an id the successor
+cannot look up is a round-trip and a title alone cannot be marked done — and the line is bounded twice:
+at most 5 rows, and at most 600 characters, which is five maximal titles (`TASK_TITLE_MAX`, 200) with room
+for the ids. A list that would not stay under either bound is dropped entirely and the successor keeps the
+`{task_board}` pointer sentence, which is exactly the brief the release before P2-09 produced. A successor
+whose predecessor owned no open task therefore gets a brief that is byte-identical to the old one, and a
+test pins that string — the brief carries ids and titles only when there is work actually in flight, and it
+never carries a `done` row.
+
+**A stored template keeps its own line.** The inherited-tasks line is appended after the rendered template
+and before the successor's own task, so a template can neither drop it nor duplicate it, and the
+`{task_board}` placeholder still means what it always meant: the pointer. A template is not required to
+mention the board at all — it is the default shape that does.
+
 **Not built, and therefore not described as behaviour.** There is no member-written brief and no brief
 file: asking a member for one costs a model round-trip exactly when the member may be unresponsive or
-already failed, so the brief is composed from the record instead. Nothing in the code reconciles an
-assignment against the working tree or the task board — that check is the Lead's judgment, and the plugin
-only points at the board.
+already failed, so the brief is composed from the record and the board. Nothing in the code reconciles an
+assignment or a task against the working tree — that check is the Lead's judgment, and the plugin only
+names the rows it stored.
 
 ### 4.5 Model-facing surface
 
@@ -456,29 +540,35 @@ The plugin is Host-only, so every operation it owns is a tool (ADR 0008). All of
 and the `target` of a `list_members` row is the selector every member-scoped tool takes
 (`handoff_template` takes no target: it acts on the Lead's own record). `child_id` on the row
 is the durable identity the host's own listings show; it is reported, not used as a second selector,
-because a second addressing mode would have to be honoured by seven tools to stay consistent while the
-target is already unique among addressable members. The Lead check is deliberately forgiving about the
-membership projection: a live agent with no parent Session is the root agent and is treated as the Lead,
-so a failed projection cannot disable every tool.
+because a second addressing mode would have to be honoured by every member-scoped tool to stay consistent
+while the target is already unique among addressable members. The Lead check is deliberately forgiving
+about the membership projection: a live agent with no parent Session is the root agent and is treated as
+the Lead, so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief and retire the predecessor in the same call (§4.4). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` or `agent_preset`; an omitted field inherits the Lead's value, and the result reports what was applied in `started_with`. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
-| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any. |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` or `agent_preset`; an omitted field inherits the Lead's value, and the result reports what was applied in `started_with`. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |
-| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. |
-| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, a pruned tombstone answers `reason: 'pruned'` without touching the workspace, and a refusal carries `current_holder` when another generation of the name is live. |
+| `retire_member` | Drain, tombstone, move the session artifact to the trash, enforce the per-Lead retention cap and refresh the host effects (§4.4); the result reports `pruned`, a repeat is a no-op that answers `reason: 'already-retired'`, and a stale target then names the live holder of its name. It is a retirement with no successor, so the member's open tasks lose their owner and the result names them in `unowned`/`unowned_tasks` (§4.3.2). |
+| `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, a pruned tombstone answers `reason: 'pruned'` without touching the workspace, and a refusal carries `current_holder` when another generation of the name is live. It assigns no work: `unowned`/`unowned_tasks` report the open rows still waiting for an owner (§4.3.2). |
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
 | `handoff_template` | Read, store or clear this Lead's handoff-brief template: omit `template` to read it back, pass a template to validate and store it, pass an empty string to clear it and return to the built-in brief (§4.4). One template per Lead, validated at set time; a stored value that no longer passes validation is reported by the read (`valid`, `problem`) rather than silently dropped, and the composition falls back to the built-in. |
+| `task_board` | This Lead's own work board: `create` adds a task, `list` reads the board, `update` sets a task's `status` and/or `owner` (`owner: null` clears it), `release` clears an owner, `delete` removes the row (§4.3.2). One tool with an `action` enum rather than five names, because the five operations share one row shape and one refusal vocabulary and each action carries at most two extra fields. A task id is a UUID, a title is refused past 200 characters, and one Lead holds at most 200 tasks; a stored row whose title no longer passes the read rule is served with `problem` rather than dropped (§4.2). `list` reports how many tasks are open and how many of those nobody owns. |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
 check and the tool result schemas. Replacement deliberately has no tool of its own: `spawn_member` and
 `message_member` gained one parameter each rather than the model learning a third name for the same job
 (ADR 0009). The brief's *shape* is one further tool rather than a parameter on `spawn_member`, because a
-stored preference must not change as a side effect of creating a member (ADR 0015). The shipped roster
-tools stay enabled: they own the shared task board, and adoption makes the members they create retirable.
-A future task (P2-09) can replace the task board and then disable the shipped tool row.
+stored preference must not change as a side effect of creating a member (ADR 0015). The task board is one
+tool rather than five for the same reason in reverse: five names would triple the surface for one row shape
+(ADR 0017), and its two jobs — the board and the handover — reach the model as one vocabulary.
+
+The shipped roster tools stay enabled, and they are now the *only* thing that keeps the shipped task board
+in the model's view: this plugin's board is the source of truth for its own members' work (§4.3.2), while
+the shipped board's rows are not readable by this plugin and are not migrated. Retiring the shipped tool
+row is P2-07, a separate change, and it needs this board to exist first.
 
 #### 4.5.1 Adoption is the control surface
 
@@ -524,6 +614,10 @@ and still retirable.
   (ADR 0008).
 - **Two rosters during migration.** Until P2-07 lands, the shipped roster and ours can both be visible
   to the model. The patch step is part of the phase gate, not an afterthought.
+- **Two boards, and only one of them is ours.** A Lead's work lives on the owned board (§4.3.2); rows on the
+  shipped board are not readable from this plugin, so a retirement neither transfers nor un-owns them. The
+  shipped row is what P2-07 removes once this board is proven, and until then a Lead has to know which board
+  it wrote a task to.
 - **Bounded recovery, and no true erasure of the platform's record.** A retired member's Session is
   recoverable until this Lead's trash passes its cap; a pruned artifact's bytes are gone for good, and
   the record says `pruned` instead of pretending otherwise. The shipped catalog still knows the member
@@ -538,9 +632,10 @@ and still retirable.
   subagent seam is a different generation from the public source tree: the public tree has member names
   and `resolveName`, the installed build does not. Read the installed `lib/index.js` before trusting a
   public example.
-- **The handoff is only as good as the recorded assignment.** The plugin cannot read the shared task
-  board or the predecessor's transcript, so the successor's brief is composed from the record. A member
-  whose assignment was never recorded hands over a label and a pointer to the board, not a summary.
+- **The handoff is only as good as the recorded assignment and the board it names.** The plugin cannot read
+  the shipped task board or the predecessor's transcript, so the successor's brief is composed from the
+  record and from this plugin's own task rows (§4.3.2). A member whose assignment was never recorded, and
+  whose board holds no open task, hands over a label and a pointer, not a summary.
 - **Compaction is profile-wide.** Enabling the backend changes behaviour for every session in the
   profile. It is a shipped feature turned on, not custom code, but it is not scoped to this plugin's
   members.

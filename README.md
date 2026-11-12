@@ -20,16 +20,18 @@ storage domain, the patch row id and the trash directory did not, on purpose (AD
 
 ## Status
 
-- Current version: v0.12.0.
+- Current version: v0.13.0.
 - Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
   refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
   `list_members` answered `swept: 2` with both targets, and both rows came back `retired`.
 - Unit tests only: the write-time `label` and `assignment` caps, a retirement during an in-flight spawn,
   the lost-update protection when two roster operations overlap, that a member still running is never
-  swept, and the spawn options — the exact request a plain spawn sends, each forwarded field, the typed
+  swept, the spawn options — the exact request a plain spawn sends, each forwarded field, the typed
   refusal a Host capability gate produces, and the live holder a stale target's refusal names
-  (v0.12.0).
+  (v0.12.0) — and the task board: its write-time caps, the transfer at every event of the matrix in
+  [docs/architecture-en.md](docs/architecture-en.md) §4.3.2, and that a member with no tasks still starts
+  from the brief it always got (v0.13.0).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -59,6 +61,7 @@ that is a move rather than a deletion.
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the stored one, pass a template to store it, pass an empty string to return to the built-in. |
+| `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, `open` or `done`, and an optional member `owner`; the open ones move with a replacement. |
 
 **A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
 forwards three things the Harness already supports, and every field omitted inherits the Lead's value:
@@ -120,8 +123,18 @@ The walkthrough is abridged from an acceptance run recorded in [PROGRESS.md](PRO
 
 `spawn_member` with `replace: <target>` is the whole replacement. The successor's prompt is composed from
 the predecessor's record — its name, the target and label, the recorded assignment, the fact that the
-predecessor is gone, and a pointer to the shared team task board under its name. The successor inherits the
-assignment unless the model records a different one.
+predecessor is gone, and its open tasks by id and title. The successor inherits the assignment unless the
+model records a different one.
+
+**What a retirement does to the work.** The work is not a sentence: since v0.13.0 it is rows on this
+plugin's own board, and the two lifecycle events treat them as the point of the operation. A replacement
+moves every open task of the predecessor to the successor, in the same call that retires it, and the
+successor's brief names them — so a successor starts with the ids it now owns instead of a pointer at
+someone else's board. A retirement **without** a successor instead leaves those rows `open` and unowned,
+and reports `unowned` with their ids, because the work is still owed and now nobody carries it; `task_board`
+with `action: list` reports the same set, and a restore says how much of it is waiting. `done` tasks never
+move: finished work stays on the record that finished it, and it is `task_board` with
+`action: update, status: done` that makes a task stop being inherited.
 
 - **The successor starts first and the predecessor is retired second, in the same call.** A failed start
   leaves the predecessor untouched, with the failed reservation recorded as the successor's `failed`
@@ -164,7 +177,8 @@ tree — there is no build step. Verification after installing is live calls, no
 - `list_members` is callable from a Lead session and reports context pressure for a resident member;
 - `retire_member` returns `trashed: true` and a `trash_path` for a session that has an artifact;
 - `spawn_member` with `replace` returns `predecessor_retired: true` and a successor at the next
-  generation;
+  generation; when the predecessor owned open tasks, the result also reports `transferred` with their ids,
+  and the successor's brief names them;
 - `spawn_member` with `spawn_options` returns `started_with` echoing exactly what was passed, or
   `started: false` with a `reason` when the profile's provider or preset registry refuses it;
 - `include:compaction-basic` reports status `schema`, not `inactive`.

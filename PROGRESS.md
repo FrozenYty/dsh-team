@@ -707,3 +707,59 @@
 - **Version.** The fix stays inside `0.12.0`: no profile ever activated that release, so there is no
   installed state to distinguish. `node scripts/check.mjs` passes, `node --check index.js` exits clean,
   and the suite is 107 tests, 107 passing.
+
+## 2026-11-12 - v0.13.0: the plugin owns the work, not only the member (P2-09)
+
+- **The gap was handover-shaped.** A member's work was one `assignment` string, so a retirement could hand
+  over a *description* of the work and nothing else: a successor started with a sentence, and unfinished
+  items existed only in prose. The shipped Agent Teams board could not be the source of truth, because it is
+  the shipped roster's board and P2-07 exists to disable that tool row. P2-09 therefore built the board this
+  plugin owns: a `tasks` array on the Lead's roster record, beside `handoffTemplate` (ADR 0017).
+- **The shape is small on purpose:** `{ id, title, status, owner?, created_at, updated_at? }`, owner being a
+  member **target**. No priorities, no dependencies, no comments, no sub-tasks, no due dates - each one is a
+  field, a rule, a result shape and a test for a question the transfer does not ask. `PLAN.md`'s four tools
+  became one (`task_board` with an `action` enum), read is `action: list`, and compare-and-set is the
+  transition itself: `changed: false` with the current row when a write would change nothing. All three
+  reductions are in the ADR's rejected alternatives with their reasoning.
+- **The transfer is the feature, and its matrix was written before the code** (`docs/architecture-en.md`
+  §4.3.2 and its Chinese pair): replace-and-retire moves the open tasks to the successor; replace on an
+  already-retired predecessor moves them and adopts every other unowned row; a failed start moves nothing;
+  a failed retirement behind a started successor finds the work already moved; retire with no successor
+  un-owns the rows and reports their ids; a restore assigns nothing and reports what is still unowned; the
+  ephemeral sweep un-owns through the same path and reports it; and a reused owner name inherits nothing,
+  because the owner is a target and generation 2 is a different target. `done` work never moves, in any cell.
+- **The handover is the replacement's first write after the start, before the tombstone.** A tombstone whose
+  open work still names a member that is gone is the one state a reader must never see; the reverse order
+  would produce it whenever the handover write failed. The cost is a partial lifecycle on a failed tombstone
+  write - a live predecessor whose work already belongs to its successor - and one more `retire_member`
+  finishes it, which is the recoverable half.
+- **The brief carries the board, bounded.** The successor's prompt gains one line naming the predecessor's
+  open tasks by id *and* title, capped at 5 rows and 600 characters; past either bound the line is dropped
+  and the `{task_board}` pointer sentence remains, which is exactly the pre-P2-09 brief. A member with no
+  tasks therefore gets a byte-identical brief, pinned by the existing test plus a new one.
+- **Caps and load-time rules.** `TASK_TITLE_MAX` (200, matching `LABEL_MAX`) and `TASK_LIMIT` (200 per Lead,
+  `done` included) are refusals, never truncation. `parseRoster` validates only the structure of `tasks` -
+  array, object rows, non-empty id, known status, non-empty owner, no duplicate id - because the storage
+  facility validates every record when the domain opens; a title that is merely too long, or a list past the
+  cap, loads and is served by `list` with `problem` on the row. That is the `handoffTemplate` precedent
+  (ADR 0015) applied where a whole roster would otherwise be hidden.
+- **How this change was verified.** `node --check index.js actions.js roster.js trash.js host-hooks.js`
+  exits clean; `node scripts/check.mjs` passes; `node --test --test-isolation=none tests/*.test.mjs` is 129
+  tests, 129 passing - the 107 that existed plus 22: 21 in `tests/task-board.test.mjs` (the row shape and id
+  assignment, both cap refusals including the exact boundary, the read-form `problem` and structural load
+  refusals, every cell of the transfer matrix, the lossless-JSON results, and the byte-identical no-task
+  brief) and one in `tests/entry.test.mjs` (the `task_board` wrapper's validation and forwarding, which the
+  actions-level tests cannot cover).
+- **Two refusals were proved able to fail.** Breaking the transfer (`handOverTasks` recorded the ids and
+  wrote no owner) failed six matrix tests, the first with
+  `AssertionError: the open task is the successor's / actual: undefined / expected: 'reviewer-g2'`; making
+  the per-Lead cap off by one (`>` instead of `>=`) failed the cap test with
+  `Missing expected exception`. Both breaks were restored and the suite re-ran green; `tests/task-board.test.mjs`
+  carries the same SHA-256 before and after (`741FAB6B...030A5`), so the proof did not edit the tests.
+- **What stays unverified.** The bundle was not installed and no `plugin_manager` call was made. A live
+  `task_board` call, a live replacement carrying `transferred`, a retirement carrying `unowned`, and the
+  rendered brief reaching a real child are covered by fakes and unit tests, not a running profile. The
+  Lead's check is: `task_board { action: "create", title: "…", owner: "<member>" }`, then
+  `spawn_member { replace: "<member>", … }` and look for `transferred` and for the ids in the brief.
+- **Version.** `0.13.0`, and this is the first release whose feature P2-07 was waiting for; P2-07's blocker
+  is noted as cleared in `PLAN.md` and the row itself is still open.
