@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.22.0.
+- Current version: v0.25.0.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —
@@ -73,11 +73,15 @@ directory did not, on purpose (ADR 0014).
   a file, the precedence report, and every refusal; the team-file layer (v0.19.0) — the three-source
   precedence, the store-write refusal, the placeholder fallback and the reserved filename; the member
   scope (v0.20.0) — the owner filter, the empty answer, the non-member refusal, the registration on a
-  member Agent and the schema conformance of a real answer; and the route layer (v0.22.0) — forwarding,
+  member Agent and the schema conformance of a real answer; the route layer (v0.22.0) — forwarding,
   the caller's option winning, both fallbacks, `reasoning_effort` never added, and the stale-route flag
-  being set, cleared and never guessed. A live start from a definition, a live team-file read, a live
-  `list_my_tasks` call from inside a member, and the route on a real child's own `request/header` are the
-  owner's install check (ADR 0018, ADR 0021, ADR 0022, ADR 0024).
+  being set, cleared and never guessed; and the lifetime layer (v0.25.0) — the declared lifetime and its
+  refusal, the three sweep conditions, the board's veto and the ids it reports, the consent gate through the
+  real `retire_member` tool both ways, a message re-opening a one-shot member without re-declaring it, the
+  retask advice, and the two record fields the advice counts. A live start from a definition, a live
+  team-file read, a live `list_my_tasks` call from inside a member, the route on a real child's own
+  `request/header`, and a live sweep and consent refusal are the owner's install check (ADR 0018, ADR 0021,
+  ADR 0022, ADR 0024, ADR 0026).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -99,12 +103,12 @@ that is a move rather than a deletion.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Start a named member as a continuable child, optionally from a member definition on disk with `definition`, or with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call; with `ephemeral`, mark it one-shot, to be retired by a later sweep once it has run and stopped. A spawn that names no model starts the member on **this Session's current route**: the plugin resolves `provider` and `model` from the Session and forwards them, and `started_with.route_source` says whether the route came from the call, was resolved by the plugin, or was inherited unresolved. |
-| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, `ephemeral` on a one-shot member, the `route` it was started on, live state, `compactable` and — while resident — context pressure. A member whose route is no longer the Lead's is marked `route_stale: true` with a `route_note` naming both routes and the call that replaces it. It also answers `host_hooks`: whether the panel filter, the `list_agents` filter and the slot credit installed, how many tombstoned ids they strip, and why one is absent. |
+| `spawn_member` | Start a named member as a continuable child, optionally from a member definition on disk with `definition`, or with its own working directory, model route or agent preset through `spawn_options`; with `replace`, start its successor from a handoff brief and retire the predecessor in the same call. `lifetime` says how long the member lives: `standing` (the default) is a role you expect to use again and is never retired automatically, while `one-shot` is created for one piece of work and the sweep retires it once it has run, stopped and owns no open task — `ephemeral: true` is the older spelling of `one-shot`. The lifetime is that call's alone: never inherited from a predecessor or a definition file. A spawn that names no model starts the member on **this Session's current route**: the plugin resolves `provider` and `model` from the Session and forwards them, and `started_with.route_source` says whether the route came from the call, was resolved by the plugin, or was inherited unresolved. |
+| `list_members` | Every member and subagent this Lead controls: this roster, members the shipped roster created, and every child spawned with the shipped `subagent` / `subagent_fork` tools. A row carries target, child session id, phase, generation, label, assignment, the `lifetime` its spawn declared (with `ephemeral` as the same fact on the record), `retasked: true` plus a note on a one-shot member handed work at least twice, the `route` it was started on, live state, `compactable` and — while resident — context pressure. A member whose route is no longer the Lead's is marked `route_stale: true` with a `route_note` naming both routes and the call that replaces it. The read first sweeps one-shot members that have run, stopped and own no open task, and reports `swept`/`swept_targets`; a member the board's veto kept is reported through `blocked`, `blocking_tasks` and `blocking_note` instead. It also answers `host_hooks`: whether the panel filter, the `list_agents` filter and the slot credit installed, how many tombstoned ids they strip, and why one is absent. |
 | `wait_members` | Block this turn until a member's live status changes or a timeout expires, and report which member changed and into what. Bounded: 30 seconds by default, at most one hour. It answers `no_progress` at once when no member is running or provisioning, never wakes anyone, and does not wait for board writes or message processing. |
-| `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. |
+| `message_member` | Deliver one message to a live member and optionally replace its recorded assignment; an unloaded continuable member is cold-resumed from its own Session, a one-shot child cannot be. A message never changes a lifetime: messaging a one-shot member re-opens it (its finished-evidence is dropped, and the result says `reopened: true` with the unchanged `lifetime`), so the next sweep leaves it alone until it has run and stopped again. |
 | `stop_member` | Cancel the member's current turn; the activation and inbox are kept, so a later message resumes it. |
-| `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. |
+| `retire_member` | Drain, tombstone, move the persisted Session into the trash (or hide it through the workspace archive when no artifact can be moved) and enforce the retention cap. A repeat is a no-op that says so. **A member whose lifetime is `standing` is not retired by one call**: it answers `retired: false, reason: "needs-confirmation"` with the question to put to the person, and retires on the next call, which carries their answer in `confirmed`, quoted verbatim. A one-shot member, and a successor a replacement installs, need no confirmation. |
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to store it, pass an empty string to return to the built-in. A `team/team.md` in the Lead's project wins while it exists, so a store or clear is refused with that file's path and the instruction to edit it. |
@@ -209,10 +213,14 @@ You review changes. Report only findings that change behaviour, with the file an
 
 The block between the two `---` lines is flat frontmatter and the markdown below it is the member's
 prompt. `name` and `label` are required, and every other accepted field is one `spawn_member` already
-takes: `assignment`, `ephemeral`, `cwd`, `provider`, `model`, `reasoning_effort`, `max_tokens` and
-`agent_preset`. That list is the whole subset — a nested value, an anchor, a block scalar, a list, a
-duplicate key or an unknown field is refused with the file and the line rather than guessed at, and a
-quoted value loses its quotes without any escape being interpreted.
+takes that describes the role: `assignment`, `cwd`, `provider`, `model`, `reasoning_effort`, `max_tokens`
+and `agent_preset`. **A definition cannot declare a lifetime**: `lifetime` is not an accepted field and
+`ephemeral` was removed in v0.25.0, so a file that carries either is refused by name with the reason and
+the call that replaces it. A lifetime is a declaration about one member — the person's consent to it
+leaving on its own — and a file describes the role, so inheriting one on a `replace` would retire the
+successor and orphan the work it had just been handed. That list is the whole subset — a nested value, an
+anchor, a block scalar, a list, a duplicate key or an unknown field is refused with the file and the line
+rather than guessed at, and a quoted value loses its quotes without any escape being interpreted.
 
 **The call wins, and the result says so.** Every field passed to `spawn_member` overrides the file's, and
 the answer's `definition` object names the file, what came from it (`from_file`) and what you overrode
@@ -302,24 +310,53 @@ what you asked (ADR 0020).
   and the built-in shape is last. A Lead with neither gets exactly the words it got before (ADR 0015,
   ADR 0021).
 
-## Ephemeral members
+## Member lifetime
 
-`spawn_member` with `ephemeral: true` marks a member one-shot, and `list_members` reports `ephemeral: true`
-on its row; the default is `false`. The plugin receives no completion event, so the sweep that retires such
-a member runs at the start of `list_members` and `spawn_member`, and it retires only a member it has
-positive evidence ran and then stopped: one that never started is never swept, and one still running is
-never swept. A swept member goes through the ordinary retirement path, so its tombstone stays listed and
-its slot is credited back. The triggering call reports `swept` and `swept_targets`, and adds nothing when
-the sweep retired nobody.
+A member is a division of labour, not a task. `spawn_member` therefore asks how long it lives, in one
+field: `lifetime: "standing"` (the default) is a role you expect to use again, and `lifetime: "one-shot"`
+is a member created for one piece of work. `ephemeral: true` is the older spelling of `one-shot` and keeps
+working; passing both is accepted when they agree and refused when they do not. `list_members` reports
+`lifetime` on every row.
 
-Messaging an ephemeral member clears the flag: sending it work again is a declaration that it is not
-one-shot after all, and without that rule a sweep could eat work a just-delivered message meant to keep.
+**A standing member is never retired automatically.** It is not eligible for the sweep however long it
+idles, and `retire_member` will not end it on the model's say-so: the first call retires nothing and answers
+`retired: false, reason: "needs-confirmation"` with a `question` to put to the person, the open tasks it
+still owns (`owns_tasks`) and the assignment it carries. Put that question to them, then call again with
+`confirmed` set to their answer **quoted verbatim** — their sentence, not a paraphrase and not a boolean,
+because this plugin has no human surface of its own (ADR 0008), so a flag the model sets about itself asks
+nobody. The quoted sentence is echoed back into the result, where it stays in the transcript. A one-shot
+member is exempt, because declaring it one-shot was the person's prior consent, and so is a successor a
+replacement installs, because a replacement continues the role rather than ending it. A record that never
+became a role is exempt too: one in `failed` never started, and one already `retired` has no life left to
+end, so removing it is cleanup rather than a question. A member that actually ran stays `active`, so
+retiring it still needs the quoted words.
 
-**A definition can make a successor one-shot.** `ephemeral: true` in the file applies on a `replace` too,
-because the file describes the role and a replacement starts that role. The consequence is the one to
-know before using it: the successor retires itself at the end of its turn, and the tasks the replacement
-just handed to it become unowned — the sweep reports them in `unowned` and `unowned_tasks`. Message the
-successor once to clear the flag, or pass `ephemeral: false` on the replace call (ADR 0019).
+**One-shot is the fan-out case.** The plugin receives no completion event, so the sweep that retires such a
+member runs at the start of `list_members` and `spawn_member`, and it requires three things at once: the
+member started, it is no longer resident, and it owns no `open` task on this Lead's board. A member that
+never started is never swept, one still running is never swept, and one still holding work is not swept
+either — the board is a **veto**, and an empty board is never the trigger, because neither a missing row nor
+a member's `inactive` status can tell finished work from work nobody wrote down. A vetoed member stays
+listed and the read says why: `blocked` counts them, `blocking_tasks` names the row ids, and
+`blocking_note` names the one `task_board { action: "update", … }` call that clears each. Closing the work
+is what makes a one-shot member eligible to leave; it is never what proves the member finished.
+
+A swept member goes through the ordinary retirement path, so its tombstone stays listed and its slot is
+credited back. The triggering call reports `swept` and `swept_targets`, and adds nothing when the sweep
+retired and blocked nobody.
+
+**A message re-opens a one-shot member; it does not re-declare it.** Sending it work again drops the
+evidence the sweep relies on, so it will not be swept until it has run and stopped again, and its lifetime
+stays `one-shot` — the result says `reopened: true`. A one-shot member messaged at least twice is flagged on
+its row as `retasked: true`, with a note saying it is probably a standing role and naming the call that
+declares that. Nothing converts it automatically: a lifetime is the person's consent, and the plugin only
+reports its own count.
+
+**A definition cannot declare a lifetime.** `lifetime` is not an accepted frontmatter field and `ephemeral`
+was removed in v0.25.0; a file carrying either is refused by name with the reason. A file describes the
+role, so a role-declared one-shot would be inherited by every successor of a replacement — and a successor
+that retires itself at the end of its turn would orphan the very work the replacement had just handed it.
+Declare it on the `replace` call instead (ADR 0026).
 
 ## Limits and deliberate omissions
 

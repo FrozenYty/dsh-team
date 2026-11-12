@@ -73,18 +73,24 @@ export const DEFINITION_LIMIT = 64
 /**
  * The frontmatter fields a definition may declare, in the vocabulary `spawn_member` already uses.
  *
- * Every one of them is an input that tool already has: `name`, `label`, `assignment` and `ephemeral` are
- * its flat parameters, and `cwd`, `agent_preset` and the four `agent_options` fields are
- * `spawn_options`. The markdown body is the prompt, so `prompt` is not a field. A field with no
- * counterpart on the call — a description, a tools list, a priority — is out of scope, and declaring one
- * is refused by name with this list attached. The file's *name* is not a field either: the definition
- * declares `name`, which is also the key `spawn_member.definition` looks it up by.
+ * Every one of them is an input that tool already has: `name`, `label` and `assignment` are its flat
+ * parameters, and `cwd`, `agent_preset` and the four `agent_options` fields are `spawn_options`. The
+ * markdown body is the prompt, so `prompt` is not a field. A field with no counterpart on the call — a
+ * description, a tools list, a priority — is out of scope, and declaring one is refused by name with this
+ * list attached. The file's *name* is not a field either: the definition declares `name`, which is also
+ * the key `spawn_member.definition` looks it up by.
+ *
+ * **`lifetime` is deliberately absent, and `ephemeral` was removed in v0.25.0.** A lifetime is a
+ * declaration about one member, and it is the person's consent to that member leaving on its own; a file
+ * describes the role, so a file-declared one-shot would be inherited by every successor of a `replace` —
+ * which would then retire itself and orphan exactly the work the replacement had just handed it. The
+ * spawn call is the only place a lifetime is declared (ADR 0026). A file that still carries `ephemeral`
+ * is refused by name, with this list, rather than silently ignored.
  */
 export const DEFINITION_FIELDS = [
   'name',
   'label',
   'assignment',
-  'ephemeral',
   'cwd',
   'provider',
   'model',
@@ -165,12 +171,6 @@ function checkField(key, value) {
   if (key === 'name') return checkMemberName(value, 'definition')
   if (key === 'label') return checkLabel(value, 'definition')
   if (key === 'assignment') return checkAssignment(value, 'definition')
-  if (key === 'ephemeral') {
-    if (value !== 'true' && value !== 'false') {
-      throw new Error(`ephemeral must be true or false, not ${JSON.stringify(value)}`)
-    }
-    return value === 'true'
-  }
   if (key === 'max_tokens') {
     if (!/^[0-9]+$/.test(value) || Number(value) < 1 || Number(value) > Number.MAX_SAFE_INTEGER) {
       throw new Error(`max_tokens must be a positive integer, not ${JSON.stringify(value)}`)
@@ -241,6 +241,19 @@ function parseFrontmatter(text, path, { fields: accepted, validate, describe, no
     }
     const [, key, raw] = match
     if (key === '<<') return { problem: problem(path, 'a merge key ("<<") is not part of the accepted subset', lineNumber) }
+    // The one unknown field an author is likely to write on purpose, so it answers with the rule and the
+    // alternative instead of only the accepted set: a lifetime is about one member and is the person's
+    // consent to it leaving on its own, and a file describes the role. `ephemeral` is the pre-v0.25
+    // spelling of the same field and is refused here rather than ignored (ADR 0026).
+    if (key === 'ephemeral' || key === 'lifetime') {
+      return {
+        problem: problem(
+          path,
+          `"${key}" is not a field of a definition; a lifetime is declared on the spawn call — spawn_member { lifetime: "standing" | "one-shot" } — and never in a file, because a file describes the role and a successor must not inherit one (ADR 0026)`,
+          lineNumber,
+        ),
+      }
+    }
     if (!accepted.includes(key)) {
       return { problem: problem(path, `unknown field "${key}"; ${describe}`, lineNumber) }
     }

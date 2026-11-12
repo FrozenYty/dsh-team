@@ -392,3 +392,31 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   read. Removing the deferred install makes the main test fail (verified before and after, with the test
   file's SHA-256 unchanged). The live install is the owner's install check.
 
+- [x] **P4-13** A member's lifetime is declared, and ending a role asks the person (v0.25.0).
+  Done when `spawn_member` takes `lifetime: "standing" | "one-shot"` with `ephemeral` still accepted as the
+  older spelling; the declaration is never inherited from a predecessor or a definition file; the sweep
+  retires a member only when it is one-shot, has started, is no longer resident **and** owns no `open` row,
+  and reports the rows that vetoed it with the call that clears each; a standing member is never retired
+  automatically and `retire_member` refuses it until the call carries the person's answer quoted verbatim;
+  `message_member` re-opens a one-shot member without changing its declared lifetime; and a one-shot member
+  handed work at least twice is flagged as probably standing without being converted.
+  Delivered (ADR 0026, which supersedes ADR 0013 point 5 and removes `ephemeral` from the accepted
+  definition fields that ADR 0018 and ADR 0019 point 3 wrote): `roster.js` gains `LIFETIME`, `RETASK_MIN`,
+  `lifetimeOf` and `declaredLifetime`, and validates the two optional counters; `definitions.js` refuses a
+  file-declared `lifetime` or `ephemeral` by name with the reason; `actions.js` resolves one declaration per
+  spawn, gates the sweep on the board, refuses a standing retirement with `reason: 'needs-confirmation'` and
+  the question to ask, echoes the quoted sentence on the retry, and re-opens rather than re-declares;
+  `index.js` declares every new field — `lifetime` (required on a member row), `retasked`/`retasked_note`,
+  `blocked`/`blocking_tasks`/`blocking_note`, `reopened`, and the refusal's `question`/`owns_tasks`/
+  `assignment` — because a field the host does not see declared is dropped after the side effect. A `replace`
+  and the sweep call the same retirement with `consentRequired` false: a replacement continues the role, and
+  a one-shot member's declaration already was the person's consent. The gate also skips a record that never
+  became a role — `failed` never started and an already-`retired` tombstone has no life left to end — so
+  removing a reservation that never held a role stays cleanup. The stored field is deliberately not
+  renamed, so every existing roster loads unchanged. `tests/lifetime.test.mjs` (replacing
+  `tests/ephemeral.test.mjs`) covers the seven decisions, `tests/entry.test.mjs` proves the consent gate
+  fires through the real `retire_member` tool, and `tests/definitions.test.mjs` and
+  `tests/task-board.test.mjs` cover the removed field and the veto. Removing the board veto makes the veto
+  test fail (verified before and after, with the test file's SHA-256 unchanged). The live sweep and a live
+  consent refusal are the owner's install check.
+

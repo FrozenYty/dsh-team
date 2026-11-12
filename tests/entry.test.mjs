@@ -442,6 +442,13 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.deepEqual(mine.tasks.map((row) => row.id), [task.task.id], 'the member reads the work it was given')
   assert.equal(mine.tasks[0].body, task.task.body)
   await answer('list_members', {})
+  // The message result changed shape in v0.25.0 (`lifetime` and `reopened` replaced the cleared flag), so
+  // an accepted message is validated against the schema the tool declares — a field the host does not see
+  // declared is dropped after the delivery already happened (ADR 0026).
+  const sent = await answer('message_member', { target: 'reviewer', message: 'Carry on with the review.' })
+  assert.equal(sent.sent, true)
+  assert.equal(sent.lifetime, 'standing')
+  assert.equal(Object.hasOwn(sent, 'reopened'), false, 'only a one-shot member is re-opened by a message')
   const waited = await answer('wait_members', {})
   assert.equal(waited.no_progress, true, 'no member is live in this harness, so the wait reports it')
 
@@ -523,6 +530,46 @@ test('every answer conforms to the output schema its own tool declares', async (
 })
 
 /**
+ * `lifetime` is **required** on a member row, so every row a real read can produce must carry it. Two
+ * paths are the ones that could quietly not: a member adopted from the shipped roster, which this plugin
+ * never spawned, and a stored record written before v0.25.0, which has no lifetime field at all. A required
+ * field that one path omits is a result the host refuses *after* the side effect, which is the failure class
+ * v0.13.0 already paid for.
+ */
+test('every row a read can produce carries a lifetime, adopted and legacy records included', async () => {
+  const shipped = [{ role: 'teammate', id: 'child-legacy', name: 'Legacy One', description: 'Shipped before v0.25', status: 'active' }]
+  const { tools, table, lead } = harness({ listMembers: () => shipped })
+  const list = tools.get('list_members')
+
+  // A record as an older release wrote it: no `ephemeral`, no counters, no `lifetime` — and no way to gain
+  // one, because only a spawn writes the declaration.
+  await table.put('lead-1', {
+    leadSessionId: 'lead-1',
+    members: [{
+      memberId: 'm-legacy',
+      childId: 'child-legacy-stored',
+      name: 'older',
+      generation: 1,
+      phase: 'active',
+      label: 'Written before v0.25.0',
+      createdAt: '2026-11-01T00:00:00.000Z',
+    }],
+  })
+
+  const listed = await list.execute({}, { agent: lead })
+  assertMatchesSchema(listed, list.output.schema, 'list_members')
+
+  const adopted = listed.members.find((row) => row.target === 'legacy-one')
+  const stored = listed.members.find((row) => row.target === 'older')
+  assert.ok(adopted, 'the shipped member is adopted on the first read')
+  assert.ok(stored, 'the legacy record is served')
+  assert.equal(adopted.lifetime, 'standing', 'a member this plugin never spawned reads as standing')
+  assert.equal(Object.hasOwn(adopted, 'ephemeral'), false, 'and carries no one-shot flag to report')
+  assert.equal(stored.lifetime, 'standing', 'a record with no lifetime field reads as standing')
+  assert.equal(Object.hasOwn(stored, 'ephemeral'), false)
+})
+
+/**
  * The router path through the wrapper, which `actions.js` tests cannot reach: a Lead whose Session
  * exposes a current route gets a member started on that route, a result that says where the route came
  * from, and a read that flags the one member still on another API. Every answer goes through the
@@ -563,4 +610,46 @@ test('the wrapper forwards a resolvable route and the read flags the member left
   assert.deepEqual(inherited.started_with, { route_source: 'inherited' })
   assert.deepEqual(inherited.route, { source: 'inherited', select_reason: 'no-session-route' })
   assert.deepEqual(blind.requests[0], { prompt: [{ type: 'text', text: 'Start.' }], parent: blind.lead })
+})
+
+/**
+ * The consent gate on the tool the model actually calls.
+ *
+ * This is the wrapper layer the `actions.js` suites cannot reach: they pass `consentRequired` themselves,
+ * so only a call made here proves the `retire_member` tool sets it. Without this, the gate would exist in
+ * the operation and never fire in a real Session — which is exactly the class of defect ADR 0026 is about.
+ */
+test('the retire_member tool asks the person before ending a standing role', async () => {
+  const { tools, table, lead } = harness()
+  const exec = { agent: lead }
+  const spawn = tools.get('spawn_member')
+  const retire = tools.get('retire_member')
+  assert.ok(retire, 'the retirement tool is registered')
+
+  const born = await spawn.execute({ name: 'keeper', label: 'Hold the line', prompt: 'Stay.', assignment: 'Keep the release green' }, exec)
+  assertMatchesSchema(born, spawn.output.schema, 'spawn_member')
+  assert.equal(born.lifetime, 'standing', 'the default is the lifetime that is never retired automatically')
+  const owned = await tools.get('task_board').execute({ action: 'create', title: 'Watch the release', owner: 'keeper' }, exec)
+
+  const refused = await retire.execute({ target: 'keeper' }, exec)
+  assertMatchesSchema(refused, retire.output.schema, 'retire_member')
+  assert.equal(refused.retired, false)
+  assert.equal(refused.reason, 'needs-confirmation')
+  assert.equal(refused.lifetime, 'standing')
+  assert.match(refused.question, /Retire the standing member "keeper"/)
+  assert.deepEqual(refused.owns_tasks, [owned.task.id])
+  assert.equal(table.get('lead-1').members.find((member) => member.name === 'keeper').phase, 'active', 'nothing was retired')
+
+  // A boolean is not the person's words, and the wrapper refuses it before the operation runs.
+  await assert.rejects(
+    () => retire.execute({ target: 'keeper', confirmed: true }, exec),
+    /confirmed must be a string carrying the person's words/,
+  )
+
+  const done = await retire.execute({ target: 'keeper', confirmed: 'Yes — the release is signed off, retire it.' }, exec)
+  assertMatchesSchema(done, retire.output.schema, 'retire_member')
+  assert.equal(done.retired, true)
+  assert.match(done.message, /quoted back here: "Yes — the release is signed off, retire it\."/)
+  assert.deepEqual(done.unowned_tasks, [owned.task.id], 'the work it owned is named, not silently orphaned')
+  assert.equal(table.get('lead-1').members.find((member) => member.name === 'keeper').phase, 'retired')
 })

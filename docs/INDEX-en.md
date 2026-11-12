@@ -39,7 +39,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the roster one record per Lead, and why is nothing ever deleted? | `docs/adr/0010-roster-layout-and-retention.md` — point 3 superseded by 0011 | English |
 | Why is the trash capped, and what happens to a pruned member? | `docs/adr/0011-trash-retention.md` — point 1 superseded by 0012 | English |
 | Why is the trash cap a config field, and why does the entry declare no Config schema? | `docs/adr/0012-configurable-retention.md` | English |
-| Why do one-shot members leave on their own, and why does the sweep need evidence? | `docs/adr/0013-ephemeral-members.md` | English |
+| Why do one-shot members leave on their own, and why does the sweep need evidence? | `docs/adr/0013-ephemeral-members.md` — points 2, 3 and 5 adjusted by 0026 | English |
 | Why is the plugin called `dsh-team`, and which identifiers did not change? | `docs/adr/0014-plugin-name.md` | English |
 | Why is the handoff brief a stored template, and why is it one tool? | `docs/adr/0015-handoff-template.md` | English |
 | How does a member start with its own cwd, model or preset, and where does a stale name point now? | `docs/adr/0016-spawn-capabilities.md` | English |
@@ -52,6 +52,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why does the shipped team panel list this plugin's members, and why is a retired one absent? | `docs/adr/0023-panel-overlay.md` | English |
 | Why does the plugin forward the Lead's model route, why never its effort, and why is a straggler flagged? | `docs/adr/0024-forward-the-lead-route.md` | English |
 | Why does a host hook install when its service exists, and why does `list_members` report whether it did? | `docs/adr/0025-host-hook-install.md` | English |
+| Why is a member's lifetime declared on the call, why can an open task veto a sweep, and why does a standing member need the person's words? | `docs/adr/0026-declared-member-lifetime.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
@@ -78,11 +79,12 @@ Harness disagree, the repository is wrong.
 | an operation's behaviour or failure reason | `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §4 |
 | what adoption covers, or the discovery-row shape it consumes | `actions.js`, `roster.js`, `docs/architecture-en.md` §4.5.1, `README.md` + `README-zh.md` |
 | a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |
+| a member's lifetime, what may veto a sweep, or what a retirement must carry | `docs/architecture-en.md` §4.3.1, `roster.js`, `actions.js`, the tool schemas in `index.js`, `README.md` + `README-zh.md`, ADR 0026 |
 | the transfer rule — what happens to a member's open tasks on replace, retire or restore | the transfer matrix in `docs/architecture-en.md` §4.3.2, `actions.js`, `README.md` + `README-zh.md`, ADR 0017 |
 | a task row's `body`, or how a board write is built from the stored record | `roster.js`, `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §4.2 and §4.3.2, `README.md` + `README-zh.md`, ADR 0020 |
 | the member-definition format, the accepted frontmatter subset or the `team/` path | `definitions.js`, `docs/architecture-en.md` §4.6, `README.md` + `README-zh.md`, ADR 0018 |
 | the team-file format, the reserved `team.md` name, the three template sources or the write refusal | `definitions.js`, `actions.js`, `index.js`, `docs/architecture-en.md` §4.4 and §4.7, `README.md` + `README-zh.md`, ADR 0021 |
-| which source wins for a definition field on a replace, or what a file's `ephemeral` means for a successor | the definition matrix in `docs/architecture-en.md` §4.3.3, `actions.js`, `index.js`, ADR 0019 |
+| which source wins for a definition field on a replace, or what a file may declare about a member's lifetime | the definition matrix in `docs/architecture-en.md` §4.3.3, `actions.js`, `index.js`, ADR 0019, ADR 0026 |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
 | the projection exits, what the shipped team panel or the shipped `list_agents` read shows, or whether a host hook installs | `host-hooks.js`, `index.js`, `docs/architecture-en.md` §2.4, `README.md` + `README-zh.md`, ADR 0023, ADR 0025 |

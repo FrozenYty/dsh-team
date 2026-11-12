@@ -115,7 +115,6 @@ const REVIEWER = `---
 name: reviewer
 label: Check the diff
 assignment: Keep the parser green
-ephemeral: true
 provider: cheap-provider
 model: cheap-model
 max_tokens: 4096
@@ -135,7 +134,7 @@ test('a definition supplies the label, the prompt, the assignment and the start 
   assert.equal(born.target, 'reviewer', 'the name comes from the file')
   assert.equal(born.label, 'Check the diff')
   assert.equal(born.assignment, 'Keep the parser green')
-  assert.equal(born.ephemeral, true)
+  assert.equal(born.lifetime, 'standing', 'a file cannot declare a lifetime, so the member starts standing')
   assert.equal(born.phase, 'active')
   // The body is the prompt, and the request carries exactly it.
   assert.equal(ctx.started[0].prompt[0].text, 'Review the diff and report only findings that change behaviour.')
@@ -146,7 +145,7 @@ test('a definition supplies the label, the prompt, the assignment and the start 
   assert.ok(born.definition.path.endsWith(join(DEFINITION_DIR, 'reviewer.md')))
   assert.equal(born.definition.prompt, 'file')
   assert.deepEqual(born.definition.from_file, [
-    'name', 'label', 'assignment', 'ephemeral', 'agent_preset', 'provider', 'model', 'max_tokens', 'prompt',
+    'name', 'label', 'assignment', 'agent_preset', 'provider', 'model', 'max_tokens', 'prompt',
   ])
   assert.deepEqual(born.definition.overridden, [])
   assert.equal(born.definition.problems, undefined)
@@ -167,14 +166,15 @@ test('an explicit argument overrides the definition, and the result says which o
     name: 'auditor',
     label: 'Audit the release',
     prompt: 'Start with the changelog.',
-    ephemeral: false,
+    lifetime: 'one-shot',
     agentOptions: { model: 'large-model' },
   }))
 
   // Precedence: the call wins, field by field.
   assert.equal(born.target, 'auditor')
   assert.equal(born.label, 'Audit the release')
-  assert.equal(born.ephemeral, undefined, 'the call turned the file\'s one-shot member into a normal one')
+  assert.equal(born.lifetime, 'one-shot', 'the lifetime is the call\'s alone, so the file has no say in it')
+  assert.equal(born.ephemeral, true)
   assert.deepEqual(ctx.started[0].agentOptions, { provider: 'cheap-provider', model: 'large-model', maxTokens: 4096 })
   // The body is never dropped: the call's prompt is appended after the definition's own prompt.
   assert.equal(
@@ -183,7 +183,7 @@ test('an explicit argument overrides the definition, and the result says which o
   )
   assert.equal(born.definition.prompt, 'file+call')
   assert.deepEqual(born.definition.from_file, ['assignment', 'agent_preset', 'provider', 'max_tokens', 'prompt'])
-  assert.deepEqual(born.definition.overridden.sort(), ['ephemeral', 'label', 'model', 'name'])
+  assert.deepEqual(born.definition.overridden.sort(), ['label', 'model', 'name'])
 })
 
 test('a nested, anchored or duplicated frontmatter is refused with the line, and starts nothing', async () => {
@@ -234,9 +234,26 @@ test('an unknown field is refused by name, with the accepted field set', async (
   // The accepted set is listed, so the author does not have to read the parser.
   assert.match(
     result.problems[0].problem,
-    /name, label, assignment, ephemeral, cwd, provider, model, reasoning_effort, max_tokens, agent_preset/,
+    /name, label, assignment, cwd, provider, model, reasoning_effort, max_tokens, agent_preset/,
   )
   assert.equal(ctx.started.length, 0)
+})
+
+test('a lifetime declared in a file is refused, and the refusal says where it belongs', async () => {
+  // Both spellings, because `ephemeral` is what every existing file says and `lifetime` is what an
+  // author would now try. Neither is silently ignored: a file describes the role, and a successor must
+  // not inherit a lifetime (ADR 0026).
+  for (const [file, key, value] of [['legacy.md', 'ephemeral', 'true'], ['modern.md', 'lifetime', 'one-shot']]) {
+    const { cwd, write } = await workspace()
+    await write(file, `---\nname: reviewer\nlabel: Check the diff\n${key}: ${value}\n---\nReview.\n`)
+    const ctx = fakeCtx({ cwd })
+    const result = await spawnMember(call(ctx, memoryTable(), { definition: 'reviewer' }))
+    assert.equal(result.started, false, `${key}: the spawn is refused, not silently downgraded`)
+    assert.equal(result.reason, 'definition-invalid')
+    assert.match(result.problems[0].problem, new RegExp(`"${key}" is not a field of a definition`))
+    assert.match(result.problems[0].problem, /spawn_member \{ lifetime: "standing" \| "one-shot" \}/)
+    assert.equal(ctx.started.length, 0, `${key}: nothing is started`)
+  }
 })
 
 test('two files declaring one name are refused naming both, so neither is used', async () => {
@@ -380,16 +397,6 @@ assignment: Keep the parser green
 Review the diff and report only findings that change behaviour.
 `
 
-/** The same role, declared one-shot: the file's `ephemeral` applies on a replace too (ADR 0019). */
-const ONE_SHOT = `---
-name: reviewer
-label: Check the diff
-assignment: Keep the parser green
-ephemeral: true
----
-Review the diff and report only findings that change behaviour.
-`
-
 /** The definition's other start options: cwd, model route and preset, all of them the role's. */
 const ROLE_OPTIONS = `---
 name: reviewer
@@ -496,9 +503,9 @@ test('a fresh spawn from a definition still takes the file\'s assignment, and re
   assert.ok(born.definition.from_file.includes('assignment'))
 })
 
-test('the file\'s ephemeral applies on a replace, and the sweep then orphans the work it inherited', async () => {
+test('a one-shot successor is held by the work the replacement just handed it', async () => {
   const { cwd, write } = await workspace()
-  await write('reviewer.md', ONE_SHOT)
+  await write('reviewer.md', STANDING_ASSIGNMENT)
   const ctx = fakeCtx({ cwd })
   const table = memoryTable()
   await recordedPredecessor(ctx, table)
@@ -510,25 +517,37 @@ test('the file\'s ephemeral applies on a replace, and the sweep then orphans the
     owner: 'reviewer',
   })
 
-  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
+  // The lifetime is this call's declaration, which is the only way a successor can be one-shot at all:
+  // the file cannot say it (ADR 0026).
+  const successor = await spawnMember(call(ctx, table, {
+    replace: 'reviewer',
+    definition: 'reviewer',
+    lifetime: 'one-shot',
+  }))
 
-  // The file describes the role, so a replace starts the role — including its one-shot nature.
   assert.equal(successor.target, 'reviewer-g2')
-  assert.equal(successor.ephemeral, true)
+  assert.equal(successor.lifetime, 'one-shot')
   assert.equal(successor.assignment, 'Finish the parser unit tests.', 'the inheritance still wins the assignment')
   assert.equal(successor.transferred, 1, 'the predecessor\'s work moved to the successor first')
   assert.equal(typeof recordNamed(table, 'reviewer', 2).startedAt, 'string', 'the sweep has its evidence')
 
-  // The consequence the matrix states plainly: a one-shot successor retires itself once its turn ends,
-  // and the work it just inherited loses its owner (ADR 0017) unless the Lead messages it first.
+  // The failure ADR 0019 accepted and this release removes: in this fake the child is already unloaded, so
+  // the old sweep retired the successor on the next read and orphaned exactly the work the replacement had
+  // just handed over. The board is a veto, so the successor stays and the result names what held it.
   const after = await listMembers(call(ctx, table))
-  assert.equal(after.swept, 1)
-  assert.deepEqual(after.swept_targets, ['reviewer-g2'])
-  assert.equal(after.unowned, 1)
-  assert.deepEqual(after.unowned_tasks, [task.task.id])
-  assert.equal(recordNamed(table, 'reviewer', 2).phase, 'retired')
+  assert.equal(Object.hasOwn(after, 'swept'), false, 'the veto stopped the sweep')
+  assert.equal(after.blocked, 1)
+  assert.deepEqual(after.blocking_tasks, [task.task.id])
+  assert.equal(recordNamed(table, 'reviewer', 2).phase, 'active')
   const board = await taskBoard({ table, leadSessionId: 'lead-1', action: 'list' })
-  assert.equal(board.tasks.find((row) => row.id === task.task.id).owner, undefined)
+  assert.equal(board.tasks.find((row) => row.id === task.task.id).owner, 'reviewer-g2', 'the work kept its owner')
+
+  // Closing the row is what makes it eligible, and then it leaves like any other one-shot member.
+  await taskBoard({ table, leadSessionId: 'lead-1', action: 'update', task_id: task.task.id, status: 'done' })
+  const swept = await listMembers(call(ctx, table))
+  assert.equal(swept.swept, 1)
+  assert.deepEqual(swept.swept_targets, ['reviewer-g2'])
+  assert.equal(recordNamed(table, 'reviewer', 2).phase, 'retired')
 })
 
 test('the file\'s cwd and model fields apply on a replace; the predecessor\'s start options are not inherited', async () => {
@@ -583,30 +602,29 @@ test('the file\'s cwd and model fields apply on a replace; the predecessor\'s st
   })
 })
 
-test('a message replaces the assignment and clears the ephemeral flag a definition set', async () => {
+test('a message replaces the assignment and leaves the lifetime alone', async () => {
   const { cwd, write } = await workspace()
-  await write('reviewer.md', ONE_SHOT)
+  await write('reviewer.md', STANDING_ASSIGNMENT)
   const ctx = fakeCtx({ cwd })
   const table = memoryTable()
   await recordedPredecessor(ctx, table)
-  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer' }))
-  assert.equal(successor.ephemeral, true)
+  const successor = await spawnMember(call(ctx, table, { replace: 'reviewer', definition: 'reviewer', lifetime: 'one-shot' }))
+  assert.equal(successor.lifetime, 'one-shot')
 
-  // A message is where the definition stops speaking: it is not read again, and the two fields it
-  // owned — the assignment and the one-shot flag — are the call's from here on (ADR 0013, ADR 0019).
+  // A message is where the definition stops speaking: it is not read again, and the assignment is the
+  // call's from here on. The lifetime is not the message's to change — it stays one-shot, and what the
+  // message invalidates is the evidence a sweep would act on (ADR 0026).
   const messaged = await messageMember(call(ctx, table, {
     target: 'reviewer-g2',
     message: 'The parser moved on; take the cache change.',
     assignment: 'Review the cache change.',
   }))
   assert.equal(messaged.sent, true)
-  assert.equal(messaged.ephemeral, false)
+  assert.equal(messaged.lifetime, 'one-shot', 'a message does not re-declare the lifetime')
+  assert.equal(messaged.reopened, true)
   assert.equal(messaged.assignment, 'Review the cache change.')
   const record = recordNamed(table, 'reviewer', 2)
-  assert.equal(record.ephemeral, undefined)
+  assert.equal(record.ephemeral, true, 'the declaration survives the message')
+  assert.equal(Object.hasOwn(record, 'startedAt'), false, 'the finished-evidence is what the message invalidates')
   assert.equal(record.assignment, 'Review the cache change.')
-
-  const listed = await listMembers(call(ctx, table))
-  assert.equal(listed.swept, undefined, 'the message declared it is not one-shot')
-  assert.equal(listed.members.find((member) => member.target === 'reviewer-g2').phase, 'active')
 })

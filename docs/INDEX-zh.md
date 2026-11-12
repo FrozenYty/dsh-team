@@ -51,6 +51,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么官方团队面板会列出本插件的成员，以及为什么已退役成员是离场而不是被标注？ | `docs/adr/0023-panel-overlay.md` | 英文 |
 | 为什么插件要转发 Lead 的模型路由，为什么从不转发它的 effort，以及为什么掉队的成员会被标出来？ | `docs/adr/0024-forward-the-lead-route.md` | 英文 |
 | 为什么宿主钩子要在服务存在时才安装，以及为什么 `list_members` 会报告装没装上？ | `docs/adr/0025-host-hook-install.md` | 英文 |
+| 为什么生存期在调用上声明、为什么一条未完成任务能否决清扫，以及为什么退役 standing 成员必须凭本人的原话？ | `docs/adr/0026-declared-member-lifetime.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
@@ -76,11 +77,12 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 某个操作的行为或失败原因 | `actions.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §4 |
 | 收养覆盖什么，或它消费的发现行形状 | `actions.js`、`roster.js`、`docs/architecture-zh.md` §4.5.1、`README.md` + `README-zh.md` |
 | 花名册相态或转移 | `docs/architecture-zh.md` §4.3 的状态矩阵；若模型变了，另写 ADR |
+| 成员的生存期、什么可以否决清扫，或一次退役必须带回什么 | `docs/architecture-zh.md` §4.3.1、`roster.js`、`actions.js`、`index.js` 里的工具 schema、`README.md` + `README-zh.md`、ADR 0026 |
 | 交接规则——替换、退役或恢复时成员的未完成任务怎么处理 | `docs/architecture-zh.md` §4.3.2 的交接矩阵、`actions.js`、`README.md` + `README-zh.md`、ADR 0017 |
 | 任务行的 `body`，或工作板写入如何基于已存记录构建 | `roster.js`、`actions.js`、`index.js` 里的工具 schema、`docs/architecture-zh.md` §4.2 与 §4.3.2、`README.md` + `README-zh.md`、ADR 0020 |
 | 成员定义的格式、接受的 frontmatter 子集或 `team/` 路径 | `definitions.js`、`docs/architecture-zh.md` §4.6、`README.md` + `README-zh.md`、ADR 0018 |
 | 团队文件的格式、保留名 `team.md`、模板的三个来源或写入拒绝 | `definitions.js`、`actions.js`、`index.js`、`docs/architecture-zh.md` §4.4 与 §4.7、`README.md` + `README-zh.md`、ADR 0021 |
-| 定义字段在 replace 时由哪个来源胜出，或文件的 `ephemeral` 对继任者意味着什么 | `docs/architecture-zh.md` §4.3.3 的定义矩阵、`actions.js`、`index.js`、ADR 0019 |
+| 定义字段在 replace 时由哪个来源胜出，或文件可以就成员的生存期声明什么 | `docs/architecture-zh.md` §4.3.3 的定义矩阵、`actions.js`、`index.js`、ADR 0019、ADR 0026 |
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
 | 持久记录结构 | `docs/architecture-zh.md` §4.2、一份新 ADR、`PROGRESS.md` 里的迁移说明 |
 | 投影出口、官方团队面板或官方 `list_agents` 读取显示什么，或宿主钩子装没装上 | `host-hooks.js`、`index.js`、`docs/architecture-zh.md` §2.4、`README.md` + `README-zh.md`、ADR 0023、ADR 0025 |
