@@ -189,6 +189,27 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   one, both caps, and the unresolvable working directory. The live start from a definition is the owner's
   install check.
 
+- [x] **P4-07** A task body, and a board write that cannot undo a handover (v0.18.0).
+  Done when a task carries a bounded body that `create` and `update` set and `update` clears, a body past
+  the cap is refused rather than truncated, `list` returns it and a stored body outside the read rules is
+  reported on the row, the handover brief still carries the id and title only, and an `update`, `release`
+  or `delete` computed before a handover lands cannot undo it.
+  Delivered (ADR 0020, which adjusts ADR 0017 from a new record): the field is `body`, capped at
+  `TASK_BODY_MAX` (2000) and refused past it by `checkTaskBody`, with `body: null` as the way to clear it
+  and the read path reporting an over-long or empty stored body as `problem` on the row while still
+  serving it. The brief's line still names the id and the title only — the composition says so, and a test
+  pins that a maximal body neither enters it nor grows it past its six lines. Every id-addressed board
+  write is now built inside the serialized mutation from a fresh lookup of the record: `update` applies
+  only the fields the call named, so a status or body change keeps the owner a handover gave the row, and
+  `release`/`delete` — whose effect is subtraction — write nothing and answer `changed: false` with the row
+  they found when its `status`/`owner` is no longer the one the call read. No revision parameter is added
+  (ADR 0017 point 5 stands). `blocked_by`/readiness is refused again for the reason the ADR records —
+  the shipped board's field only gates starting work and never participates in carrying it — with
+  `context` (the tasks whose output this one uses) named as the shape to copy if ordering is ever wanted.
+  The interleaving cannot be produced by real concurrency in a test, so `tests/task-detail.test.mjs`
+  injects the handover through the table's serialized `update` hook for all three actions; the live
+  `task_board` call is the owner's install check.
+
 ### P3 — Settings panel (cancelled in v0.4)
 
 > **Cancelled by [ADR 0008](docs/adr/0008-model-only-surface.md).** The panel and its HTTP bridge were

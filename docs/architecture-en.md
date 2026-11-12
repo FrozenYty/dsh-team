@@ -260,12 +260,14 @@ handoffTemplate  on the roster record, not on a member: this Lead's handoff-brie
               placeholders a replacement interpolates (§4.4); optional, so every record written before
               P4-02 loads and behaves exactly as it did
 tasks         on the roster record, not on a member: this Lead's work board, an array of task rows. Each
-              row is `{ id, title, status, owner?, created_at, updated_at? }`: `id` is a UUID generated
-              when the task is created, `title` is bounded display text (`TASK_TITLE_MAX`, 200), `status`
-              is `open | done`, `owner` is the target of the member carrying the work, `created_at` is an
-              ISO timestamp and `updated_at` appears after the first change. Optional, so every record
-              written before P2-09 loads and behaves exactly as it did, and a Lead with an empty board is
-              a record that never gained the field (ADR 0017)
+              row is `{ id, title, body?, status, owner?, created_at, updated_at? }`: `id` is a UUID
+              generated when the task is created, `title` is bounded display text (`TASK_TITLE_MAX`, 200),
+              `body` is the task's own statement of what "done" means and where the work stopped
+              (`TASK_BODY_MAX`, 2000, present only on a row that has one, cleared with `body: null`),
+              `status` is `open | done`, `owner` is the target of the member carrying the work,
+              `created_at` is an ISO timestamp and `updated_at` appears after the first change. Optional,
+              so every record written before P2-09 loads and behaves exactly as it did, and a Lead with an
+              empty board is a record that never gained the field (ADR 0017, ADR 0020)
 ```
 
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
@@ -288,12 +290,24 @@ composition falls back to the built-in brief instead of writing the offending to
 `tasks` follows the same split for the same reason, and goes one step further. Its **structure** is
 validated on load — an array, every row an object with an `id` string, a known `status`, a non-empty
 `owner` when present, and no id twice — because a roster that cannot represent a task cannot answer for
-one. Its **content** is not: a title that is merely too long, or a list that grew past the write-time cap
-before this release existed, loads and is reported by the read (`problem` on the row, §4.5) rather than
-refusing the domain. That is the `handoffTemplate` precedent applied where it matters most: one Lead's
-stale task would otherwise hide every roster in the profile, including the retirement that exists to
-repair that team. The two write-time caps are refused, never truncated: `TASK_TITLE_MAX` (200) and
-`TASK_LIMIT` (200 tasks per Lead, `done` included).
+one. Its **content** is not: a title or a body that is merely too long, or a list that grew past the
+write-time cap before this release existed, loads and is reported by the read (`problem` on the row, §4.5)
+rather than refusing the domain. That is the `handoffTemplate` precedent applied where it matters most: one
+Lead's stale task would otherwise hide every roster in the profile, including the retirement that exists to
+repair that team. The three write-time caps are refused, never truncated: `TASK_TITLE_MAX` (200),
+`TASK_BODY_MAX` (2000) and `TASK_LIMIT` (200 tasks per Lead, `done` included).
+
+**A board write is built from the row as stored, inside the serialized mutation.** The read a `task_board`
+call makes at its start states the *premise*, and is never a row to write back: the mutation looks the task
+up again in the record `updateRoster` hands it and builds the next row from that. `update` therefore
+applies only the fields the call named — a status change keeps the owner a handover gave the row, and a
+body amendment keeps everything else — while `release` and `delete`, whose effect is subtraction, apply
+only to the state the call read: when the stored row's `status`/`owner` is no longer the one in the
+snapshot, they write nothing and answer `changed: false` with the row they found. A row that vanished
+between the read and the write draws the same refusal an unknown id draws. That is what makes "only the
+person changes, not the work" hold under concurrency and not only in sequence: a replacement's handover
+cannot be undone by the next board call, and the model is asked to track no revision and no schema gains a
+parameter (ADR 0017 point 5, ADR 0020).
 
 `assignment` is the durable statement a successor is briefed with. It is set with
 `spawn_member.assignment`, replaced with `message_member.assignment`, reported on every `list_members`
@@ -395,6 +409,8 @@ one rule the whole matrix rests on: a handover hands over *work still owed*, not
 | **restore** of a member whose tasks were transferred | unchanged: a restore recovers a lifecycle record and an artifact, it does not re-assign work | `unowned` / `unowned_tasks` report the work still waiting for an owner — a fact, not a claim; no owner is written | unchanged |
 | retirement by the **ephemeral sweep** | the owner is cleared, through the same retirement the model would have called | the triggering call's `swept`/`swept_targets` gain `unowned`/`unowned_tasks` for the rows the sweep orphaned | stay with the tombstone |
 | an open task whose **owner name was later reused** by a new generation | nothing happens by name: `owner` is a *target*, and generation 2 of a name is `reviewer-g2`, a different target. A new generation inherits nothing by name alone, and the old target still resolves for re-assignment because a retired member is a valid owner handle | none | unchanged |
+| a task carrying a **`body`** through a handover | the row is re-addressed like any other one: the body moves with it, because the body belongs to the task and not to the member that happens to hold it | the same `transferred` / `transferred_tasks`; the brief names the id and title only, so the successor reads the body from the board | stays with the predecessor's tombstone |
+| a **`task_board` write racing a handover** (`update`, `release` or `delete` computed before it lands) | `update` applies only the fields it names to the row as stored, so a status or body change keeps the successor's owner; `release` and `delete` find a row whose `status`/`owner` is no longer the one they read and write nothing at all | `changed: false` with the row as stored and a message naming what moved and how to repeat the call; `delete` also omits `deleted` | unchanged |
 
 What the cells depend on:
 
@@ -409,6 +425,11 @@ What the cells depend on:
   did not orphan. Nothing else claims them, and no read ever assigns an owner.
 - **A transfer writes ownership, never status.** A row stays `open` through a handover; only `task_board`
   with `action: update` turns it `done`, which is also the only way a row stops being inherited.
+- **A board write is rebuilt from the row it lands on, and subtraction has a premise.** Every id-addressed
+  task action re-reads the row inside the serialized mutation (§4.2): `update` merges the fields it names,
+  and `release`/`delete` answer `changed: false` instead of removing an owner or a row that a handover
+  changed since the call read it. That is what keeps the replacement row above true when the two calls
+  overlap rather than merely follow one another (ADR 0020).
 - **Two tools in one model turn.** Every task mutation is one atomic `update` on the roster table, like
   every member mutation (§4.2), so a `task_board` call and a replacement in the same turn see each other's
   write instead of overwriting it.
@@ -594,11 +615,14 @@ Leads never share one, and `list_members` rows never carry it.
 the predecessor's open tasks by id *and* title — either alone is unusable, because an id the successor
 cannot look up is a round-trip and a title alone cannot be marked done — and the line is bounded twice:
 at most 5 rows, and at most 600 characters, which is five maximal titles (`TASK_TITLE_MAX`, 200) with room
-for the ids. A list that would not stay under either bound is dropped entirely and the successor keeps the
-`{task_board}` pointer sentence, which is exactly the brief the release before P2-09 produced. A successor
-whose predecessor owned no open task therefore gets a brief that is byte-identical to the old one, and a
-test pins that string — the brief carries ids and titles only when there is work actually in flight, and it
-never carries a `done` row.
+for the ids. **The line carries ids and titles and nothing else: never a row's `body`**, which is bounded
+for the board (`TASK_BODY_MAX`, 2000) and not for a child's prompt, so one maximal body per row would
+break the 600-character bound — the successor reads the bodies from `task_board` with `action: list`, the
+same board the pointer sentence sends it to (ADR 0020). A list that would not stay under either bound is
+dropped entirely and the successor keeps the `{task_board}` pointer sentence, which is exactly the brief
+the release before P2-09 produced. A successor whose predecessor owned no open task therefore gets a brief
+that is byte-identical to the old one, and a test pins that string — the brief carries ids and titles only
+when there is work actually in flight, and it never carries a `done` row.
 
 **A stored template keeps its own line.** The inherited-tasks line is appended after the rendered template
 and before the successor's own task, so a template can neither drop it nor duplicate it, and the
@@ -633,7 +657,7 @@ the Lead, so a failed projection cannot disable every tool.
 | `restore_member` | Move a trashed artifact back and return the record to `active`; the result says which branch ran, an already-active record is a no-op success rather than an error, a pruned tombstone answers `reason: 'pruned'` without touching the workspace, and a refusal carries `current_holder` when another generation of the name is live. It assigns no work: `unowned`/`unowned_tasks` report the open rows still waiting for an owner (§4.3.2). |
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
 | `handoff_template` | Read, store or clear this Lead's handoff-brief template: omit `template` to read it back, pass a template to validate and store it, pass an empty string to clear it and return to the built-in brief (§4.4). One template per Lead, validated at set time; a stored value that no longer passes validation is reported by the read (`valid`, `problem`) rather than silently dropped, and the composition falls back to the built-in. |
-| `task_board` | This Lead's own work board: `create` adds a task, `list` reads the board, `update` sets a task's `status` and/or `owner` (`owner: null` clears it), `release` clears an owner, `delete` removes the row (§4.3.2). One tool with an `action` enum rather than five names, because the five operations share one row shape and one refusal vocabulary and each action carries at most two extra fields. A task id is a UUID, a title is refused past 200 characters, and one Lead holds at most 200 tasks; a stored row whose title no longer passes the read rule is served with `problem` rather than dropped (§4.2). `list` reports how many tasks are open and how many of those nobody owns. |
+| `task_board` | This Lead's own work board: `create` adds a task, `list` reads the board, `update` sets a task's `status`, `owner` and/or `body` (`owner: null` and `body: null` clear them), `release` clears an owner, `delete` removes the row (§4.3.2). One tool with an `action` enum rather than five names, because the five operations share one row shape and one refusal vocabulary and each action carries at most three extra fields. A task id is a UUID, a title is refused past 200 characters, a body is refused past 2000 and one Lead holds at most 200 tasks; a stored row whose title or body no longer passes the read rule is served with `problem` rather than dropped (§4.2). `list` reports how many tasks are open, how many of those nobody owns, and every row's body — the acceptance criteria and stopping point the brief does not carry. An id-addressed write is built from the row as stored inside the serialized mutation, so an `update` keeps a field it did not name and a `release` or `delete` whose row moved since the call read it answers `changed: false` with the row it found instead of undoing a handover (ADR 0020). |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
 check and the tool result schemas. Replacement deliberately has no tool of its own: `spawn_member` and

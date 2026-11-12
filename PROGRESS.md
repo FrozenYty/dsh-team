@@ -1133,3 +1133,73 @@
   against the installed Harness. The suite runs the real parser and filesystem against a
   `workingDirectory` fake; the service and the start are the owner's install check.
 - **Version.** `0.17.0`: which assignment a successor receives is behaviour, not a comment.
+
+## 2026-11-12 — a task carries a body, and a board write cannot undo a handover (P4-07, v0.18.0)
+
+- **Both findings were real, and both were verified here before anything changed.** The shipped board's row
+  carries a `description` of up to 16384 characters that its update action can amend; this board's row had
+  a 200-character `title` that **no action could change after create** (`update` read `status` and `owner`
+  only), so a successor — whose brief names an id and a title — was handed the work's *name* and never its
+  acceptance criteria or where the predecessor stopped, and a predecessor with three open rows could not
+  describe them in the 1000-character member `assignment` either. The write path was worse: `taskBoard`
+  read the roster once, built `const next = { ...existing }` from that snapshot, and wrote the whole row
+  through `writeTask` → `withTask(current, next)`. A handover landing between the read and the write was
+  undone by the next board call — an `update` restored the previous owner, a `release` un-owned work the
+  successor had just taken, and a `delete` removed the row a replacement had just moved. (The survey's
+  line numbers 1616/1686/1639–1641 were of the revision it read; the shape it described is what the
+  pre-change code showed.)
+- **The field is `body`, capped at 2000 characters and refused past it.** `TASK_BODY_MAX` sits at twice
+  `ASSIGNMENT_MAX` — a body states what "done" means *and* where the work stopped — and eight times below
+  the shipped `description`, because the whole task array is rewritten on every spawn, retirement and task
+  write in a single-document domain. `create` and `update` set it, `update` amends it, `body: null` clears
+  it, and `checkTaskBody` throws rather than slicing, exactly like `checkTitle`/`checkLabel`/
+  `checkAssignment`. `list` returns it; a stored body past the cap (or empty, or not a string) is served
+  with `problem` on the row rather than dropped, and the cap is a read rule rather than a load rule because
+  one Lead's long body must not fail the domain open (ADR 0017 point 11).
+- **The brief still carries the id and the title only, and now says so where it is composed.**
+  `inheritedTasksLine`'s comment records that the body is excluded on purpose: its bound is the board's,
+  not a cold child's prompt, and one maximal body per row would break the 600-character line. The
+  successor reads the bodies from `task_board` with `action: list`. A test creates a task with a maximal
+  body and pins that the brief still names its id and title, contains no body text, and stays six lines.
+- **Every id-addressed board write is now built inside the serialized mutation, from the record the write
+  lands on.** `update` applies only the fields the call named, so a status or body change keeps the owner a
+  handover gave the row and never writes a snapshot's owner back. `release` and `delete`, whose effect is
+  subtraction, act only on the state the call read: when the stored `status`/`owner` is no longer the one
+  in the snapshot they write nothing, answer `changed: false` with the row they found, and name the owner
+  that took it so one more call, from a fresh read, does what was asked. A row that vanished mid-write
+  draws the same refusal an unknown id draws. No revision parameter is added — ADR 0017 point 5 still
+  refuses making the model track revisions — and no schema gains a field for it.
+- **The interleaving is simulated, because real concurrency cannot produce it in a test.**
+  `tests/task-detail.test.mjs` wraps the roster table's serialized `update` so that the first write a board
+  call makes is preceded by a `reownerTasks` handover, then asserts for all three actions that the
+  successor still owns the row: the update's status change still lands, the release and delete report
+  `changed: false` and write nothing.
+- **`blocked_by` is refused a second time, with its reason written into the ADR.** The shipped board's
+  field only gates *starting* work and never participates in carrying it, so it answers an ordering
+  question this board does not ask; the shape to copy if ordering is ever wanted is a `context` list — the
+  tasks whose output this one uses — rather than a bare blocked-by, because it names the dependency by what
+  crosses it and a handover can then say whether the successor already holds that output.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits clean; `node scripts/check.mjs` passes after the last edit; `node --test
+  --test-isolation=none tests/*.test.mjs` is 162 tests, 162 passing — the 153 that existed plus 9 in
+  `tests/task-detail.test.mjs`, with `tests/entry.test.mjs` extended and no existing test edited. **Both
+  main tests were proved able to fail**, each by reverting only the operation: with the lookup reverted to
+  the pre-fix snapshot, the race test failed at `tests/task-detail.test.mjs:117` with `actual 'reviewer'`
+  against `expected 'reviewer-g2'` (plus the release, delete and named-owner cases), and with
+  `checkTaskBody` truncating instead of throwing the cap test failed with `Missing expected rejection`,
+  `expected /cap is 2000/`. `tests/task-detail.test.mjs` hashed
+  `4E5F7DC4A8B36315721A401583A5864A18D4F99D569861E3736A407D645D900A` before and after both proofs, and
+  `actions.js` returned to `3688E879336097768F62042301E3079DD0886B3C2272480C041B37924B94FF7E`,
+  `roster.js` to `A5D0CC75F02DBA8D3947D8CB7BDCBCA3A9ACABF91EE9FF012DB2A96F4AD1DCBE`, so each proof edited
+  the operation and not the test. Bilingual parity was measured before and after rather than assumed: the
+  README pair went from 19 headings and 176 distinct backtick identifiers per side with identical sets to
+  19 and 178 per side, still identical; the index pair from 6/39 identical to 6/41 identical; the
+  architecture pair from 22 headings and 297 against 294 identifiers with 9 English-only and 6 Chinese-only
+  spans to 22 and 304 against 301 with the same 9 and 6, so no new set difference.
+- **What stays unverified.** No install and no `plugin_manager` call was made, so the live `task_board`
+  call is still the owner's install check: the suite drives `actions.js` and the tool wrappers against a
+  table fake and never loads the Harness. In particular the interleaving the write path is built for cannot
+  be produced by a live run on demand — the test drives the table's own serialized hook — and the body cap
+  and the read rule are unit-tested only.
+- **Version.** `0.18.0`: a task that cannot say what it is, and a write that can undo the handover it
+  exists to move, were both behaviour.

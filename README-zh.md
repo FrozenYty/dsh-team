@@ -18,7 +18,7 @@
 - **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
-- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；`wait_members` 的事件接线、超时、取消与无进展路径；以及整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝。由定义真正启动一个成员，是所有者安装后的验证项（ADR 0018）。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；以及整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝。由定义真正启动一个成员，是所有者安装后的验证项（ADR 0018）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -41,7 +41,7 @@
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
 | `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取已存的那份，传入模板即保存，传空串则回到内置版本。 |
-| `task_board` | 该 Lead 自有的工作板：用 `action` 选择 `create`、`list`、`update`、`release` 或 `delete`。一条任务有 id、标题、`open` 或 `done`，以及可选的成员 `owner`；未完成的任务会随替换一起过去。 |
+| `task_board` | 该 Lead 自有的工作板：用 `action` 选择 `create`、`list`、`update`、`release` 或 `delete`。一条任务有 id、标题、一段有上限的正文（说明“完成指什么”、工作停在哪里）、`open` 或 `done`，以及可选的成员 `owner`；未完成的任务会随替换一起过去，正文随之移动。 |
 
 **成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值——只有一个例外：改了 `provider` 或 `model` 却没给 `reasoning_effort` 时，新路由解析自己的默认值。`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 携带 `provider`、`model`、`reasoning_effort` 与 `max_tokens`，最后一项是 token 上限，也是挑更便宜模型的地方；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。`started_with` 是插件转发内容的回执，不是子代理解析结果的确认：它原样回显传入的字段，既不解析也不回读，所以模型有没有真正生效，要靠成员的第一条请求去确认，而不是这个字段。Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
 
@@ -108,6 +108,8 @@ You review changes. Report only findings that change behaviour, with the file an
 
 **退役会对工作做什么。** 工作不是一句话：从 v0.13.0 起，它是本插件自有任务板上的行，而这两个生命周期事件正是围绕它们展开的。替换会在退役前任的同一次调用里，把前任所有未完成任务转给继任者，并在继任者的交接书里点名——于是继任者拿到的是自己现在拥有的 id，而不是指向别人任务板的指针。相反，**没有**继任者的退役会让这些行保持 `open` 且无人认领，并用 `unowned` 连同 id 报告出来，因为工作依然欠着，只是现在没有人扛；`task_board` 的 `action: list` 会报告同一批任务，恢复则说明其中有多少还在等待认领。`done` 任务永不移动：已完成的工作留在完成它的那条记录上，而让任务不再被继承的，是 `task_board` 的 `action: update, status: done`。
 
+从 v0.18.0 起，一条任务还带有**正文**——最多 2000 个字符，写的是这条任务“完成指什么”以及前任停在哪里——用 `create` 或 `update` 写入，用 `body: null` 清空。交接书仍然只点 id 与标题：冷启动的子代理为每一个字付费，五行满长正文会撑破那一行的上限，所以继任者用 `action: list` 从任务板上读正文。工作板写入也不会再抹掉交接：`update` 只应用调用点名的字段，因此替换刚刚改过 owner 的任务会保留那个 owner；而 `release` 或 `delete` 若发现这一行在调用读取之后变过，会带着找到的那一行回答 `changed: false`（并点名接手它的 owner），而不会把继任者刚拿到的工作变成无主或直接删掉。重新读一次再调一次，就会照你说的执行（ADR 0020）。
+
 - **先启动继任者，再退役前任，都在同一次调用里。** 启动失败时前任原封不动，失败的预留会记成继任者的 `failed` 记录；退役失败则返回 `predecessor_retired: false`，再调一次 `retire_member` 即可收尾（ADR 0009）。目标已经退役时同样接受，由墓碑提供交接书。
 - **assignment 是持久字段，且有长度上限。** `spawn_member.assignment` 在启动时写入，`message_member.assignment` 在工作变化时替换，两者都限制在 1000 个字符以内，超长直接拒绝而不是截断；`list_members` 会报告它，墓碑也会保留它。
 - **交接书的形状可以每个 Lead 固定一次。** `handoff_template` 存下的模板会代入 `{successor}`、`{predecessor}`、`{label}`、`{assignment}` 与 `{task_board}`。没有引用 `{assignment}` 的模板在保存时就被拒绝——继任者若不知道接手的是什么，就不算完成交接；未知占位符同样在保存时被拒绝，而不是原样写进子代理的提示词。内置交接书就是默认模板、由同一套渲染代码生成，因此没有存过模板的 Lead 得到的字句和以前完全一样，清除模板即回到它（ADR 0015）。
@@ -128,7 +130,7 @@ You review changes. Report only findings that change behaviour, with the file an
 - **没有浏览器半区。** 没有面板、没有 HTTP 桥、没有客户端 bundle。v0.3 的设置页面板从未在真实 profile 里渲染过，点击也无效，因此 v0.4 选择删除而不是修复（ADR 0008）。所有界面都是面向模型的工具；将来若要做 UI，那是一个新决定，起点是 `actions.js` 里的操作。
 - **官方的 `agent-team` 服务行保持挂载。** 收养、成员判定与投影过滤都要读它，所以补丁不能把它禁用——而这项服务自己也发布三件面向模型的工具：`list_agents`、`send_message`、`interrupt_agent`，它们因此仍留在 Lead 的工具列表里。补丁退役的是官方**工具**行（`tool-agent-team`）；移除那三件会连服务、连同本插件的收养一起带走（ADR 0017）。
 - **被剪除的墓碑无法恢复。** 成功移入产物的那次退役会执行每个 Lead 的回收站上限，删掉超出的最旧条目。墓碑保留 `trashPath`，状态记为 `trashState: pruned`，但字节已经不在，因此 `restore_member` 以 `reason: "pruned"` 拒绝，且绝不调用工作区（ADR 0011）。长期存续的团队若需要超过 20 份可恢复会话，请提前调大上限。
-- **任务板是交接通道，不是项目跟踪器。** 一条任务只有 id、标题、`open`/`done` 和可选的 owner，刻意没有优先级、依赖、评论、子任务与截止日期（ADR 0017）。依赖尤其如此：它需要一张图和一条排序规则，而交接还得决定“依赖仍未完成的任务怎么办”；这个先后顺序留给 Lead 判断。任务板只回答一个问题：继任者现在扛着什么。
+- **任务板是交接通道，不是项目跟踪器。** 一条任务只有 id、标题、一段有上限的正文、`open`/`done` 和可选的 owner，刻意没有优先级、依赖、评论、子任务与截止日期（ADR 0017、ADR 0020）。依赖尤其如此：它需要一张图和一条排序规则，而交接还得决定“依赖仍未完成的任务怎么办”；这个先后顺序留给 Lead 判断。任务板只回答一个问题：继任者现在扛着什么。
 
 ## 运行要求与兼容性
 

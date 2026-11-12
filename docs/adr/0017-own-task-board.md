@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-11-12
 - **Supersedes:** —
+- **Points 1, 4, 5, 6 and 11 and the dependency alternative adjusted by
+  [0020](0020-task-body-and-write-integrity.md)** — the row gains a bounded `body` (so `update` reads three
+  fields, not two), an id-addressed write is rebuilt from the record as stored (`release` and `delete` act
+  only on the state they read), and `blocked_by` is refused with its reason. The rest of this ADR stands.
 
 ## Context
 

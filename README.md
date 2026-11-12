@@ -54,9 +54,12 @@ directory did not, on purpose (ADR 0014).
   `assignment` caps; a retirement during an in-flight spawn; the lost-update protection when two roster
   operations overlap; that a member still running is never swept; the exact request a spawn with no
   `spawn_options` composes; the task board's write-time caps and the transfer-matrix cells a live run did
-  not reach; `wait_members`' event wiring, timeout, cancellation and no-progress paths; and the whole
-  definition layer (v0.16.0) — reading a file, the precedence report, and every refusal. A live start from
-  a definition is the owner's install check (ADR 0018).
+  not reach; the task body's 2000-character cap, the handover injected between a board call's read and its
+  write — an interleaving a live run cannot be made to produce, so the test drives the table's own
+  serialized `update` hook — and the rule that a board write cannot undo a handover; `wait_members`' event
+  wiring, timeout, cancellation and no-progress paths; and the whole definition layer (v0.16.0) — reading
+  a file, the precedence report, and every refusal. A live start from a definition is the owner's install
+  check (ADR 0018).
 - A fresh install has a real side effect, so it is the owner's decision each time.
 - History, append-only: [PROGRESS.md](PROGRESS.md).
 
@@ -87,7 +90,7 @@ that is a move rather than a deletion.
 | `restore_member` | Move a trashed Session back to its recorded path and return the record to `active`; a pruned artifact is a typed refusal. |
 | `compact_member` | Force one compaction on a resident, idle member, answering `done`, `busy`, `not-resident`, `nothing-to-compact` or `failed`. |
 | `handoff_template` | Read, set or clear the brief a successor receives: omit `template` to read the stored one, pass a template to store it, pass an empty string to return to the built-in. |
-| `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, `open` or `done`, and an optional member `owner`; the open ones move with a replacement. |
+| `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, a bounded body (what "done" means and where the work stopped), `open` or `done`, and an optional member `owner`; the open ones move with a replacement, body included. |
 
 **A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
 forwards three things the Harness already supports, and every field omitted inherits the Lead's value —
@@ -209,6 +212,16 @@ with `action: list` reports the same set, and a restore says how much of it is w
 move: finished work stays on the record that finished it, and it is `task_board` with
 `action: update, status: done` that makes a task stop being inherited.
 
+Since v0.18.0 a task also carries a **body** — up to 2000 characters of what "done" means for it and
+where the predecessor stopped — set with `create` or `update` and cleared with `body: null`. The brief
+still names only the id and the title, because a cold child pays for every word and five maximal bodies
+would break the line's bound; the successor reads the bodies from the board with `action: list`. And a
+board write can no longer undo a handover: `update` applies only the fields the call named, so a task whose
+owner a replacement just changed keeps that owner, and a `release` or `delete` whose row changed since the
+call read it answers `changed: false` with the row it found — naming the owner that took it — instead of
+un-owning or removing work the successor has just been given. Repeating the call from a fresh read does
+what you asked (ADR 0020).
+
 - **The successor starts first and the predecessor is retired second, in the same call.** A failed start
   leaves the predecessor untouched, with the failed reservation recorded as the successor's `failed`
   record; a failed retirement answers `predecessor_retired: false`, so one more `retire_member` completes
@@ -267,9 +280,9 @@ Five things this bundle does not do, each decided rather than forgotten.
   records `trashState: pruned`, but the bytes are gone, so `restore_member` refuses with
   `reason: "pruned"` and never calls the workspace (ADR 0011). Configure a larger cap before a
   long-lived team needs more than 20 recoverable sessions.
-- **The task board is a handover channel, not a project tracker.** A task has an id, a title,
-  `open`/`done` and an optional owner, and deliberately no priorities, dependencies, comments,
-  sub-tasks or due dates (ADR 0017). Dependencies would need a graph and an ordering rule, and a
+- **The task board is a handover channel, not a project tracker.** A task has an id, a title, a bounded
+  body, `open`/`done` and an optional owner, and deliberately no priorities, dependencies, comments,
+  sub-tasks or due dates (ADR 0017, ADR 0020). Dependencies would need a graph and an ordering rule, and a
   handover would then have to decide what to do with a task whose dependency is still open; that order
   stays the Lead's judgment. The board answers one question: what work does the successor carry now?
 
