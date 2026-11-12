@@ -42,6 +42,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么交接书是一个可存模板，以及为什么只有一个工具？ | `docs/adr/0015-handoff-template.md` | 英文 |
 | 成员如何用自己的 cwd、模型或 preset 启动，陈旧的名字现在指向谁？ | `docs/adr/0016-spawn-capabilities.md` | 英文 |
 | 为什么工作板由插件自己拥有，替换成员时到底移动了什么？ | `docs/adr/0017-own-task-board.md` | 英文 |
+| 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap.md` | 英文 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 

@@ -839,3 +839,61 @@
   0ed88592-... "Confirm the relay curve for the successor"`. That is the feature, observed end to end.
 - **Version.** `0.13.2`: `0.13.0` is installed and its `spawn_member` can still lose a replacement
   result, so this is not a documentation-only patch.
+
+## 2026-11-12 — the shipped team tool row is retired, the gap is written down, and the Status block is measured (v0.14.0)
+
+- **P2-07 is one patch entry.** `cordis.patch.yml` now overrides the shipped `tool-agent-team` row with
+  `disabled: true`. The row's plugin — read from the installed build,
+  `@deepseek-ai/dsh-experimental-tool-agent-team` 0.2.2-rc.1, `lib/index.js` — registers `spawn_teammate`,
+  `send_message`, `list_agents`, `wait_agent`, `interrupt_agent`, `team_task_create`, `team_task_list`,
+  `team_task_get` and `team_task_update`; it also publishes the shipped team-policy section and the
+  Lead-identity context, which is what the entry's comment is checked against. The comment states what goes
+  and what it costs: every shipped tool has an equivalent here (`spawn_member`, `message_member`,
+  `list_members`, `stop_member`, `task_board`) except `wait_agent`, which has none — a model re-reads
+  `list_members` and wakes a member with `message_member` instead of blocking, and reads `inactive` as "no
+  turn is executing"; the shipped board's existing rows are not readable here and are not migrated, so a
+  Lead that wants them re-creates them on `task_board`; and the two system-prompt sections go with the row.
+  The `agent-team` service row is deliberately untouched: adoption and the projection filter read it, and
+  the plugin's own Lead check calls `ctx.agentTeams.tryMembership`.
+- **The two existing patch entries survived.** `compaction-basic` is still `disabled: false` and the insert
+  still names `dsh-team`; `scripts/check.mjs` passes. The check does not pin the new disable — it pins only
+  the compaction row and the insert — so the row id and the tool list were read from the installed bundle's
+  own patch (`dsh-experimental-agent-team-profile/cordis.patch.yml`), the same text the change brief
+  quoted.
+- **P4-04 is `docs/upstream-lifecycle-gap.md`.** It states the gap in paste-ready form for a
+  `dsh-experimental-agent-team` issue: the closed phases and the permanent projection failure
+  (ADR 0001:13-16), the never-shrinking budget and permanently taken names (ADR 0001:17-20), the absent
+  completion notice (`docs/architecture-en.md:616`), the absent Session-deletion API
+  (ADR 0011:18-26), and the rename rule that freezes stored names (ADR 0014:35-50). Section 3 says what
+  this plugin works around rather than what upstream should build, and section 5 is the one short
+  suggestions section. It is registered in both indexes and P4-04 is ticked; opening the issue itself is
+  the owner's action.
+- **The README pair's Status block was rewritten**, because it still said v0.13.1 while the package was
+  0.13.2 and it grouped live and unit-only facts loosely. It now names v0.14.0, lists the verified-live
+  results per release with the observations from the author's profile (v0.9.0 sweep, v0.11.0 template,
+  v0.12.0 spawn options, v0.13.2 task board), records the two failures only a live install could show —
+  v0.12.0 installed and did not activate until a schema keyword was removed, and v0.13.0's replacement
+  returned a host-refused result until 0.13.2 declared the fields — each now covered by
+  `scripts/check.mjs` and `tests/entry.test.mjs` respectively, and keeps only what is honestly unit-tested,
+  including the changed tool surface itself.
+- **The documents that described the coexistence were corrected.** The README pair ("What it is",
+  "Model-facing only", install verification), `docs/architecture-en.md`/`-zh.md` (§1 now says three things,
+  §2 gains v0.14, and §2.3, §4.1, §4.5 and §6 stop saying the shipped tools stay enabled), and `index.js`'s
+  header comment. The shipped roster's service is still mounted and `list_members` still reports the
+  members it created; only its tools are gone.
+- **How this change was verified.** `node scripts/check.mjs` passes after the last edit;
+  `node --check index.js actions.js roster.js trash.js host-hooks.js` exits clean; and
+  `node --test --test-isolation=none tests/*.test.mjs` is 130 tests, 130 passing, with no test edited. The
+  bilingual pairs were measured before and after rather than assumed: the README pair had 14 `##` headings
+  and 116 distinct backtick identifiers on each side with identical sets before, and 14 headings and 129
+  identifiers on each side with identical sets after; the index pair went from 5 headings and 33
+  identifiers per side to 5 and 34, sets still identical; the architecture pair moved from 234/231 to
+  238/235 and kept its pre-existing localised code spans (formulas and host spellings) as the only set
+  difference.
+- **What stays unverified.** No install and no `plugin_manager` call was made. The changed tool surface is
+  therefore unproven in the only place it can be observed: that a Lead's real tool list no longer contains
+  `spawn_teammate`/`send_message`/`list_agents`/`interrupt_agent`/`wait_agent`/`team_task_*` and does
+  contain this plugin's nine tools. That needs the owner's install and a `listTools` read. The patch is
+  also new to a real composition: a profile that does not mount the experimental team bundle has no
+  `tool-agent-team` row, where the Loader is expected to warn about the target and skip the entry.
+- **Version.** `0.14.0`: the model's tool surface changes, so this is not a documentation-only patch.
