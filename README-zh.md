@@ -4,19 +4,20 @@
 
 > 只是换人，不是换活。
 
-一个 DeepSeek Harness 的 profile bundle，专补官方智能体花名册做不到的那件事：让成员离场。Lead 可以退役成员、从自己掌控的回收站把它恢复回来，也可以换成一位继任者——继任者接手 assignment、当时正在推进的工作，以及指向共享任务板的指针。花名册归本插件所有，没有浏览器半区。
+一个 DeepSeek Harness 的 profile bundle，专补官方智能体花名册做不到的那件事：让成员离场。Lead 可以退役成员、从自己掌控的回收站把它恢复回来，也可以换成一位继任者——继任者接手 assignment、当时正在推进的工作，以及指向 Lead 自有任务板的指针。花名册归本插件所有，没有浏览器半区。
 
 [github.com/FrozenYty/dsh-team](https://github.com/FrozenYty/dsh-team)
 
 ## 插件是什么
 
-一个 Host 插件加一条 bundle 补丁：补丁插入 `dsh-team`，并启用官方默认关闭的 `compaction-basic` 行；插件不导入任何 Harness 包、不写会话事件，状态存放在以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。名称在 v0.10.0 改过；存储域、补丁行 id 与回收站目录刻意没有跟着改（ADR 0014）。
+一个 Host 插件加一条 bundle 补丁：补丁插入 `dsh-team`，启用官方默认关闭的 `compaction-basic` 行，并禁用官方的 `tool-agent-team` 行；插件不导入任何 Harness 包、不写会话事件，状态存放在以 Lead 会话 id 为键的 `storageDomain` 域里（ADR 0003）。官方的团队**服务**行（`agent-team`）保持挂载，因为收养与投影过滤都要读它。名称在 v0.10.0 改过；存储域、补丁行 id 与回收站目录刻意没有跟着改（ADR 0014）。
 
 ## 状态
 
-- 当前版本：v0.13.1。
-- 在作者本机 profile 上实测：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0，v0.6.0 复测）；回收站上限（v0.7.0）；可配置上限（v0.8.0），配置值生效，越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`。
-- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护、“仍在运行的成员永不被清扫”这一条，以及 spawn 选项——普通 spawn 发出的 request 逐字段一致、每个字段都被转发、Host 能力门拒绝时变成带类型的拒绝，以及陈旧 target 的拒绝指出的活持有者（v0.12.0）；还有任务板——写入时的两处上限、[docs/architecture-zh.md](docs/architecture-zh.md) §4.3.2 矩阵中每个事件的交接，以及“没有任务的成员仍得到与以前完全相同的交接书”（v0.13.0）。
+- 当前版本：v0.14.0。
+- **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
+- **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限，以及真机没走到的交接矩阵格子；还有从 v0.14.0 起的工具面本身——官方花名册工具是否真的从 Lead 的工具列表里消失、这九个工具是否顶替了它们，这需要所有者安装后用 `listTools` 验证。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -108,6 +109,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 与 `trash_path`；
 - `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；当前任有未完成任务时，结果还会用 `transferred` 报告数量与 id，继任者的交接书里也会点名它们；
 - `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
+- Lead 的工具列表里有本插件的工具，而没有 `spawn_teammate`、`send_message`、`list_agents`、`interrupt_agent`、`wait_agent` 或官方的 `team_task_*` 工具；
 - `include:compaction-basic` 的状态是 `schema`，而不是 `inactive`。
 
 ## 配置
@@ -131,6 +133,8 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 ## 只面向模型
 
 没有浏览器半区、没有 HTTP 桥、没有客户端 bundle；v0.3 的设置页面板从未真正渲染，实际也点不动，因此选择移除而不是修复（ADR 0008）。`list_members` 就是控制面：它覆盖官方花名册的成员，以及用官方 `subagent` 工具启动的每个子代理，其余六个工具可以寻址它返回的任意一行。
+
+补丁禁用了官方的团队工具行（P2-07），所以 Lead 的工具列表就是本插件自有的九个工具：`spawn_teammate`、`send_message`、`list_agents`、`interrupt_agent`、`wait_agent` 与官方的 `team_task_*` 工具都已不在。它们各自在这里有对应物——`spawn_member`、`message_member`、`list_members`、`stop_member` 与 `task_board`——只有 `wait_agent` 没有：本插件没有阻塞式等待，所以 Lead 改为重读 `list_members` 看实时状态、用 `message_member` 唤醒需要的成员，并把 `inactive` 读作“当前没有轮次在执行”，而不是“已完成”。官方花名册的**服务**仍然挂载（`agent-team` 行），因此 `list_members` 依旧报出它创建的成员；消失的只是它的工具。
 
 ## 开发
 
