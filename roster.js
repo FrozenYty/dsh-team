@@ -50,6 +50,36 @@ export const TRASH_STATE = {
   pruned: 'pruned',
 }
 
+/**
+ * Task status. A task is open work or finished work; there is no third state and no priority, because
+ * P2-09 is about handing work over, not about tracking it (ADR 0017).
+ */
+export const TASK_STATUS = {
+  open: 'open',
+  done: 'done',
+}
+
+/**
+ * Cap on a task title, refused rather than truncated, exactly like `LABEL_MAX`.
+ *
+ * 200 is not a new number: the roster already bounds its two model-written display strings at 200 — a
+ * member label and a task title are the same kind of text, and the shipped team roster bounds a member
+ * description at the same number. A longer "title" is prose, and prose belongs in the member's
+ * `assignment`, which has its own, larger cap.
+ */
+export const TASK_TITLE_MAX = 200
+
+/**
+ * Cap on the tasks one Lead's roster may hold, refused rather than truncated.
+ *
+ * The unit is the whole `tasks` array, `done` entries included, because the array is what the single-file
+ * domain rewrite pays for on every spawn, retirement and task write. 200 is an order of magnitude above a
+ * plausible handover backlog and two orders above the largest brief this plugin renders (5 tasks, §4.4),
+ * so it is a safety bound rather than a working limit. It matches nothing else in the repository on
+ * purpose: the label cap bounds one string, this bounds a list.
+ */
+export const TASK_LIMIT = 200
+
 /** Model-facing name rules, mirroring what the Harness accepts for child names. */
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
 
@@ -196,6 +226,120 @@ export function usableHandoffTemplate(stored) {
  */
 const ADDRESSABLE = new Set([PHASE.provisioning, PHASE.active])
 
+/**
+ * Validate and normalize a task title.
+ * Throws rather than truncating, like `checkLabel`: a title the model did not write is one the Lead
+ * cannot recognise in the handover list a successor is briefed with.
+ * @param {unknown} value - the model-supplied title.
+ * @param {string} source - operation name, so the thrown message names what refused.
+ * @returns {string} the title, trimmed.
+ */
+export function checkTaskTitle(value, source = 'task') {
+  if (typeof value !== 'string') throw new Error(`${source}: title must be a string`)
+  const text = value.trim()
+  if (text.length === 0) throw new Error(`${source}: title must be a non-empty string`)
+  if (text.length > TASK_TITLE_MAX) {
+    throw new Error(`${source}: title is ${text.length} characters; the cap is ${TASK_TITLE_MAX}`)
+  }
+  return text
+}
+
+/**
+ * The tasks a roster record holds, always as an array.
+ * A record written before P2-09 has no field at all, so "no tasks" is not a migration, it is the shape
+ * every earlier release produced (ADR 0017).
+ * @param {object} roster - one Lead's roster.
+ * @returns {object[]} its tasks.
+ */
+export function tasksOf(roster) {
+  return Array.isArray(roster.tasks) ? roster.tasks : []
+}
+
+/**
+ * Find one task by id.
+ * @param {object} roster - one Lead's roster.
+ * @param {string} taskId - the id a `list` row carried.
+ * @returns {object|undefined} the task, or undefined.
+ */
+export function findTask(roster, taskId) {
+  return tasksOf(roster).find((task) => task.id === taskId)
+}
+
+/** Replace one task in a roster by id. */
+export function withTask(roster, task) {
+  const index = tasksOf(roster).findIndex((candidate) => candidate.id === task.id)
+  const tasks = [...tasksOf(roster)]
+  if (index === -1) tasks.push(task)
+  else tasks[index] = task
+  return { ...roster, tasks }
+}
+
+/**
+ * Build the task a create call stores, refusing past the per-Lead cap.
+ *
+ * The cap is checked here, against the roster the write will land on, because that is the one place both
+ * the current list and the new entry are known. Refused rather than truncated or silently dropped: a task
+ * the model wrote is either stored or the call says why.
+ * @param {object} roster - the Lead's current roster.
+ * @param {{title: unknown, owner?: string}} request - the model-supplied title and optional owner.
+ * @param {string} source - operation name, for the refusal message.
+ * @returns {object} the task to store.
+ */
+export function planTask(roster, { title, owner }, source = 'task_board') {
+  const text = checkTaskTitle(title, source)
+  const tasks = tasksOf(roster)
+  if (tasks.length >= TASK_LIMIT) {
+    throw new Error(
+      `${source}: this Lead's roster already holds ${tasks.length} tasks; the cap is ${TASK_LIMIT}. Set finished tasks to done and delete the ones nobody needs, then create this one.`,
+    )
+  }
+  const task = {
+    id: randomUUID(),
+    title: text,
+    status: TASK_STATUS.open,
+    created_at: new Date().toISOString(),
+  }
+  if (typeof owner === 'string' && owner.length > 0) task.owner = owner
+  return task
+}
+
+/**
+ * The open tasks one member target owns, oldest first: what a replacement hands over and what a
+ * retirement without a successor leaves unowned (§4.3, ADR 0017).
+ * @param {object} roster - one Lead's roster.
+ * @param {string} target - the model-facing target whose open tasks are wanted.
+ * @returns {object[]} open tasks owned by that target.
+ */
+export function openTasksOf(roster, target) {
+  return tasksOf(roster).filter((task) => task.status === TASK_STATUS.open && task.owner === target)
+}
+
+/**
+ * Re-address every open task one target owns, or clear its owner when `to` is undefined.
+ *
+ * The re-address and the owner-clear are one mutation on purpose: a transfer that moved only half the
+ * list would leave work pointing at a tombstone with no way to tell which half. `done` tasks are never
+ * touched in either direction — finished work is the predecessor's record, not the successor's backlog.
+ * @param {object} roster - one Lead's roster.
+ * @param {string} from - the target whose open tasks move.
+ * @param {string|undefined} to - the successor target, or undefined to leave them unowned.
+ * @returns {{roster: object, moved: string[]}} the next roster and the ids that moved.
+ */
+export function reownerTasks(roster, from, to) {
+  const moved = []
+  const tasks = tasksOf(roster).map((task) => {
+    if (task.status !== TASK_STATUS.open || task.owner !== from) return task
+    moved.push(task.id)
+    if (to === undefined) {
+      const next = { ...task }
+      delete next.owner
+      return next
+    }
+    return { ...task, owner: to }
+  })
+  return { roster: { ...roster, tasks }, moved }
+}
+
 /** Validate one roster record. Throws on anything the roster cannot represent. */
 function parseRoster(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -212,6 +356,28 @@ function parseRoster(value) {
   // `handoffTemplateProblem`), never guessed at when the brief is composed.
   if (value.handoffTemplate !== undefined && typeof value.handoffTemplate !== 'string') {
     throw new Error('roster.handoffTemplate must be a string')
+  }
+  // The P2-09 field. Every check here is structural and none depends on a stored content rule, because
+  // the storage facility validates every record of every Lead when it opens the domain: a `title` that is
+  // merely too long, or a list past the write-time cap, must load and be handled on read (ADR 0017), or
+  // one Lead's stale task list would hide every roster in the profile.
+  if (value.tasks !== undefined) {
+    if (!Array.isArray(value.tasks)) throw new Error('roster.tasks must be an array')
+    const taskIds = new Set()
+    for (const task of value.tasks) {
+      if (task === null || typeof task !== 'object' || Array.isArray(task)) {
+        throw new Error('roster task must be an object')
+      }
+      if (typeof task.id !== 'string' || task.id.length === 0) throw new Error('roster task needs an id')
+      if (typeof TASK_STATUS[task.status] !== 'string') {
+        throw new Error(`roster task status "${String(task.status)}" is unknown`)
+      }
+      if (task.owner !== undefined && (typeof task.owner !== 'string' || task.owner.length === 0)) {
+        throw new Error('roster task owner must be a non-empty string')
+      }
+      if (taskIds.has(task.id)) throw new Error(`roster task id "${task.id}" appears twice`)
+      taskIds.add(task.id)
+    }
   }
   const targets = new Set()
   for (const member of value.members) {
