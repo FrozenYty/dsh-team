@@ -78,7 +78,7 @@ if (manifest !== undefined) {
 
 // 2. Host half: every published module imports no @deepseek-ai package (ADR 0002), and the entry
 //    exports the plugin face. Syntax is checked by `node --check` in CI, not here.
-const hostModules = ['index.js', 'actions.js', 'roster.js', 'trash.js', 'host-hooks.js']
+const hostModules = ['index.js', 'actions.js', 'roster.js', 'definitions.js', 'trash.js', 'host-hooks.js']
 const publishedFiles = new Set((manifest?.files ?? []).map((entry) => entry.replace(/^\.\//, '')))
 for (const module of hostModules) {
   const text = read(module)
