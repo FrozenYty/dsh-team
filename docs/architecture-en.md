@@ -181,8 +181,10 @@ subagent tree and process-local; draining a child releases its slot.
 
 **Request composition.** The plugin sends `{ prompt, parent }` plus the optional fields the model named
 through `spawn_member.spawn_options` (§4.5): `cwd`, `agentOptions` and `agentPreset`. Every field omitted
-means the member inherits the Lead's value, so a spawn that names none composes exactly the request it
-always did — a test pins the exact object. `cwd` is forwarded verbatim: the seam resolves a relative
+means the member inherits the Lead's value, and one exception is recorded here because the rule reads as
+total without it: a changed `provider` or `model` without `reasoningEffort` lets the new route resolve its
+own default rather than inheriting the Lead's effort. A spawn that names none composes exactly the request
+it always did — a test pins the exact object. `cwd` is forwarded verbatim: the seam resolves a relative
 path against the parent's cwd (`resolveDirectory`), and a child keeps the parent's permission roots, so a
 directory outside the sandbox grant stays denied; a plugin that pre-resolved the path would disagree with
 the Host. The two capability gates belong to the provider: `agentOptions` requires
@@ -548,7 +550,7 @@ the Lead, so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` or `agent_preset`; an omitted field inherits the Lead's value, and the result reports what was applied in `started_with`. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default — and `started_with` reports back what the plugin forwarded, not what the child resolved. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error (ADR 0016). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
 | `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |

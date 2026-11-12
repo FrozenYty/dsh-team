@@ -20,7 +20,7 @@ storage domain, the patch row id and the trash directory did not, on purpose (AD
 
 ## Status
 
-- Current version: v0.13.0.
+- Current version: v0.13.1.
 - Verified live: retirement, restore, message, stop, and a replacement whose successor finished the
   predecessor's task (v0.5.0, v0.6.0); the trash cap (v0.7.0); the configurable cap (v0.8.0), applied and
   refused at load; the ephemeral sweep (v0.9.0), where two ephemeral members finished, the next
@@ -64,13 +64,17 @@ that is a move rather than a deletion.
 | `task_board` | This Lead's own work board: `create`, `list`, `update`, `release` or `delete` a task by its `action`. A task has an id, a title, `open` or `done`, and an optional member `owner`; the open ones move with a replacement. |
 
 **A member can start somewhere else, on another model, with fewer tools.** `spawn_member.spawn_options`
-forwards three things the Harness already supports, and every field omitted inherits the Lead's value:
-`cwd` for a separate checkout or worktree (a relative path resolves against the Lead's directory, and the
-child keeps the Lead's permission roots, so a directory outside the sandbox grant stays denied),
-`agent_options` for a cheaper model, another provider or a token limit, and `agent_preset` for a narrower
+forwards three things the Harness already supports, and every field omitted inherits the Lead's value —
+with one exception: `provider` or `model` without `reasoning_effort` lets the new route resolve its own
+default instead. `cwd` selects a separate checkout or worktree (a relative path resolves against the
+Lead's directory, and the child keeps the Lead's permission roots, so a directory outside the sandbox
+grant stays denied); `agent_options` carries `provider`, `model`, `reasoning_effort` and `max_tokens`,
+the last a token limit and the place a cheaper model is chosen; and `agent_preset` selects a narrower
 tool set — the *only* route to a read-only member, because the Harness has no per-call tool allow/deny,
-and preset ids come from the profile's bundle patches rather than a directory path. The result reports
-what was applied in `started_with`; a start the Harness refuses comes back as `started: false` with a
+and preset ids come from the profile's bundle patches rather than a directory path. `started_with` is a
+receipt for what the plugin forwarded, not a confirmation of what the child resolved: it echoes the
+supplied fields unresolved and unread, so a model choice has to prove itself on the member's first
+request, not on this field. A start the Harness refuses comes back as `started: false` with a
 reason and the way out; and a refusal for a stale target names the live holder of that name in
 `current_holder`, so a Lead whose member was replaced can retarget the old name.
 
