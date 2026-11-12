@@ -55,7 +55,7 @@ target; the Lead remains the board's only writer; and the handoff pointer names 
 6. **The board keeps exactly one writer, the Lead.** A member that finishes a task says so in its report;
    the Lead closes the row with `task_board`. The alternative — a status parameter on this tool — was
    rejected because the board's guarantees are properties of one serialized writer: a handover is one
-   mutation that re-addresses rows before a tombstone, the transfer matrix (§4.3.2) is answerable because
+   mutation that re-addresses rows before a tombstone, the transfer matrix (`docs/task-board-en.md` §2) is answerable because
    every transition has exactly one owner, and `release`/`delete` can rely on the premise they read. A
    member write would need a second authority rule, a second compare-and-set story against that
    handover, and a reviewer who cannot tell "the member marked its own work done" from "the Lead accepted

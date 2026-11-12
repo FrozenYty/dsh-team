@@ -70,7 +70,7 @@ Three decisions had to be made together, because each constrains the others:
   through a trash move the model has to know about.
 - **An `assign_member` tool.** A fourth write tool whose whole parameter set is one string; the update
   belongs where the new work is given.
-- **A brief the member writes before it is retired** (`docs/architecture-en.md` §4.4 as first drafted).
+- **A brief the member writes before it is retired** (`docs/member-lifecycle-en.md` §3 as first drafted).
   It costs a model round-trip on a member that may be unresponsive or already failed, which is exactly
   when a handoff is needed. It remains a candidate for P4-02, alongside the stored template.
 - **A per-member brief file.** A second artifact to keep in sync with the record that already holds the

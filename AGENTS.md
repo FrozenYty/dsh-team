@@ -80,7 +80,7 @@ the user's decision.
 **8. Specify the state matrix before you write the code.** The roster is a state machine, and a lifecycle
 bug is a cell nobody filled in: a retire that races a spawn, a message to a member that has been removed,
 a replacement whose predecessor still owns a task. Write the phases, the events, and the cell each pair
-lands in — in `docs/architecture-en.md`, not in a comment — before implementing the transition.
+lands in — in `docs/member-lifecycle-en.md`, not in a comment — before implementing the transition.
 
 ## 5. Rules of the shared repository
 

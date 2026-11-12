@@ -274,4 +274,4 @@ Node 24 的要求以及 `--test-isolation=none` 为何不可省略，见上面�
 
 ## 文档与参与
 
-[docs/INDEX-zh.md](docs/INDEX-zh.md) 是文档地图；设计文档在 [docs/architecture-zh.md](docs/architecture-zh.md)；难以回退的决策在 [docs/adr/](docs/adr/)。AI 助手请先读 [AGENTS.md](AGENTS.md)；分支、提交与 CI 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+[docs/INDEX-zh.md](docs/INDEX-zh.md) 是文档地图；分层与已发布接口在 [docs/architecture-zh.md](docs/architecture-zh.md)，成员的一生在 [docs/member-lifecycle-zh.md](docs/member-lifecycle-zh.md)，工作板在 [docs/task-board-zh.md](docs/task-board-zh.md)，交接书在 [docs/handoff-zh.md](docs/handoff-zh.md)，存储记录在 [docs/roster-storage-zh.md](docs/roster-storage-zh.md)，难以回退的决策在 [docs/adr/](docs/adr/)。AI 助手请先读 [AGENTS.md](AGENTS.md)；分支、提交与 CI 要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。

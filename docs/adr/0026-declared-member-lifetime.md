@@ -39,14 +39,14 @@ Three defects made it worse than an unkept promise:
   `@deepseek-ai/dsh-experimental-agent-team/README.md:62` states what the word means for a member:
   `inactive` is "no turn is executing, whether loaded or stored". So it describes residency, not an
   outcome — it is exactly as true of a child that has not run yet as of one that has finished. There is no
-  completion signal in this Harness (`docs/architecture-en.md` §4.3, ADR 0013), and the same README makes
+  completion signal in this Harness (`docs/member-lifecycle-en.md` §1, ADR 0013), and the same README makes
   no promise that a member marks anything done.
 - The upstream Claude Code agent-teams feature documents the matching failure in its own troubleshooting
   guidance: teammates do not reliably mark their tasks completed, and the work has to be checked rather
   than inferred from the board. That guidance is why "the board is empty" cannot be read as "the work is
   done": a row's absence is evidence of nobody having written it, which is the same fact whether the work
   finished or the member never got to it.
-- This repository's own board already refuses to pretend otherwise: a done row never moves (§4.3.2), a
+- This repository's own board already refuses to pretend otherwise: a done row never moves (`docs/task-board-en.md` §2), a
   member never writes the board (ADR 0022), and only the Lead closes a row.
 
 ## Decision

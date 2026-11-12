@@ -179,6 +179,10 @@ const pairs = [
   ['README.md', 'README-zh.md'],
   ['docs/INDEX-en.md', 'docs/INDEX-zh.md'],
   ['docs/architecture-en.md', 'docs/architecture-zh.md'],
+  ['docs/member-lifecycle-en.md', 'docs/member-lifecycle-zh.md'],
+  ['docs/task-board-en.md', 'docs/task-board-zh.md'],
+  ['docs/handoff-en.md', 'docs/handoff-zh.md'],
+  ['docs/roster-storage-en.md', 'docs/roster-storage-zh.md'],
 ]
 for (const [english, chinese] of pairs) {
   if (!existsSync(join(root, english))) fail(`${english}: missing (bilingual pair)`)

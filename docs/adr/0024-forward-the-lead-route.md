@@ -157,7 +157,7 @@ member's recorded route is no longer the Lead's.**
   Session route is readable: it now sends the two route fields. Both requests are the same route for the
   child; the difference is who states it. `tests/spawn-capabilities.test.mjs`'s exact-request assertion now
   covers the unresolvable case, which is the one where the request is unchanged.
-- The README pair, `docs/architecture-en.md` §2.6 and §4.2, and `docs/architecture-zh.md` state the
+- The README pair, `docs/architecture-en.md` §2.5 and `docs/roster-storage-en.md` §1, and `docs/architecture-zh.md` state the
   behaviour, and the README's member section names the replacement as the way to clear a stale member.
 - The version moves to `0.22.0`.
 - The live check stays the owner's: a member spawned in a real profile and the route on **its own**

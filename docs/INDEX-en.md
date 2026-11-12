@@ -16,8 +16,12 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 1. `README.md` — what the plugin is and how to install it.
 2. `PLAN.md` — the only task source. Open work lives here.
 3. `PROGRESS.md` — why the current state looks like this. Append-only.
-4. `docs/architecture-en.md` — how the pieces fit, including the roster state matrix.
+4. `docs/architecture-en.md` — the layers, the Harness substrate, the released surface and the risks.
 5. `docs/adr/` — the decisions that are expensive to reverse.
+
+A design subject is its own document rather than a section of `architecture-`: a member's life is
+`docs/member-lifecycle-en.md`, the work board `docs/task-board-en.md`, the brief and its template
+`docs/handoff-en.md`, and the stored record with its retention `docs/roster-storage-en.md`. §2 is the map.
 
 ## 2. Document map
 
@@ -27,7 +31,11 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | What is left to do, and what does done mean? | `PLAN.md` | English |
 | What changed recently, and why? | `PROGRESS.md` | English |
 | What did each release contain, at release level? | `CHANGELOG.md` | English |
-| How do agents and the roster fit together? | `docs/architecture-en.md` | pair |
+| What are the layers, the Harness substrate, the released surface and the risks? | `docs/architecture-en.md` | pair |
+| How does a member move between phases, and what do a retirement and a replacement do? | `docs/member-lifecycle-en.md` | pair |
+| What does the work board do, and where does open work go on a replace? | `docs/task-board-en.md` | pair |
+| How is a successor briefed, and which template wins? | `docs/handoff-en.md` | pair |
+| What is stored, and how is the trash bounded? | `docs/roster-storage-en.md` | pair |
 | Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
 | Why does the bundle entry import nothing? | `docs/adr/0002-zero-import-bundle-entry.md` | English |
 | Where does the roster live? | `docs/adr/0003-roster-storage.md` | English |
@@ -62,7 +70,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 When two documents disagree, the later one wins in this order:
 
 1. an accepted ADR,
-2. `docs/architecture-en.md`,
+2. the design documents (`docs/architecture-en.md` with `docs/member-lifecycle-en.md`,
+   `docs/task-board-en.md`, `docs/handoff-en.md` and `docs/roster-storage-en.md`),
 3. `PLAN.md`,
 4. `README.md`,
 5. `PROGRESS.md` (a historical record — it describes what was true then, and is never corrected).
@@ -74,21 +83,22 @@ Harness disagree, the repository is wrong.
 
 | If you change | Also update |
 |---|---|
-| a tool name, parameter or result field | `docs/architecture-en.md` §2 or §4.5, `actions.js`, `README.md` + `README-zh.md`, `PLAN.md` task text |
-| which scope receives a tool, or what a member may read | `index.js`, `actions.js`, `docs/architecture-en.md` §4.5 and §4.5.2, `README.md` + `README-zh.md`, ADR 0022 |
-| an operation's behaviour or failure reason | `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §4 |
-| what adoption covers, or the discovery-row shape it consumes | `actions.js`, `roster.js`, `docs/architecture-en.md` §4.5.1, `README.md` + `README-zh.md` |
-| a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |
-| a member's lifetime, what may veto a sweep, or what a retirement must carry | `docs/architecture-en.md` §4.3.1, `roster.js`, `actions.js`, the tool schemas in `index.js`, `README.md` + `README-zh.md`, ADR 0026 |
-| the transfer rule — what happens to a member's open tasks on replace, retire or restore | the transfer matrix in `docs/architecture-en.md` §4.3.2, `actions.js`, `README.md` + `README-zh.md`, ADR 0017 |
-| a task row's `body`, or how a board write is built from the stored record | `roster.js`, `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §4.2 and §4.3.2, `README.md` + `README-zh.md`, ADR 0020 |
-| the member-definition format, the accepted frontmatter subset or the `team/` path | `definitions.js`, `docs/architecture-en.md` §4.6, `README.md` + `README-zh.md`, ADR 0018 |
-| the team-file format, the reserved `team.md` name, the three template sources or the write refusal | `definitions.js`, `actions.js`, `index.js`, `docs/architecture-en.md` §4.4 and §4.7, `README.md` + `README-zh.md`, ADR 0021 |
-| which source wins for a definition field on a replace, or what a file may declare about a member's lifetime | the definition matrix in `docs/architecture-en.md` §4.3.3, `actions.js`, `index.js`, ADR 0019, ADR 0026 |
+| a tool name, parameter or result field | `docs/architecture-en.md` §2 or §5, `actions.js`, `README.md` + `README-zh.md`, `PLAN.md` task text |
+| which scope receives a tool, or what a member may read | `index.js`, `actions.js`, `docs/architecture-en.md` §5 and §5.2, `README.md` + `README-zh.md`, ADR 0022 |
+| an operation's behaviour or failure reason | `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §5 |
+| what adoption covers, or the discovery-row shape it consumes | `actions.js`, `roster.js`, `docs/architecture-en.md` §5.1, `README.md` + `README-zh.md` |
+| a roster phase or transition | the state matrix in `docs/member-lifecycle-en.md` §1, and the ADR if the model changed |
+| a member's lifetime, what may veto a sweep, or what a retirement must carry | `docs/member-lifecycle-en.md` §2, `roster.js`, `actions.js`, the tool schemas in `index.js`, `README.md` + `README-zh.md`, ADR 0026 |
+| the transfer rule — what happens to a member's open tasks on replace, retire or restore | the transfer matrix in `docs/task-board-en.md` §2, `actions.js`, `README.md` + `README-zh.md`, ADR 0017 |
+| a task row's `body`, or how a board write is built from the stored record | `roster.js`, `actions.js`, the tool schema in `index.js`, `docs/task-board-en.md` §1 and §3, `README.md` + `README-zh.md`, ADR 0020 |
+| the member-definition format, the accepted frontmatter subset or the `team/` path | `definitions.js`, `docs/architecture-en.md` §6, `README.md` + `README-zh.md`, ADR 0018 |
+| the team-file format, the reserved `team.md` name, the three template sources or the write refusal | `definitions.js`, `actions.js`, `index.js`, `docs/handoff-en.md` §1 and §2, `README.md` + `README-zh.md`, ADR 0021 |
+| which source wins for a definition field on a replace, or what a file may declare about a member's lifetime | the definition matrix in `docs/architecture-en.md` §6.1, `actions.js`, `index.js`, ADR 0019, ADR 0026 |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
-| the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
+| the durable record shape | `docs/roster-storage-en.md` §1, a new ADR, and a migration note in `PROGRESS.md` |
 | the projection exits, what the shipped team panel or the shipped `list_agents` read shows, or whether a host hook installs | `host-hooks.js`, `index.js`, `docs/architecture-en.md` §2.4, `README.md` + `README-zh.md`, ADR 0023, ADR 0025 |
-| what route a member starts on, which source wins, or whether a straggler is flagged | `actions.js`, `roster.js`, the tool schemas in `index.js`, `docs/architecture-en.md` §2.6, §4.1, §4.2 and §4.5, `README.md` + `README-zh.md`, ADR 0024 |
+| what route a member starts on, which source wins, or whether a straggler is flagged | `actions.js`, `roster.js`, the tool schemas in `index.js`, `docs/architecture-en.md` §2.5 and §4, `docs/roster-storage-en.md` §1 and `docs/architecture-en.md` §5, `README.md` + `README-zh.md`, ADR 0024 |
+| the retention cap, or what a pruned tombstone keeps | `docs/roster-storage-en.md` §3, `trash.js`, `roster.js`, ADR 0011, ADR 0012 |
 | a document added, renamed or removed | this file and `INDEX-zh.md` |
 | the plugin's name or display title, or a patch row's `name` | `package.json`, `cordis.patch.yml`, `AGENTS.md`, `README.md` + `README-zh.md`, `docs/architecture-en.md` + `docs/architecture-zh.md`, a new ADR |
 | anything that alters the install procedure | `README.md` + `README-zh.md` |

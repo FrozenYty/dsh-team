@@ -56,7 +56,7 @@ board over; a retirement without a successor un-owns it and names it.**
    handle, because a task may legitimately sit on a tombstone until a successor arrives.
 3. **`done` never moves.** Finished work belongs to the record that finished it. Every handover, every
    retirement and every restore leaves `done` rows exactly as they are, which is what keeps the matrix in
-   §4.3.2 answerable in three columns.
+   `docs/task-board-en.md` §2 answerable in three columns.
 4. **One tool, `task_board`, with an `action` enum: `list`, `create`, `update`, `release`, `delete`.**
    The alternative was five `verb_noun` tools (`create_task`, `list_tasks`, …) at a cost of five names,
    five descriptions and five result schemas for one row shape and one refusal vocabulary. The enum is

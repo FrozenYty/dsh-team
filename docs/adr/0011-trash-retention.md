@@ -98,7 +98,7 @@ small, per-Lead, oldest-first, reported in the result, and irreversible for the 
 - Loading a record now validates `trashState`. Every value this plugin has ever written is in the enum,
   so no stored roster is refused by it; an unknown value is a bug worth failing loudly on rather than
   guessing at.
-- The record shape and the state matrix gain `pruned`; `docs/architecture-en.md` §4.2/§4.3/§4.4 carry it.
+- The record shape and the state matrix gain `pruned`; `docs/roster-storage-en.md` §1, `docs/member-lifecycle-en.md` §1 and §3 carry it.
 
 ## Migration
 

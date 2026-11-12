@@ -641,7 +641,11 @@ whole local gate.
 
 ## Documentation and contributing
 
-[docs/INDEX-en.md](docs/INDEX-en.md) is the document map; the design is
-[docs/architecture-en.md](docs/architecture-en.md); the ADRs are under [docs/adr/](docs/adr/).
+[docs/INDEX-en.md](docs/INDEX-en.md) is the document map; the layers and the released surface are
+[docs/architecture-en.md](docs/architecture-en.md), a member's life is
+[docs/member-lifecycle-en.md](docs/member-lifecycle-en.md), the work board is
+[docs/task-board-en.md](docs/task-board-en.md), the brief is [docs/handoff-en.md](docs/handoff-en.md),
+the stored record is [docs/roster-storage-en.md](docs/roster-storage-en.md), and the ADRs are under
+[docs/adr/](docs/adr/).
 [AGENTS.md](AGENTS.md) is for AI assistants; [CONTRIBUTING.md](CONTRIBUTING.md) covers branches, commits
 and CI.
