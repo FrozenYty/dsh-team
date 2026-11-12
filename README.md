@@ -22,7 +22,7 @@ directory did not, on purpose (ADR 0014).
 
 ## Status
 
-- Current version: v0.25.1.
+- Current version: v0.25.2.
 - **Verified live**, in the author's profile with this bundle installed: retirement, restore, message,
   stop, and a replacement whose successor finished the predecessor's task (v0.5.0, v0.6.0); the trash cap
   (v0.7.0) and the configurable cap (v0.8.0), applied and refused at load; the ephemeral sweep (v0.9.0) —

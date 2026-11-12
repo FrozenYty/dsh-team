@@ -440,3 +440,18 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   SHA-256 `69C1F7DA94F593CA2C9175B6C53DD9D136CBD952295C9491897E33322A6FF42A` on both sides). The live
   refusal and the live housekeeping retirement are the owner's install check.
 
+- [x] **P4-15** The bilingual-pair check is a rule over `docs/`, not a list of pairs (v0.25.2).
+  Done when a new `docs/foo-en.md` without `foo-zh.md` fails the check by name in either direction, a
+  deliberate single-language document cannot pass unless it is declared with a reason, `*-en-zh.md` is
+  proven to hold both languages rather than merely named so, root documents are handled explicitly rather
+  than falling through the scan, and the rule is stated in `CONTRIBUTING.md`.
+  Delivered (the external review's §3): `scripts/check.mjs` classifies every top-level `docs/*.md` and fails
+  the ones it cannot, with `SINGLE_LANGUAGE_DOCS` as the only escape — one entry today,
+  `upstream-lifecycle-gap.md`, because that document is the issue-ready statement of the gap addressed to the
+  English-language upstream tracker. The allow-list was chosen over a naming convention because it carries
+  the reason, fails closed, and detects a stale entry. Only `scripts/check.mjs` and `CONTRIBUTING.md`
+  changed; no `docs/` file was touched, which leaves the parallel split of `docs/` to be classified by the
+  new rule when it lands. All four branches were proved able to fail by temporary probes that each named
+  their file, and `scripts/check.mjs` hashed
+  `A98F2B9F2BAE655F2E92DAC2AB442698A0F95436ECD4F9B05913FE90FB6FA4BB` before and after the probe session.
+
