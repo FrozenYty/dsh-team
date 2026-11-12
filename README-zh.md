@@ -14,9 +14,9 @@
 
 ## 状态
 
-- 当前版本：v0.12.0。
+- 当前版本：v0.13.0。
 - 在作者本机 profile 上实测：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0，v0.6.0 复测）；回收站上限（v0.7.0）；可配置上限（v0.8.0），配置值生效，越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`。
-- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护、“仍在运行的成员永不被清扫”这一条，以及 spawn 选项——普通 spawn 发出的 request 逐字段一致、每个字段都被转发、Host 能力门拒绝时变成带类型的拒绝，以及陈旧 target 的拒绝指出的活持有者（v0.12.0）。
+- 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护、“仍在运行的成员永不被清扫”这一条，以及 spawn 选项——普通 spawn 发出的 request 逐字段一致、每个字段都被转发、Host 能力门拒绝时变成带类型的拒绝，以及陈旧 target 的拒绝指出的活持有者（v0.12.0）；还有任务板——写入时的两处上限、[docs/architecture-zh.md](docs/architecture-zh.md) §4.3.2 矩阵中每个事件的交接，以及“没有任务的成员仍得到与以前完全相同的交接书”（v0.13.0）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -38,6 +38,7 @@
 | `restore_member` | 把回收站里的会话移回记录的原始路径，记录转回 `active`；产物已被剪除时给出带类型的拒绝。 |
 | `compact_member` | 对驻留且空闲的成员强制压缩一次，返回 `done`、`busy`、`not-resident`、`nothing-to-compact` 或 `failed`。 |
 | `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取已存的那份，传入模板即保存，传空串则回到内置版本。 |
+| `task_board` | 该 Lead 自有的工作板：用 `action` 选择 `create`、`list`、`update`、`release` 或 `delete`。一条任务有 id、标题、`open` 或 `done`，以及可选的成员 `owner`；未完成的任务会随替换一起过去。 |
 
 **成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值：`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 用于更便宜的模型、另一个 provider 或 token 上限；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。结果用 `started_with` 报告实际用了什么；Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
 
@@ -80,7 +81,9 @@ handoff-probe-g2（从未见过前任）回复：42
 
 ## 替换成员
 
-`spawn_member` 加 `replace: <target>` 就是完整的一次替换。继任者的提示词由前任的记录拼成：继任者自己的名字、前任的 target 与 label、记录在案的 assignment、前任已离场这一事实，以及按前任名字指向共享团队任务板的指针。除非模型重新记录，继任者继承该 assignment。
+`spawn_member` 加 `replace: <target>` 就是完整的一次替换。继任者的提示词由前任的记录拼成：继任者自己的名字、前任的 target 与 label、记录在案的 assignment、前任已离场这一事实，以及按 id 与标题列出的前任未完成任务。除非模型重新记录，继任者继承该 assignment。
+
+**退役会对工作做什么。** 工作不是一句话：从 v0.13.0 起，它是本插件自有任务板上的行，而这两个生命周期事件正是围绕它们展开的。替换会在退役前任的同一次调用里，把前任所有未完成任务转给继任者，并在继任者的交接书里点名——于是继任者拿到的是自己现在拥有的 id，而不是指向别人任务板的指针。相反，**没有**继任者的退役会让这些行保持 `open` 且无人认领，并用 `unowned` 连同 id 报告出来，因为工作依然欠着，只是现在没有人扛；`task_board` 的 `action: list` 会报告同一批任务，恢复则说明其中有多少还在等待认领。`done` 任务永不移动：已完成的工作留在完成它的那条记录上，而让任务不再被继承的，是 `task_board` 的 `action: update, status: done`。
 
 - **先启动继任者，再退役前任，都在同一次调用里。** 启动失败时前任原封不动，失败的预留会记成继任者的 `failed` 记录；退役失败则返回 `predecessor_retired: false`，再调一次 `retire_member` 即可收尾（ADR 0009）。目标已经退役时同样接受，由墓碑提供交接书。
 - **assignment 是持久字段，且有长度上限。** `spawn_member.assignment` 在启动时写入，`message_member.assignment` 在工作变化时替换，两者都限制在 1000 个字符以内，超长直接拒绝而不是截断；`list_members` 会报告它，墓碑也会保留它。
@@ -103,7 +106,7 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 - 补丁行以 `application: applied` 激活，没有告警；
 - 在 Lead 会话里可以调用 `list_members`，驻留成员带上下文压力；
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 与 `trash_path`；
-- `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；
+- `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；当前任有未完成任务时，结果还会用 `transferred` 报告数量与 id，继任者的交接书里也会点名它们；
 - `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
 - `include:compaction-basic` 的状态是 `schema`，而不是 `inactive`。
 

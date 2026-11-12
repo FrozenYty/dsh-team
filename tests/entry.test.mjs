@@ -177,6 +177,38 @@ test('spawn_member validates spawn_options and forwards it to the activation req
   assert.equal(table.get('lead-1').members[0].phase, 'active')
 })
 
+test('task_board validates its action surface and forwards it to the operation', async () => {
+  const { tools, lead, table } = harness()
+  const board = tools.get('task_board')
+  assert.ok(board, 'the board is registered on the Lead context')
+
+  await assert.rejects(() => board.execute({}, { agent: lead }), /action must be a non-empty string/)
+  await assert.rejects(() => board.execute({ action: 'open' }, { agent: lead }), /action must be one of/)
+  await assert.rejects(() => board.execute({ action: 'update' }, { agent: lead }), /update requires task_id/)
+  await assert.rejects(() => board.execute({ action: 'delete' }, { agent: lead }), /delete requires task_id/)
+  await assert.rejects(() => board.execute({ action: 'create' }, { agent: lead }), /create requires a non-empty title/)
+  await assert.rejects(
+    () => board.execute({ action: 'create', title: 'x', owner: 7 }, { agent: lead }),
+    /owner must be a member target or null/,
+  )
+  await assert.rejects(
+    () => board.execute({ action: 'create', title: 'x', status: 'later' }, { agent: lead }),
+    /status must be "open" or "done"/,
+  )
+
+  const created = await board.execute({ action: 'create', title: 'Finish the parser tests' }, { agent: lead })
+  assert.equal(created.action, 'create')
+  assert.equal(created.task.status, 'open')
+  assert.equal(table.get('lead-1').tasks.length, 1, 'the wrapper writes through to the roster record')
+  const listed = await board.execute({ action: 'list' }, { agent: lead })
+  assert.deepEqual(listed.tasks, [created.task])
+  const closed = await board.execute({ action: 'update', task_id: created.task.id, status: 'done' }, { agent: lead })
+  assert.equal(closed.task.status, 'done')
+  const removed = await board.execute({ action: 'delete', task_id: created.task.id }, { agent: lead })
+  assert.equal(removed.deleted, created.task.id)
+  assert.equal(table.get('lead-1').tasks.length, 0)
+})
+
 test('the loader path reads the trash cap from the config and refuses a bad one before registering anything', () => {
   // No config at all, and an empty config row: both are the documented default, not a failure.
   for (const config of [undefined, {}]) {

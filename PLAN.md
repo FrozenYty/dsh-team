@@ -80,11 +80,30 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Adoption made the shipped row unnecessary for removal, and disabling it today would remove the shared
   task board. Done when the shipped roster tools are absent from a Lead's tool list, the plugin's own
   task tools replace them, and nothing else regressed.
+  **P2-09 landed in v0.13.0, so this blocker is cleared.** The plugin's own board (`task_board`) now holds
+  a member's work and a replacement hands it over (§4.3.2, ADR 0017), so the shipped row is no longer the
+  only board. What remains for P2-07 is the row itself: the two rosters and the two boards coexist today
+  (§4.5), and disabling the shipped row is the change that ends the coexistence.
 - [x] **P2-08** Live end-to-end verification of a replaced member finishing its predecessor's task.
   Done when, in one session, a member is retired, a successor starts from a handoff brief, and the
   successor completes the predecessor's task without redoing it.
-- [ ] **P2-09** Own task board: create, list, read, compare-and-set, dependencies.
+- [x] **P2-09** Own task board: create, list, read, compare-and-set, dependencies.
   Done when the four task tools are served by this plugin and P2-07 can proceed.
+  Delivered (v0.13.0, ADR 0017) with three deliberate reductions, each recorded in that ADR's rejected
+  alternatives: **one** tool (`task_board`, an `action` enum of `list`/`create`/`update`/`release`/`delete`)
+  instead of four names, because the operations share one row shape and one refusal vocabulary; **read**
+  is `action: list`, so it does not need a tool of its own; and **compare-and-set is the transition
+  itself** — only `status` and `owner` can change, every action answers `changed: false` with the current
+  row when the write would change nothing, so re-running any action is safe and no separate guard
+  parameter is needed. **Dependencies are deliberately absent**: a task is `{ id, title, status, owner?,
+  created_at, updated_at? }`, and what a handover needs is what is still owed, not an ordering rule for it.
+  The transfer matrix is in `docs/architecture-en.md` §4.3.2: every cell is written down, including the two
+  half-failures, the already-retired predecessor, a retirement with no successor, restore, the ephemeral
+  sweep, and a reused owner name. Caps are refusals: 200 characters per title (`TASK_TITLE_MAX`) and 200
+  tasks per Lead (`TASK_LIMIT`). The brief carries the successor's inherited tasks by id and title, bounded
+  at 5 rows and 600 characters, and a member with no tasks still gets the byte-identical brief a test pins.
+  A bad stored task is reported on read, never thrown on load. The live tool call is the owner's
+  install check.
 - [x] **P2-10** Session trash: move a retired member's persisted session into a recoverable directory.
   Done when retirement reports `trashed` and a `trash_path`, and a missing artifact falls back to the
   workspace archive with a reported reason.

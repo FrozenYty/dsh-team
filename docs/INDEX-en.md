@@ -42,6 +42,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Why is the plugin called `dsh-team`, and which identifiers did not change? | `docs/adr/0014-plugin-name.md` | English |
 | Why is the handoff brief a stored template, and why is it one tool? | `docs/adr/0015-handoff-template.md` | English |
 | How does a member start with its own cwd, model or preset, and where does a stale name point now? | `docs/adr/0016-spawn-capabilities.md` | English |
+| Why does the plugin own the work board, and what moves when a member is replaced? | `docs/adr/0017-own-task-board.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
 
@@ -66,6 +67,7 @@ Harness disagree, the repository is wrong.
 | an operation's behaviour or failure reason | `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §4 |
 | what adoption covers, or the discovery-row shape it consumes | `actions.js`, `roster.js`, `docs/architecture-en.md` §4.5.1, `README.md` + `README-zh.md` |
 | a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |
+| the transfer rule — what happens to a member's open tasks on replace, retire or restore | the transfer matrix in `docs/architecture-en.md` §4.3.2, `actions.js`, `README.md` + `README-zh.md`, ADR 0017 |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |
 | the durable record shape | `docs/architecture-en.md` §4.2, a new ADR, and a migration note in `PROGRESS.md` |
 | a document added, renamed or removed | this file and `INDEX-zh.md` |
