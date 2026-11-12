@@ -192,6 +192,15 @@ const MEMBER_ROW = {
     // Present on a result whose sweep retired finished ephemeral members; absent otherwise.
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
+    // What a `replace` did to the predecessor's open tasks, and what a spawn-time sweep left unowned.
+    // They are declared here because `spawn_member` answers with this row: a property the operation
+    // returns but this schema does not declare is rejected by the host when the tool returns, which
+    // loses the result after the side effect already happened (v0.13.0 did exactly that with
+    // `transferred`). `tests/entry.test.mjs` now validates a real result against this schema.
+    transferred: { type: 'integer' },
+    transferred_tasks: { type: 'array', items: { type: 'string' } },
+    unowned: { type: 'integer' },
+    unowned_tasks: { type: 'array', items: { type: 'string' } },
     // A spawn the Harness refused: no child exists, the record is `failed`, and `reason` says what the
     // model can do about it. Absent on a start that happened.
     started: { type: 'boolean' },

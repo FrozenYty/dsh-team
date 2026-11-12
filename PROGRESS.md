@@ -810,3 +810,32 @@
   reinstalled, so the new `spawn_options` description has not been seen by a live model, and the
   `started_with` wording is a documentation claim about behaviour the unit tests already pin, not a new
   observation. The model-facing `started_with` field itself is unchanged.
+
+## 2026-11-12 - v0.13.0 answered a replacement with a result the host refused
+
+- **What happened.** The first live replacement on a member that owned an open task came back as a tool
+  error: `tool "spawn_member" returned invalid output: "value.transferred" is not a declared property
+  (additionalProperties: false)`. `MEMBER_ROW` did not declare `transferred`, `transferred_tasks`,
+  `unowned` or `unowned_tasks`, while the operation returns them: `RETIRE_VALUE` declared the same two
+  fields, and `spawn_member` answers with `MEMBER_ROW`. The host validates a result when the tool
+  returns, so the rejection arrives after the side effect: the replacement had already moved the
+  predecessor work and retired it (the board showed the task owned by the successor, and the
+  successor received a brief naming its id and title), while the model was told the call failed. A
+  lost result beside a completed side effect is worse than a refused call.
+- **Why 130 unit tests missed it.** They call `actions.js` and never pass through a declared output
+  schema; the schema is only exercised when the host validates the wrapper return, which needs a
+  running profile. Same shape as the v0.12.0 `minimum` failure: code and declaration disagreed, and
+  only the host compared them.
+- **The fix has two halves.** The four fields are declared on `MEMBER_ROW`. And
+  `tests/entry.test.mjs` now has `assertMatchesSchema` plus a test that drives real wrapper calls —
+  spawn, task create, list, a replacement that moves the work, task status change, template read — and
+  validates each answer against the schema its own tool declares, implementing the same subset
+  `scripts/check.mjs` enforces. **The test was proved against the un-fixed schema**: with the fields
+  restored it passes 8/8; with the fix stashed it fails with `spawn_member.transferred: not declared
+  in the output schema`, which is the host message in local form.
+- **Live verification of P2-09.** Before the schema fix, and after it, the transfer itself worked: a
+  created task, assigned to a member, moved to its successor in one `spawn_member` with `replace`, and
+  the successor quoted the brief it received, including `Open tasks it still owned:
+  0ed88592-... "Confirm the relay curve for the successor"`. That is the feature, observed end to end.
+- **Version.** `0.13.2`: `0.13.0` is installed and its `spawn_member` can still lose a replacement
+  result, so this is not a documentation-only patch.
