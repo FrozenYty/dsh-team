@@ -570,6 +570,9 @@ test('the file\'s cwd and model fields apply on a replace; the predecessor\'s st
     cwd: 'packages/call',
     agent_options: { provider: 'cheap-provider', model: 'call-model', max_tokens: 4096 },
     agent_preset: 'reader',
+    // The provider came from the file and the model from the call; either way the route is the caller's,
+    // so the plugin forwarded it rather than resolving one (ADR 0024).
+    route_source: 'caller',
   })
 })
 

@@ -348,3 +348,24 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   does not have). The suite pins all five shapes, the duplicate case, the strip-and-merge order, the
   no-op, the missing-child-id filter and the disposer; the rendered panel is the owner's install check.
 
+- [x] **P4-11** A member runs on the API of the Session that started it, and a straggler is visible (v0.22.0).
+  Done when a spawn that supplies no `spawn_options.agent_options` resolves the calling Lead's current
+  `provider` and `model` from its own Session and forwards them as the activation request's `agentOptions`;
+  an explicit caller option still wins and the result says which source the route had; `reasoningEffort` is
+  never added; a route that cannot be resolved, and a provider that does not advertise `agentOptions`, both
+  inherit exactly as before, report which of the two fallbacks ran, and never fail the spawn; the route is
+  recorded on the member record and reported on the `list_members` row; and a row whose recorded route
+  differs from the Lead's current one is flagged with a sentence naming the replacement that clears it,
+  while a matching one is not, a later match clears the flag, and an unreadable Lead route flags nobody.
+  Delivered (ADR 0024): `resolveSpawnRoute` reads `caller.session.requestHeader()?.config` — the seam's own
+  inheritance source — behind a type check and a `try`, and the provider probe is
+  `ctx.subagents.getProvider('spawn')?.capabilities.agentOptions === true`, so `UNSUPPORTED_CAPABILITY` is
+  never reached. The record field is `route` (`{ source, provider?, model?, select_reason? }`,
+  `source` = `caller` | `plugin` | `inherited`, `select_reason` = `no-session-route` |
+  `capability-absent`), validated structurally on load and optional for every pre-v0.22.0 record; the row
+  adds `route`, `route_stale` and `route_note`, and `started_with` gains `route_source`. The remedy is the
+  existing replacement (`spawn_member { replace }`), documented in the README pair, with no new tool.
+  `tests/route.test.mjs` covers the twelve cells and `tests/entry.test.mjs` validates the new fields against
+  the declared schemas; removing the forwarding makes the main test fail (verified before and after). The
+  route on a real child's own `request/header` is the owner's install check.
+

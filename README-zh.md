@@ -14,12 +14,13 @@
 
 ## 状态
 
-- 当前版本：v0.20.0。
-- **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
+- 当前版本：v0.22.0。
+- **在作者本机 profile（已安装本 bundle）上实测**：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0、v0.6.0）；回收站上限（v0.7.0）与可配置上限（v0.8.0），配置值生效、越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`；交接书模板（v0.11.0）——存下的模板带唯一标记，继任者原样复述整段初始消息（标记与代入后的字段都在），未知占位符被点名拒绝，不含 `{assignment}` 的模板被拒绝并给出理由，清除后回到内置交接书；`spawn_options`（v0.12.0）——成员在转发的 `cwd` 中启动并报回该目录，合法的 `agent_preset` 可以运行，未知 preset id 返回 `started: false` 与 `reason: preset-not-found` 并列出已声明的 id，换一个模型 id 可以运行并回复，不带选项的 spawn 不携带 `started_with`（那是当时的行为，也是 v0.22.0 改掉的那一条：现在这种 spawn 会报出 `started_with.route_source`）；任务板（v0.13.2）——任务被创建并由成员持有，带 `replace` 的 `spawn_member` 返回 `transferred: 1` 与任务 id、且前任已退役，继任者的交接书点出该 id 与标题，不带继任者的 `retire_member` 返回 `unowned: 1` 与 id。
+- **本版要回答的成本边界，是在运行中的 profile 上实测出来的。** 切到中转之后，清点 60 份会话日志发现 18 份仍停在 `deepseek-official/deepseek-flash`——其中好几份是活团队的成员，而当时活着的 Lead 会话都在中转上——因为成员的路由在启动时就写进了自己的会话头，没有任何东西会给它改路由。v0.22.0 在 spawn 时转发 Lead 当前的路由、把它记在成员记录上，并标出路由已不再是 Lead 当前路由的成员。真机那一半——启动出的子代理**自己** `request/header` 上的路由——仍是所有者安装后的验证项（ADR 0024）。
 - **工具面在真机上实测**（v0.14.0，安装前后各读一次 `listTools`）：官方那行退役后，`spawn_teammate`、`wait_agent` 与 `team_task_*` 工具已从 Lead 的工具列表消失，调用它们会回答 `unknown tool`；本插件的 `spawn_member` 与 `task_board` 仍在。另有三件工具仍在，且这条补丁移不掉：`list_agents`、`send_message`、`interrupt_agent` 由 `agent-team` **服务**行发布，而本 bundle 刻意保留这一行，因为收养、成员判定与投影过滤都要读它。`wait_agent` 在 v0.15.0 之前在这里没有对应物；现在由 `wait_members` 接替，它建立在 Harness 自己的 `agent/status` 事件上，且仅由单元测试覆盖——真机上的订阅还没有跑过。
 - **只有真机安装才能暴露的两次失败**，各一行；两次都在出问题的那个版本内修复，现在各由一项检查或测试覆盖：v0.12.0 的 bundle 安装后无法激活，直到去掉一个 schema 关键字（同版本；现在 `scripts/check.mjs` 会拒绝该关键字）；v0.13.0 的替换返回了宿主拒绝的结果，直到 v0.13.2 声明了这些字段（现在 `tests/entry.test.mjs` 会用每个工具自己声明的输出 schema 校验每个回答）。
 - **一次真机运行发现了本版要补的缺口。** 一位继任者枚举自己的工具，发现没有任何花名册工具（它们全都是 Lead 专属的），于是直接读取 `~/.dsh/storages/team_roster.json` 来找它继承的任务正文。v0.20.0 在成员作用域注册了一件只读工具 `list_my_tasks`，并修正了 `{task_board}` 指针——原先它指向官方任务板，还让成员去问 Lead。在真实成员里调用一次，仍是所有者安装后的验证项（ADR 0022）。
-- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；不带 `spawn_options` 的 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝；团队文件层（v0.19.0）——三来源优先级、写入拒绝、占位符退路与保留文件名；以及成员作用域（v0.20.0）——owner 过滤、空答案、非成员拒绝、注册到成员 Agent 上，以及一次真实回答的 schema 一致性。由定义真正启动一个成员、真机读取一次团队文件，或由真实成员调用一次 `list_my_tasks`，是所有者安装后的验证项（ADR 0018、ADR 0021、ADR 0022）。
+- **仅由单元测试覆盖**，没有真机 profile 跑过：`label` 与 `assignment` 写入时的长度上限；spawn 尚在进行时发起退役；两个花名册操作重叠时的丢失更新保护；“仍在运行的成员永不被清扫”；路由解析不出来时 spawn 拼出的精确 request；任务板写入时的上限与真机没走到的交接矩阵格子；任务正文的 2000 字符上限、真机上必然看不到的“读取与写入之间插入一次交接”这种交错（测试用表自己的串行 `update` 钩子模拟），以及工作板写入不会覆盖交接这条规则；`wait_members` 的事件接线、超时、取消与无进展路径；整个成员定义层（v0.16.0）——读文件、优先级回报与每一类拒绝；团队文件层（v0.19.0）——三来源优先级、写入拒绝、占位符退路与保留文件名；成员作用域（v0.20.0）——owner 过滤、空答案、非成员拒绝、注册到成员 Agent 上，以及一次真实回答的 schema 一致性；以及路由层（v0.22.0）——转发、调用方选项优先、两条兜底路径、`reasoning_effort` 从不额外添加，以及陈旧路由标记的设置、清除与“绝不猜测”。由定义真正启动一个成员、真机读取一次团队文件、由真实成员调用一次 `list_my_tasks`，以及真实子代理自己 `request/header` 上的路由，是所有者安装后的验证项（ADR 0018、ADR 0021、ADR 0022、ADR 0024）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
 - 完整历史（只追加）：[PROGRESS.md](PROGRESS.md)。
 
@@ -33,8 +34,8 @@
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 把成员作为一个可续跑的子代理启动，可用 `definition` 从磁盘上的成员定义启动，也可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。 |
-| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、实时状态、`compactable`，驻留时还有上下文压力。 |
+| `spawn_member` | 把成员作为一个可续跑的子代理启动，可用 `definition` 从磁盘上的成员定义启动，也可通过 `spawn_options` 给它自己的工作目录、模型路由或 agent preset；带 `replace` 时从交接书启动继任者，并在同一次调用里退役前任；带 `ephemeral` 时标记为一次性成员，之后由清扫在它跑完并停下后退役。不点名任何模型时，成员跑在**本会话当前的路由**上：插件从会话解析 `provider` 与 `model` 并转发，`started_with.route_source` 说明路由来自调用、由插件解析，还是未解析而继承。 |
+| `list_members` | 该 Lead 控制的全部成员与子代理：本插件的花名册、官方花名册创建的成员，以及用官方 `subagent`／`subagent_fork` 工具启动的每个子代理。每行带回 target、子会话 id、相态、代次、label、记录在案的 assignment、一次性成员上的 `ephemeral`、启动时的 `route`、实时状态、`compactable`，驻留时还有上下文压力。路由已不是 Lead 当前路由的成员会被标上 `route_stale: true`，并附一句 `route_note` 点出两条路由以及替换它的那次调用。 |
 | `wait_members` | 阻塞当前这一轮，直到某个成员的实时状态发生变化或超时到期，并报告是哪个成员、变成了什么。有界：默认 30 秒，最长一小时。没有成员处于 running 或 provisioning 时立刻回答 `no_progress`，绝不唤醒任何人，也不等待任务板写入或消息被处理。 |
 | `message_member` | 向活着的成员投递一条消息，并可顺带替换记录在案的 assignment；已卸载的可续跑成员会从自己的会话冷恢复，一次性子代理不能。 |
 | `stop_member` | 取消成员当前这一轮；激活与收件箱保留，稍后再发消息即可继续。 |
@@ -45,7 +46,11 @@
 | `task_board` | 该 Lead 自有的工作板：用 `action` 选择 `create`、`list`、`update`、`release` 或 `delete`。一条任务有 id、标题、一段有上限的正文（说明“完成指什么”、工作停在哪里）、`open` 或 `done`，以及可选的成员 `owner`；未完成的任务会随替换一起过去，正文随之移动。 |
 | `list_my_tasks` | **成员自己的工具，不是 Lead 的**：只读返回 `owner` 正好是本成员 target 的行，每行带 id、标题、正文、状态与时间戳，以及还有多少条未完成。它不接受参数——调用方的会话就是选择器。名下没有任务的成员得到空列表，而不是报错；其他成员的行、无主的行与 Lead 的整块工作板都看不见。工作板只有 Lead 能写，所以成员在回复里说明某条任务已完成，由 Lead 把该行标记为 done。 |
 
+**成员跑在本会话的 API 上，哪怕你一个模型都没点名。** 没有 `spawn_options.agent_options` 时，`spawn_member` 从会话本身解析 Lead 当前的 `provider` 与 `model` 并转发，因此成员用的是启动它的那个会话的 API；插件转发出去的这条路由同时记在成员记录上，并在行里报回来。`started_with.route_source` 说明走的是哪条路径——`caller` 表示调用（或其定义）点名了路由，`plugin` 表示插件解析并转发了它，`inherited` 表示什么都没能转发。只有最后一条路径把继承交给 Harness 自己，原因的认领字段 `route.select_reason` 会说明是哪种：`no-session-route`（会话此刻还没有可读的路由）或 `capability-absent`（spawn provider 没有声明 `agentOptions`）。**`reasoning_effort` 从不额外加上**：转发 Lead 自己的路由本来就让它原有的 effort 在合并里保留，而为一个插件从未询问过的模型塞一个 effort，正是会让子代理第一条请求失败的做法。
+
 **成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值——只有一个例外：改了 `provider` 或 `model` 却没给 `reasoning_effort` 时，新路由解析自己的默认值。`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 携带 `provider`、`model`、`reasoning_effort` 与 `max_tokens`，最后一项是 token 上限，也是挑更便宜模型的地方；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。`started_with` 是插件转发内容的回执，不是子代理解析结果的确认：它原样回显传入的字段，既不解析也不回读，所以模型有没有真正生效，要靠成员的第一条请求去确认，而不是这个字段。Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
+
+**在模型切换之前启动的成员会一直留在旧路由上，而花名册会把它们点出来。** 活的成员无法被改路由：它的 provider 与 model 在启动时就写进了自己会话的请求头，之后发消息或唤醒都沿用它们。因此 `list_members` 会把每个成员记录在案的 `route` 与 Lead 当前路由比较，凡是不一致的就标上 `route_stale: true`，并附一句 `route_note` 点出两条路由。这个标记回答的就是「我的哪个成员还在用旧 API 计费」。**清掉它的办法是替换掉这个成员**：`spawn_member { replace: "<target>" }` 会在当前路由上启动继任者，并在同一次调用里接手前任的未完成工作（ADR 0009、ADR 0017），那条陈旧的行随后以 retired 离开 `list_members`。这里刻意没有 reroute 工具：人换了，工作本来也得跟着走。
 
 每次退役都在会话列表出口触发两项宿主侧效果，两者都带能力探测：投影先是从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；同一个 `agentTeam` 值随后还会追加该 Lead 的活成员，于是官方**成员**面板会列出本插件启动的成员，点击即可打开该成员真实的会话。已退役成员则是**离场**——面板不会把它留成一行并标注“已退役”，因为面板的相态词表里没有这个值。spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 
@@ -136,6 +141,34 @@ You review changes. Report only findings that change behaviour, with the file an
 - **被剪除的墓碑无法恢复。** 成功移入产物的那次退役会执行每个 Lead 的回收站上限，删掉超出的最旧条目。墓碑保留 `trashPath`，状态记为 `trashState: pruned`，但字节已经不在，因此 `restore_member` 以 `reason: "pruned"` 拒绝，且绝不调用工作区（ADR 0011）。长期存续的团队若需要超过 20 份可恢复会话，请提前调大上限。
 - **任务板是交接通道，不是项目跟踪器。** 一条任务只有 id、标题、一段有上限的正文、`open`/`done` 和可选的 owner，刻意没有优先级、依赖、评论、子任务与截止日期（ADR 0017、ADR 0020）。依赖尤其如此：它需要一张图和一条排序规则，而交接还得决定“依赖仍未完成的任务怎么办”；这个先后顺序留给 Lead 判断。任务板只回答一个问题：继任者现在扛着什么。
 
+## 成本与模型路由
+
+**这一节要回答的怀疑，以及证实它的实测。** 接上中转供应商之后，所有者的账户仍在计费。清点 60 份会话日志发现，其中 18 份仍停在 `deepseek-official/deepseek-flash`，好几份还是活团队的成员，而当时活着的 Lead 会话都在中转上：成员的 provider 与 model 在它启动时就写进了自己会话的请求头，之后的任何切换都到不了它。下面写清楚本插件选择什么、Harness 替它选择什么，以及这份 profile 里唯一一个不看会话路由、自己钉死端点的组件。
+
+### 谁来选成员的模型
+
+**现在由插件说明路由，并把它记下来。** 没有 `spawn_options.agent_options` 时，`spawn_member` 从 `session.requestHeader().config` 解析 Lead 当前的 `provider` 与 `model`——这正是 seam 自己的继承来源——并作为请求的 `agentOptions` 转发，因此成员用启动它的那个会话的 API 启动，说出来的是插件（ADR 0024）。显式的 `spawn_options.agent_options` 仍然逐字段优先，而调用方没点名的那一项由同一次读取补全，于是 `started_with.route_source` 能说明路由来自调用（`caller`）、由插件解析（`plugin`），还是未解析而继承（`inherited`）。
+
+- **`reasoning_effort` 从不转发。** seam 只在它解析出的路由与父路由不同时才丢掉父会话的 effort（`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:88-90`）；转发 Lead 自己的路由恰恰是“没变”的那种情形，所以 Lead 的 effort 无需发送也会在合并里保留。调用方自己点名 `reasoning_effort` 时照旧转发，那是调用方的字段。
+- **每一次解析失败都是兜底，而不是一次失败的 spawn。** 会话路由读不出来（`no-session-route`）与 provider 没有声明 `agentOptions`（`capability-absent`，能力门在 `@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`）这两种情况都不转发任何东西，把路由记为 `route.source: "inherited"` 并带上原因，然后交给 Harness 按以前的方式继承。那种情况下的请求就是 `{ prompt, parent }`；绝不为了修路由而弄坏一次 spawn。
+- **活的成员无法被改路由。** 它的路由就在自己已记录的请求头里。正因如此，`list_members` 会标出记录在案的 `route` 已不是 Lead 当前路由的成员（`route_stale: true` 与一句 `route_note`），也正因如此补救办法只有一次替换：`spawn_member { replace: "<target>" }` 在当前路由上启动继任者，并接手它的未完成工作（ADR 0009、ADR 0017）。
+
+插件不像官方 subagent 工具那样用 `ctx.llm` 预检路由（`@deepseek-ai/dsh-tool-subagent/lib/index.js:437-450`，Session 级白名单在 `:89-96`）：那条预检校验的是**调用方选定**的路由是否在 profile 白名单里，而这里转发的是该会话已经在发请求的路由——它是被证明过的，不是被提议的。
+
+### 没有模型调用，压缩行走会话自己的路由
+
+bundle 自己不发起任何模型调用：没有任何 Host 模块碰 `ctx.llm`，也没有任何代码路径调用 `prepareCall`。补丁启用的那一行 `compaction-basic`，摘要目标是 `configured ?? session.requestHeader().config ?? agent.options`（`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`），也就是会话自己的路由；因此在实测的 profile 里，启用它没有带来新的计费。
+
+### 例外：网页搜索钉死了自己的端点
+
+`web_search` 不属于本插件，而它是这里唯一不看会话路由的组件。基础 bundle 的补丁选中 `searchProvider: deepseek-official`（`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`），而 `dsh-web-search-deepseek` 把端点和模型钉成 `https://api.deepseek.com/anthropic/v1` 与 `deepseek-v4-flash`（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`），无论聊天路由是什么都发往那里（`:319-320`）。在实测的 profile 里，它产生了 107 次官方请求，其中两次发生在某个会话已经切到中转之后。
+
+**为什么不能简单地改指别处。** 那个插件要求检索在服务端完成：它读取 `web_search_tool_result` 块，一个都没有就抛 `WEB_PROVIDER_ERROR`（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:61-62`）。一个提供 Anthropic 形状 Messages API 的中转端点照样可能把搜索退回给调用方：直接测中转的 `/v1/messages`，它返回 200，但在带上 `web_search` 工具时回答 `stop_reason: "tool_use"`——正是那个会被拒绝的形状；而它的 `/anthropic/v1/messages` 路径返回 404。
+
+**两条诚实的出路。** 要么在 profile 里禁用那一行（或 `web` 行），不再有请求发往那个端点，搜索就此不可用；要么把它指向真正执行原生搜索的端点。区分两者的测试只有一次请求：带 `web_search` 工具发一条 Messages 请求，读它的回答。出现 `web_search_tool_result` 块，或者一个带回结果的正常结束，说明端点自己在跑搜索；以 `tool_use` 停下，说明它是在让调用方去跑，而本插件会拒绝这种回答。
+
+边界就一句话：**会话的路由管住每一个聊天请求；自己钉死端点的组件是例外，本插件不属于这一类。**
+
 ## 运行要求与兼容性
 
 **运行**本 bundle 需要已安装的 Harness 以及它读取的官方包，而不是 npm 依赖：bundle 以链接方式装进 profile，且不导入任何 `@deepseek-ai/*` 包（ADR 0002），所以真正运行的就是这棵工作树。它读取子代理 seam（`startActivation`、`drainChildren`、`sendMessage`、`interrupt`、`listDescendants`）、官方 `agent-team` 服务（收养与成员判定）、`sessionController`（投影过滤与面板覆盖层；宿主没有这项就跳过）、token 计量（上下文压力）、存储域设施，以及智能体注册表与它的 `agent/status` 事件（等待）。`compact_member` 还需要已挂载的压缩后端，补丁里的 `compaction-basic` 条目会启用它。宿主侧效果都带能力探测：Harness 形状变了就跳过那项效果，而不是让加载失败。没有挂载实验性团队 bundle 的 profile 里没有 `tool-agent-team` 行可供补丁禁用；Loader 会就这个缺失目标告警，并跳过该条目。
@@ -169,7 +202,8 @@ plugin_manager  install_bundle  target: <本仓库的绝对路径>
 - 在 Lead 会话里可以调用 `list_members`，驻留成员带上下文压力；
 - 对有产物的会话，`retire_member` 返回 `trashed: true` 与 `trash_path`；
 - `spawn_member` 带 `replace` 时返回 `predecessor_retired: true`，且继任者处于下一代次；当前任有未完成任务时，结果还会用 `transferred` 报告数量与 id，继任者的交接书里也会点名它们；
-- `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
+- `spawn_member` 带 `spawn_options` 时，返回的 `started_with` 与传入内容逐字段一致，并多一个 `route_source`；若 profile 的 provider 或 preset 注册表拒绝，则返回 `started: false` 与 `reason`；
+- 在会话路由可读的 profile 里，不带选项的 `spawn_member` 返回 `started_with.route_source: "plugin"`，该成员自己会话的 `request/header` 记录着同一个 provider 与 model，`list_members` 的行也报出同一对值；在路由切换之前启动的成员，其行会被标上 `route_stale: true`，直到它被替换为止；
 - 没有成员在跑时 `wait_members` 回答 `no_progress`；用 `message_member` 唤醒某个成员后，它会在超时之内返回该成员的 target 与 `status: "idle"`；
 - Lead 的工具列表里有本插件的工具（含 `wait_members`），没有 `spawn_teammate`、官方的 `wait_agent` 或 `team_task_*` 工具，但仍有 `agent-team` 服务发布的三件：`list_agents`、`send_message`、`interrupt_agent`；
 - 官方团队面板的**成员**区列出用 `spawn_member` 启动的成员，空闲成员显示“未运行”，点击可打开它的会话；`retire_member` 之后该行消失，而不是被改标注；

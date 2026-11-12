@@ -76,6 +76,11 @@ A short map, not a changelog: each release below names what it added and the sec
   registered on a member Agent, returns only the rows whose `owner` is that member's own target. The
   Lead's tool set is unchanged, the board keeps one writer, and the brief's `{task_board}` pointer names
   this plugin's board and this tool instead of the shipped board (§4.4, §4.5, §4.5.2, ADR 0022).
+- **v0.22** — a member is started on the API of the Session that started it: `spawn_member` resolves the
+  Lead's current `provider` and `model` and forwards them, records the route on the member, and
+  `list_members` flags a member whose route is no longer the Lead's. Every failure to resolve is a
+  recorded fallback, never a failed spawn, and `reasoningEffort` is never forwarded (§2.6, §4.2, §4.5,
+  ADR 0024).
 
 ### 2.1 Compaction is enabled
 
@@ -204,6 +209,47 @@ A retirement that actually moved an artifact in also enforces the per-Lead cap i
 step 5, ADR 0011, ADR 0012): the move is the one moment the trash grows, so nothing is swept on a timer
 and nothing is swept on a read.
 
+### 2.6 Costs and model routes
+
+**The plugin states the route, and reports the ones that fell behind.** `spawn_member` resolves the calling
+Lead's current provider and model from `caller.session.requestHeader()?.config` — the seam's own
+inheritance source (`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-62`) — and forwards them as the
+activation request's `agentOptions`, so the child is started on the API of the Session that started it and
+the plugin, not the seam's implicit fallback, is what names it (ADR 0024). `spawn_options.agent_options`
+from the caller still wins field by field, and a field the caller named is completed from the same read so
+the route recorded on the member is the whole route the child runs on. **`reasoning_effort` is never
+forwarded**: the seam drops the parent's effort only when the route it resolved differs from the parent's
+(`:88-90`), and forwarding the parent's own route is the case where it does not differ, so the Lead's effort
+survives the merge without being sent; the shipped tool's route preflight is not on this path
+(`@deepseek-ai/dsh-tool-subagent/lib/index.js:437-450`), so a forced effort the route does not support would
+fail the child's first request after the member is already recorded as started.
+
+**Every resolution failure is a fallback.** A Session whose header cannot be read (`no-session-route`) and a
+provider that does not advertise `agentOptions` (`capability-absent`, the gate at
+`@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`) both forward nothing, record `source: 'inherited'` with
+that reason, and let the Harness inherit exactly as it did before this release. The reason is recorded
+because the two fallbacks are different operational facts, and only one of them is about this profile's
+configuration.
+
+The member's route is recorded at spawn and compared at read time: `list_members` reports each row's `route`
+and marks `route_stale: true` with a `route_note` when the member's route is not the Lead's current one.
+Nothing re-routes a live member — its route lives in its own recorded `request/header` — so the remedy is a
+replacement, which starts a successor on the current route and hands over its open work (§4.4, ADR 0024).
+
+The Session route allowlist belongs to the shipped tool (`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`),
+which this plugin does not use: what is forwarded here is the route the Session is already issuing requests
+on, so it is proven rather than proposed and needs no preflight. The installed measured picture — 18 of 60
+session logs still on `deepseek-official/deepseek-flash` after the relay switch, several of them members —
+is what this section exists to answer.
+
+The bundle makes no LLM call, and the `compaction-basic` row it enables summarises on the session's own route
+(`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`, §2.1). The measured exception is web search,
+outside this plugin: the base bundle's patch selects `searchProvider: deepseek-official`
+(`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`), and `dsh-web-search-deepseek` pins its endpoint and model
+(`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`, `:319-320`) and requires a
+`web_search_tool_result` answer (`:61-62`). No session route reaches it; a profile either disables that row or
+points it at an endpoint that executes native search. The user-facing statement is in the README pair.
+
 ## 3. Why the shipped roster is not extended
 
 The shipped roster is a fold over the Lead Session's append-only event log. Member phases are
@@ -237,23 +283,27 @@ same arrangement the shipped team uses. Capacity is `maxActiveSubagents` (defaul
 subagent tree and process-local; draining a child releases its slot.
 
 **Request composition.** The plugin sends `{ prompt, parent }` plus the optional fields the model named
-through `spawn_member.spawn_options` (§4.5): `cwd`, `agentOptions` and `agentPreset`. Every field omitted
-means the member inherits the Lead's value, and one exception is recorded here because the rule reads as
-total without it: a changed `provider` or `model` without `reasoningEffort` lets the new route resolve its
-own default rather than inheriting the Lead's effort. A spawn that names none composes exactly the request
-it always did — a test pins the exact object. `cwd` is forwarded verbatim: the seam resolves a relative
-path against the parent's cwd (`resolveDirectory`), and a child keeps the parent's permission roots, so a
-directory outside the sandbox grant stays denied; a plugin that pre-resolved the path would disagree with
-the Host. The two capability gates belong to the provider: `agentOptions` requires
+through `spawn_member.spawn_options` (§4.5): `cwd`, `agentOptions` and `agentPreset`, and plus the route it
+resolved itself when the caller named none (§2.6, ADR 0024). Every field omitted means the member inherits
+the Lead's value, and one exception is recorded here because the rule reads as total without it: a changed
+`provider` or `model` without `reasoningEffort` lets the new route resolve its own default rather than
+inheriting the Lead's effort. Here the Lead's value is the Lead's current route — resolved at each spawn from
+the Session's latest logged request header, not from the options the Lead Agent was created with (§2.6).
+Only a spawn whose route could not be resolved (or whose provider cannot apply one) composes exactly the
+request it always did — a test pins the exact object for that path. `cwd` is forwarded verbatim: the seam
+resolves a relative path against the parent's cwd (`resolveDirectory`), and a child keeps the parent's
+permission roots, so a directory outside the sandbox grant stays denied; a plugin that pre-resolved the path
+would disagree with the Host. The two capability gates belong to the provider: `agentOptions` requires
 `provider.capabilities.agentOptions` and `agentPreset` requires `provider.capabilities.agentPreset` —
 true for the in-process spawn/fork providers and false for every external backend, whose advertisement is
-`NO_START_CAPABILITIES` — and both are asserted before the manager reserves anything. Three facts about
-the Harness shape this surface and are recorded because a reader will not expect them: there is **no
-per-call tool allow/deny**, so `agentPreset` is the only route to a tool-restricted or read-only member
-and the seam rejects `toolFilter` outright; **a preset id must be declared by the profile's bundle
-patches**, because the registry neither scans directories nor accepts a path; and **there is no worktree
-field**, so a worktree is `ctx.worktrees.create(...)` followed by forwarding its `path` as `cwd`, with
-that service optional and experimental enough that this plugin does not create one itself (ADR 0016).
+`NO_START_CAPABILITIES` — and both are asserted before the manager reserves anything; the plugin's own probe
+of the first gate is what turns a would-be refusal into the inherit path. Three facts about the Harness shape
+this surface and are recorded because a reader will not expect them: there is **no per-call tool allow/deny**,
+so `agentPreset` is the only route to a tool-restricted or read-only member and the seam rejects `toolFilter`
+outright; **a preset id must be declared by the profile's bundle patches**, because the registry neither
+scans directories nor accepts a path; and **there is no worktree field**, so a worktree is
+`ctx.worktrees.create(...)` followed by forwarding its `path` as `cwd`, with that service optional and
+experimental enough that this plugin does not create one itself (ADR 0016).
 
 Two Harness facts shape retirement:
 
@@ -294,6 +344,14 @@ ephemeral     true when the member retires itself once its work is over, set by 
               by message_member (§4.3.1); optional, absent otherwise, so a non-ephemeral record is unchanged
 startedAt     ISO timestamp on an ephemeral member: when its child was started. This is the positive
               evidence the lazy sweep requires, so a reservation that never published is never swept
+route         the provider and model the member was started on, and where that route came from:
+              `{ source, provider?, model?, select_reason? }`. `source` is `caller` (the spawn call or its
+              definition named the route), `plugin` (the plugin resolved and forwarded the Lead's current
+              route) or `inherited` (nothing was forwarded, with `select_reason` naming which fallback ran:
+              `no-session-route` or `capability-absent`). Written once with the reservation and never
+              rewritten — it is a fact about the start, and `started_with` is the receipt for the request.
+              Optional, so every record written before v0.22.0 loads and behaves exactly as it did (§2.6,
+              ADR 0024)
 handoffTemplate  on the roster record, not on a member: this Lead's stored handoff-brief template,
               whose placeholders a replacement interpolates (§4.4). It is the *second* source: a
               `team/team.md` in the Lead's project wins while it exists (§4.7). Optional, so every
@@ -575,7 +633,8 @@ What the table depends on:
   holder is replaced (ADR 0019).
 - **The predecessor's `cwd` and model route are not inherited, and cannot be.** They are start options,
   not record fields: `started_with` is a receipt on a tool result, not durable state (§4.2), so a
-  successor takes the file's or the call's values and nothing else. A Lead that wants the successor in the
+  successor takes the file's, the call's or — for the route — the one the plugin resolves from the Lead's
+  current Session, and nothing else (§2.6, ADR 0024). A Lead that wants the successor in the
   predecessor's directory passes it.
 - **The transfer matrix (§4.3.2) is unchanged by any of this.** A replacement still moves the
   predecessor's open tasks in the same call, whatever the file says; the `ephemeral` row above only
@@ -697,8 +756,8 @@ agent and is treated as the Lead, so a failed projection cannot disable every to
 
 | Tool | Behaviour |
 |---|---|
-| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `definition`, start it from a member definition committed with the project, whose fields fill whatever the call omitted (§4.6); with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default — and `started_with` reports back what the plugin forwarded, not what the child resolved. A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error, and a definition that cannot be read is answered the same way (ADR 0016, ADR 0018). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
-| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
+| `spawn_member` | Reserve the next generation of a base name and start it as a continuable child; with `definition`, start it from a member definition committed with the project, whose fields fill whatever the call omitted (§4.6); with `replace`, start the successor from the handoff brief, hand the predecessor's open tasks to it, and retire the predecessor in the same call (§4.4, §4.3.2). `spawn_options` (optional) starts it with its own `cwd`, `agent_options` (`provider`, `model`, `reasoning_effort`, `max_tokens`) or `agent_preset`; an omitted field inherits the Lead's value — except that a changed `provider` or `model` without `reasoning_effort` lets the new route resolve its own default. A spawn that names no `agent_options` still runs on this Session's route: the plugin resolves the Lead's current `provider` and `model` and forwards them, so the member uses the API of the Session that started it, and `started_with.route_source` says whether the route came from the call (`caller`), was resolved by the plugin (`plugin`) or was inherited unresolved (`inherited`, with `route.select_reason` naming which fallback ran); `started_with` reports back what the plugin forwarded, not what the child resolved (§2.6, ADR 0024). A start the Harness refuses is a typed result (`started: false`, with a `reason` naming the way out), never a host error, and a definition that cannot be read is answered the same way (ADR 0016, ADR 0018). With `ephemeral: true` the member retires itself once it has run and stopped (§4.3.1), and the call first sweeps any finished ephemeral member. |
+| `list_members` | Every member and subagent the Lead controls: this roster, adopted shipped members, and adopted subagent descendants (§4.5.1). Rows carry `target`, `child_id`, phase, generation, label, the `assignment` recorded for the member, `ephemeral` on a one-shot member, the `route` the member was started on, live state and `compactable`; the pressure fields (`pressure_tokens`, `context_window`, `usage_ratio`) appear only while resident. When the Lead's own route can be read and differs from a member's recorded one, the row also carries `route_stale: true` and a `route_note` naming both routes and the one call that replaces the member (§2.6, ADR 0024). A read first sweeps finished ephemeral members and reports `swept` and `swept_targets` when it retired any — plus `unowned`/`unowned_tasks` when a swept member left open work behind (§4.3.2). |
 | `wait_members` | One bounded wait on the live status of this Lead's members: it answers when a member's `agent/status` transitions (`idle` ⇄ `running`) or after the timeout, and reports the member and the status it entered. The timeout defaults to 30 s and is refused above 1 h; a roster with no `running` member and no `provisioning` reservation answers `no_progress` at once, because a blocked Lead cannot wake an idle member. It observes only post-call transitions and never wakes anyone (§4.5). |
 | `message_member` | Deliver one message to a live target, and optionally replace its recorded `assignment`; a running child sees it at its next step, an unloaded continuable child is cold-resumed. Messaging an ephemeral member clears its flag, so it will not be swept. A retired or failed target is refused with `reason: 'retired'` or `'failed'`, and an unknown one with `'missing'`; when another generation of the name is live, the refusal also carries `current_holder` and says so. |
 | `stop_member` | Cancel one target's current turn, keeping its activation and inbox; refuses a retired or failed target with the same typed reason as `message_member`, and carries `current_holder` the same way. |
@@ -942,6 +1001,10 @@ for the template and would be a bug for the board.
   them.** It cannot tell whether a `cwd` is usable until the Harness resolves it, and it cannot tell
   whether a preset id exists until the registry looks it up, so both refusals are the seam's answer
   translated into a typed result rather than a pre-check that could disagree with the Host (ADR 0016).
+  The route is the one of the three the plugin also *resolves*: when the caller names none, the Lead's
+  current provider and model are read from the Session's own request header — the seam's inheritance
+  source, not a guess at what route works — and a profile that cannot produce one inherits instead
+  (§2.6, ADR 0024).
 - **Harness API drift.** Every Service named here is read from an installed asar whose version moves;
   a Harness upgrade can invalidate this document without any change in this repository. The installed
   subagent seam is a different generation from the public source tree: the public tree has member names

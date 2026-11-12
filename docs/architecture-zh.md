@@ -38,6 +38,7 @@
 - **v0.16**——成员可以定义在磁盘上：`spawn_member.definition` 读取 Lead 工作目录下 `team/` 里带扁平 frontmatter 的 markdown 文件，调用自己的参数优先于文件内容，结果会说明每一部分来自哪里（§4.5、§4.6、ADR 0018）。
 - **v0.19**——团队作用域补上这套划分的另一半：成员定义旁边可以有一个可选的 `team/team.md`，正文就是交接书模板。生效模板依次取自该文件、记录里存下的模板、内置形状；读取形式会报告实际生效的来源，而文件存在时 `handoff_template` 的写入与清除都会被拒绝（§4.4、§4.5、§4.7、ADR 0021）。
 - **v0.20**——成员作用域拿到任务正文本就该有的那次读取：`list_my_tasks`，一件注册在成员 Agent 上的只读工具，只返回 `owner` 正好是该成员自己 target 的行。Lead 的工具集不变，工作板仍然只有一个写入者，而交接书里的 `{task_board}` 指针改为指向本插件自己的任务板与这件工具，而不是官方任务板（§4.4、§4.5、§4.5.2、ADR 0022）。
+- **v0.22**——成员用启动它的那个会话的 API 启动：`spawn_member` 解析 Lead 当前的 `provider` 与 `model` 并转发，把路由记在成员记录上，`list_members` 则标出路由已不再是 Lead 当前路由的成员。任何解析失败都是被记录下来的兜底，而不是一次失败的 spawn；`reasoningEffort` 从不转发（§2.6、§4.2、§4.5、ADR 0024）。
 
 ### 2.1 启用压缩
 
@@ -102,6 +103,36 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 **真正移入过产物**的那次退役还会在同一次调用里执行每个 Lead 的上限（§4.4 第 5 步、ADR 0011、ADR 0012）：这次移动正是回收站增长的唯一时刻，因此不存在定时清理，也不存在读取时清理。
 
+### 2.6 成本与模型路由
+
+**路由由插件说明，掉队的成员由插件报出来。** `spawn_member` 从 `caller.session.requestHeader()?.config`
+解析调用方 Lead 当前的 provider 与 model——这正是 seam 自己的继承来源
+（`@deepseek-ai/dsh-subagent/lib/types/child-agent.js:49-62`）——并把它作为激活请求的 `agentOptions`
+转发，因此子代理用启动它的那个会话的 API 启动，说出来的是插件而不是 seam 的隐式兜底（ADR 0024）。
+调用方给的 `spawn_options.agent_options` 仍然逐字段优先，而调用方没给的那一半由同一次读取补全，
+这样记录在成员上的路由就是子代理真正运行的完整路由。**`reasoningEffort` 从不转发**：seam 只在它解析
+出的路由与父路由不同时才丢掉父会话的 effort（`:88-90`），而转发父会话自己的路由恰恰是“没变”的那种
+情形，所以 Lead 的 effort 无需发送也会在合并中保留下来；官方工具那条路由预检不在这条路径上
+（`@deepseek-ai/dsh-tool-subagent/lib/index.js:437-450`），因此强塞一个该路由不支持的 effort，会在成员
+已经被记为启动之后才让子代理的第一条请求失败。
+
+**每一次解析失败都是兜底，而不是失败。** 读不到会话请求头（`no-session-route`）与 provider 没有声明
+`agentOptions`（`capability-absent`，能力门在 `@deepseek-ai/dsh-subagent/lib/index.js:3325-3343`）这两种
+情况都不转发任何东西，把成员的路由记为 `source: 'inherited'` 并带上原因，然后交给 Harness 按本版本之前
+的方式继承。原因之所以记下来，是因为这两种兜底是不同的运维事实，而其中只有一种与这份 profile 的配置有关。
+
+成员的路由在启动时记录、在读取时比较：`list_members` 给每一行报出 `route`，并在成员的路由不是 Lead 当前
+路由时标出 `route_stale: true` 与一句 `route_note`。活的成员无法被改路由——它的路由就在自己已记录的
+`request/header` 里——所以补救办法是一次替换：继任者在当前路由上启动，并在同一次调用里接手前任的未完成
+工作（§4.4、ADR 0024）。
+
+Session 级路由白名单属于官方工具（`@deepseek-ai/dsh-tool-subagent/lib/index.js:89-96`），本插件不使用它：
+这里转发的是该会话已经在发请求的路由，因此它是被证明过的而不是被提议的，不需要预检。实测到的图景——
+60 份会话日志里有 18 份在切到中转站之后仍停在 `deepseek-official/deepseek-flash`，其中数份是成员——正是
+本节要回答的问题。
+
+bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行按会话自己的路由做摘要（`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`，§2.1）。实测到的例外在本插件之外，是网页搜索：基础 bundle 的补丁选中 `searchProvider: deepseek-official`（`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`），而 `dsh-web-search-deepseek` 钉死了自己的端点与模型（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`、`:319-320`），并要求回答里有 `web_search_tool_result`（`:61-62`）。任何会话路由都到不了它；profile 要么禁用那一行，要么把它指向真正执行原生搜索的端点。面向用户的说法在 README 双语版里。
+
 ## 3. 为什么不扩展官方花名册
 
 官方花名册是 Lead 会话只追加日志的折叠。成员相态为 `provisioning | active | failed`；投影拒绝任何离开终态的转换，而被拒绝的事件会记成永久 `failure`，使该 Lead 的 Team 服务失效。因此伪造一条“已退役”记录不会安全失败。`maxMembers` 检查的是一个永不收缩的列表，名字永不复用，上游重构也仍在延后删除。
@@ -123,7 +154,7 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 没有 `name` 字段，也没有 `resolveName`／`namesOf`。因此名字属于我们：插件生成一个 UUID `childId` 传给 `startActivation`，把 name→childId 的映射放在自己的花名册里——与官方 Team 的做法一致。并发上限是 `maxActiveSubagents`（默认 8），按子代理树、进程内计数；排空一个子代理解放它的名额。
 
-**request 的组合规则。** 插件发送 `{ prompt, parent }`，再加上模型通过 `spawn_member.spawn_options`（§4.5）点名的可选字段：`cwd`、`agentOptions` 与 `agentPreset`。任何一个字段省略，都表示该成员继承 Lead 的值；这里要记下唯一的例外，因为不写出来这条规则读起来像是绝对的：改了 `provider` 或 `model` 却没给 `reasoningEffort` 时，新路由解析自己的默认值，而不是继承 Lead 的 effort。什么都不传的 spawn 组合出的 request 与以前完全一样——有测试钉住这个对象。`cwd` 原样转发：seam 会把相对路径解析到父代理的 cwd 上（`resolveDirectory`），而子代理保留父代理的权限根，因此沙箱授权之外的目录仍会被拒绝；如果插件自己先解析路径，就会与 Host 的判断不一致。两个能力门属于 provider：`agentOptions` 需要 `provider.capabilities.agentOptions`，`agentPreset` 需要 `provider.capabilities.agentPreset`——进程内的 spawn/fork provider 为 true，所有外部后端为 false（其能力声明就是 `NO_START_CAPABILITIES`）——两者都在 manager 预留任何资源之前断言。有三个 Harness 事实塑造了这个接口，写在这里是因为读者不会预期它们：**没有按次调用的工具白/黑名单**，因此 `agentPreset` 是获得工具受限或只读成员的唯一途径，seam 也明确拒绝 `toolFilter`；**preset id 必须由 profile 的 bundle 补丁声明**，因为注册表既不扫描目录也不接受路径；**没有 worktree 字段**，worktree 是先 `ctx.worktrees.create(...)`、再把它的 `path` 当 `cwd` 传，而那个服务是可选的、实验性的，所以本插件不自己创建（ADR 0016）。
+**request 的组合规则。** 插件发送 `{ prompt, parent }`，再加上模型通过 `spawn_member.spawn_options`（§4.5）点名的可选字段：`cwd`、`agentOptions` 与 `agentPreset`，以及调用方一个都没点名时插件自己解析出的路由（§2.6、ADR 0024）。任何一个字段省略，都表示该成员继承 Lead 的值；这里要记下唯一的例外，因为不写出来这条规则读起来像是绝对的：改了 `provider` 或 `model` 却没给 `reasoningEffort` 时，新路由解析自己的默认值，而不是继承 Lead 的 effort。这里“继承 Lead 的值”指的是 Lead 当前的模型路由：每次 spawn 时从会话最近一次请求头解析，而不是 Lead Agent 创建时的选项（§2.6）。只有当路由解析不出来（或该 provider 无法应用路由）时，spawn 才组合出与以前完全一样的 request——有测试专门钉住这条路径上的那个对象。`cwd` 原样转发：seam 会把相对路径解析到父代理的 cwd 上（`resolveDirectory`），而子代理保留父代理的权限根，因此沙箱授权之外的目录仍会被拒绝；如果插件自己先解析路径，就会与 Host 的判断不一致。两个能力门属于 provider：`agentOptions` 需要 `provider.capabilities.agentOptions`，`agentPreset` 需要 `provider.capabilities.agentPreset`——进程内的 spawn/fork provider 为 true，所有外部后端为 false（其能力声明就是 `NO_START_CAPABILITIES`）——两者都在 manager 预留任何资源之前断言；插件自己对第一道门的探测，正是把一次本会发生的拒绝变成继承路径的东西。有三个 Harness 事实塑造了这个接口，写在这里是因为读者不会预期它们：**没有按次调用的工具白/黑名单**，因此 `agentPreset` 是获得工具受限或只读成员的唯一途径，seam 也明确拒绝 `toolFilter`；**preset id 必须由 profile 的 bundle 补丁声明**，因为注册表既不扫描目录也不接受路径；**没有 worktree 字段**，worktree 是先 `ctx.worktrees.create(...)`、再把它的 `path` 当 `cwd` 传，而那个服务是可选的、实验性的，所以本插件不自己创建（ADR 0016）。
 
 有两个 Harness 事实塑造了退役流程：
 
@@ -158,6 +189,12 @@ ephemeral     成员在工作结束后自行退役时为 true，由 spawn_member
               （§4.3.1）；可选，其余记录没有该字段，因此非临时记录与以前完全一致
 startedAt     临时成员上记录其子代理启动时刻的 ISO 时间戳。这是惰性清扫所要求的正面证据，
               因此从未发布过的预留永远不会被清扫
+route         成员启动时所在的路由，以及这条路由从哪来：`{ source, provider?, model?, select_reason? }`。
+              `source` 为 `caller`（spawn 调用或其定义点名了路由）、`plugin`（插件解析并转发了 Lead
+              当前路由）或 `inherited`（什么都没转发，`select_reason` 说明走的是哪种兜底：
+              `no-session-route` 或 `capability-absent`）。随预留写入一次、之后永不改写——它是关于
+              那次启动的事实，而 `started_with` 是那次请求的收据。可选，因此 v0.22.0 之前写下的每条
+              记录都能照常加载、行为不变（§2.6、ADR 0024）
 handoffTemplate  在花名册记录上、不在成员上：这个 Lead **存下**的交接书模板，替换时由它插值（§4.4）。
               它是**第二个**来源：Lead 项目里的 `team/team.md` 只要存在就压过它（§4.7）。可选，因此
               任何更早版本写下的记录都能照常加载、行为不变
@@ -309,8 +346,8 @@ Harness 通知是任何插件操作都无法阻止的事件：
 | `assignment` | 文件：提供持久的 assignment；调用：调用上显式给出的 `assignment` 覆盖它；效果：记录带上它，`list_members` 报告它。 | 文件：**仅当前任没有记录过时**才提供；调用：调用上的 assignment 同时压过两者，而前任记录在案的 assignment 压过文件；效果：继任者被交接的是工作本身而不是角色的常驻语句，结果用 `definition.assignment`（`call`、`predecessor` 或 `file`）说明胜出者。 | 文件：读了也没用；调用：消息被受理后 `message_member.assignment` 替换记录在案的 assignment；效果：该成员的下一个继任者被交接的是新文本。 |
 | `ephemeral` | 文件：把成员标记为一次性；调用：`ephemeral: false` 覆盖它；效果：惰性清扫在它跑过并停下后退役它（§4.3.1）。 | 文件：**作用于继任者**——文件描述的是角色，而 replace 启动的就是这个角色；调用：`ephemeral: false` 或 `ephemeral: true` 覆盖它；效果：一次性的继任者会在本轮结束时自行退役，它刚刚继承的工作——包括同一次调用交给它的任务——随之变为无主，并通过 `unowned`/`unowned_tasks` 报告（ADR 0017）。 | 文件：不贡献任何东西；调用：任何被受理的消息都会**清除**该标记；效果：该成员不再是一次性的，之后的清扫会放过它。 |
 | `cwd` | 文件：提供工作目录；调用：`spawn_options.cwd` 覆盖它；效果：子代理就在那里启动，原样传入。 | 文件：提供它；调用：`spawn_options.cwd` 覆盖它；前任自己的 `cwd` **不会**被继承，因为记录不保存它；效果：继任者按文件或调用说的目录启动，可能与前任运行的位置不同。 | 文件：不贡献任何东西；效果：在该成员一生中固定——换目录需要新的 spawn 或替换。 |
-| `provider` | 文件：提供它；调用：`spawn_options.agent_options.provider` 覆盖它；效果：该成员的模型请求走这个路由。 | 与 `spawn` 相同，且前任的路由不会被继承——它不在记录上。 | 不贡献任何东西；在该成员一生中固定。 |
-| `model` | 文件：提供它；调用：`spawn_options.agent_options.model` 覆盖它；效果：选定的模型绝不会无声，`started_with` 会回显转发了什么。 | 与 `spawn` 相同；前任的模型不会被继承。 | 不贡献任何东西；在该成员一生中固定。 |
+| `provider` | 文件：提供它；调用：`spawn_options.agent_options.provider` 覆盖它；效果：该成员的模型请求走这个路由。两者都没给时，插件从 Lead 当前会话解析它（§2.6、ADR 0024）。 | 与 `spawn` 相同，且前任的路由不会被继承——它不在记录上；文件与调用都没给时，同样由插件解析。 | 不贡献任何东西；在该成员一生中固定。 |
+| `model` | 文件：提供它；调用：`spawn_options.agent_options.model` 覆盖它；效果：选定的模型绝不会无声，`started_with` 会回显转发了什么。两者都没给时，插件从 Lead 当前会话解析它。 | 与 `spawn` 相同；前任的模型不会被继承。 | 不贡献任何东西；在该成员一生中固定。 |
 | `reasoning_effort` | 文件：提供它；调用：`spawn_options.agent_options.reasoning_effort` 覆盖它；效果：更换 provider 或 model 后省略它，会让新路由解析自己的默认值。 | 与 `spawn` 相同。 | 不贡献任何东西；在该成员一生中固定。 |
 | `max_tokens` | 文件：提供它，不是正整数则拒绝；调用：`spawn_options.agent_options.max_tokens` 覆盖它；效果：限制该成员的输出 token。 | 与 `spawn` 相同。 | 不贡献任何东西；在该成员一生中固定。 |
 | `agent_preset` | 文件：提供它；调用：`spawn_options.agent_preset` 覆盖它；效果：它决定成员的 preset、人格与工具集，profile 未声明的 id 是带类型的拒绝。 | 与 `spawn` 相同。 | 不贡献任何东西；在该成员一生中固定。 |
@@ -319,7 +356,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 - **连续性正是替换的意义，而文件里的一个字段足以打断它。** `assignment` 规则就是 v0.17.0 的要点：在此之前，带 `assignment` 的文件会把每个继任者都交接成角色的常驻语句，而不是前任正在做的事，这同时推翻了 ADR 0009 与本插件「工作随人走」的主张。调用是 Lead 的明确表态，仍然优先；文件是「没有可继承之物」时的兜底。这一点调整的是 ADR 0018 第 4 点——它写的是全新 spawn 的合并规则，还没有把前任列为来源（ADR 0019）。
 - **`ephemeral` 是文件在陈述角色，而它的后果被明说，不被藏起。** 一个被替换后、在本轮结束就自行退役的成员，正是这张矩阵存在的原因：替换刚刚转给它的任务，会在下一次 `list_members` 或 `spawn_member` 清扫它时失去所有者，而清扫的结果会点名这些任务（§4.3.1、ADR 0017）。想让继任者保住工作的 Lead，给它发一次消息（消息会清除该标记），或者在替换调用上传 `ephemeral: false`。另一条路是「在 replace 上忽略文件的 `ephemeral`」，它被否决了：定义**就是**角色，而一个一次性的角色不会因为第一位持有者被替换就不再一次性（ADR 0019）。
-- **前任的 `cwd` 与模型路由不会被继承，也无法被继承。** 它们是启动选项，不是记录字段：`started_with` 是工具结果上的一张收据，不是持久状态（§4.2），所以继任者只拿到文件或调用的值。想让继任者待在前任目录里的 Lead，自己传进去。
+- **前任的 `cwd` 与模型路由不会被继承，也无法被继承。** 它们是启动选项，不是记录字段：`started_with` 是工具结果上的一张收据，不是持久状态（§4.2），所以继任者只拿到文件、调用或——就路由而言——插件从 Lead 当前会话解析出的那一份（§2.6、ADR 0024）。想让继任者待在前任目录里的 Lead，自己传进去。
 - **交接矩阵（§4.3.2）不因以上任何一条而改变。** 不论文件怎么写，替换仍然在同一次调用里搬走前任的未完成任务；上表的 `ephemeral` 那一行只决定下一步由谁失去它们。
 
 ### 4.4 退役与替换
@@ -358,8 +395,8 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 | 工具 | 行为 |
 |---|---|
-| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `definition` 时从随项目提交的成员定义启动，文件里的字段补齐调用省略的部分（§4.6）；带 `replace` 时，让继任者从交接书启动、把前任的未完成任务交给它，并在同一次调用里退役前任（§4.4、§4.3.2）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options`（`provider`、`model`、`reasoning_effort`、`max_tokens`）或 `agent_preset` 启动；省略的字段继承 Lead 的值——但改了 `provider` 或 `model` 却未给 `reasoning_effort` 时，新路由解析自己的默认值——而 `started_with` 报告的是插件转发出去的内容，不是子代理解析出的结果。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误；读不出来的成员定义也以同样的方式回答（ADR 0016、ADR 0018）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
-| `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`——被清扫的成员留下未完成任务时，再加 `unowned`/`unowned_tasks`（§4.3.2）。 |
+| `spawn_member` | 占用基名的下一代次，并作为可续聊子代理启动；带 `definition` 时从随项目提交的成员定义启动，文件里的字段补齐调用省略的部分（§4.6）；带 `replace` 时，让继任者从交接书启动、把前任的未完成任务交给它，并在同一次调用里退役前任（§4.4、§4.3.2）。可选的 `spawn_options` 让成员用自己的 `cwd`、`agent_options`（`provider`、`model`、`reasoning_effort`、`max_tokens`）或 `agent_preset` 启动；省略的字段继承 Lead 的值——但改了 `provider` 或 `model` 却未给 `reasoning_effort` 时，新路由解析自己的默认值。一个 `agent_options` 都不给的 spawn 仍然跑在这个会话的路由上：插件解析 Lead 当前的 `provider` 与 `model` 并转发它们，因此成员用的是启动它的那个会话的 API，而 `started_with.route_source` 说明路由是调用方给的（`caller`）、插件解析并转发的（`plugin`），还是未解析而继承的（`inherited`，具体兜底原因记在 `route.select_reason`）；`started_with` 报告的是插件转发出去的内容，不是子代理解析出的结果（§2.6、ADR 0024）。Harness 拒绝的启动是带类型的结果（`started: false`，`reason` 说明出路），绝不是宿主错误；读不出来的成员定义也以同样的方式回答（ADR 0016、ADR 0018）。带 `ephemeral: true` 的成员会在运行过并停止后自行退役（§4.3.1），该次调用也会先清扫已经结束的临时成员。 |
+| `list_members` | Lead 控制的每个成员与子代理：本花名册、收养的官方成员、收养的子代理后代（§4.5.1）。行带 `target`、`child_id`、相态、代次、标签、记录在案的 `assignment`、一次性成员上的 `ephemeral`、成员启动时的 `route`、实时状态与 `compactable`；压力字段（`pressure_tokens`、`context_window`、`usage_ratio`）只在驻留时出现。当 Lead 自己的路由读得出来、且与某个成员记录的路由不同时，该行还会带 `route_stale: true` 与一句 `route_note`，点出两条路由以及替换该成员的那一次调用（§2.6、ADR 0024）。读取会先清扫已经结束的临时成员，并在退役了成员时报告 `swept` 与 `swept_targets`——被清扫的成员留下未完成任务时，再加 `unowned`/`unowned_tasks`（§4.3.2）。 |
 | `wait_members` | 对这个 Lead 成员的实时状态做一次有界等待：某个成员的 `agent/status` 在 `idle` ⇄ `running` 之间变化时返回，或超时后返回，并报告是哪个成员、变成了什么。超时默认 30 秒，超过 1 小时即拒绝；若没有 `running` 成员也没有 `provisioning` 预留，则立刻回答 `no_progress`，因为被阻塞的 Lead 无法唤醒空闲成员。它只观察调用之后的变化，绝不唤醒任何人（§4.5）。 |
 | `message_member` | 给活着的目标投递一条消息，并可顺带替换其记录在案的 `assignment`；运行中的子代理在下一步看到，已卸载的可续聊子代理会冷恢复。给临时成员发消息会清掉它的标记，因此它不会被清扫。目标已退役或已失败时拒绝，`reason` 分别是 `retired` 或 `failed`；目标不存在则为 `missing`。当该名字的另一个代次还活着时，拒绝还会带上 `current_holder` 并在消息里说明。 |
 | `stop_member` | 只取消目标当前轮，保留激活与收件箱；对已退役或已失败的目标按与 `message_member` 相同的带类型原因拒绝，并以同样方式携带 `current_holder`。 |
