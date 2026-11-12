@@ -446,7 +446,7 @@ test('a no-task member composes the brief byte for byte as before, and the list 
     'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
     'Its role was: Check the diff.',
     'What it was doing: Finish the parser unit tests.',
-    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Its unfinished work is still on this Lead\'s own task board under the name "reviewer"; read it with list_my_tasks and take those tasks over instead of redoing finished work',
     'Your task: Continue with the cache change.',
   ].join('\n')
   const compose = (tasks) => handoffPrompt({
@@ -472,7 +472,7 @@ test('a no-task member composes the brief byte for byte as before, and the list 
   assert.match(bounded, /task-0 "Work 0"/)
   assert.match(bounded, /task-4 "Work 4"/)
   assert.ok(!bounded.includes('task-5'), 'the sixth is past the bound')
-  assert.match(bounded, /and 2 more on the shared team task board/)
+  assert.match(bounded, /and 2 more on this Lead's task board, readable with list_my_tasks/)
 
   const huge = Array.from({ length: 5 }, (_, index) => ({ id: `task-${index}`, title: 't'.repeat(TASK_TITLE_MAX) }))
   assert.equal(compose(huge), before, 'a list that would not stay short degrades to the pointer sentence')
@@ -492,7 +492,7 @@ test('a replacement on a member with no tasks composes the same brief it always 
     'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
     'Its role was: Check the diff.',
     'What it was doing: Finish the parser unit tests.',
-    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Its unfinished work is still on this Lead\'s own task board under the name "reviewer"; read it with list_my_tasks and take those tasks over instead of redoing finished work',
     'Your task: Continue the parser work.',
   ].join('\n'))
 })

@@ -155,7 +155,8 @@ test('the handoff prompt carries what the predecessor was doing and that it is g
   assert.match(prompt, /has been retired and is gone/)
   assert.match(prompt, /Check the diff/)
   assert.match(prompt, /Finish the parser unit tests\./)
-  assert.match(prompt, /shared team task board under the name "reviewer"/)
+  assert.match(prompt, /this Lead's own task board under the name "reviewer"/)
+  assert.match(prompt, /read it with list_my_tasks/)
   assert.match(prompt, /Continue with the cache change\./)
   assert.ok(prompt.length < 800, 'the brief stays short enough for a cold child')
   assert.equal(prompt.split('\n').length, 5, 'five lines, not a wall of prose')
@@ -168,7 +169,7 @@ test('a predecessor without an assignment still yields a usable brief', () => {
     prompt: 'Take over.',
   })
   assert.match(prompt, /Its role was: Audit the theme tokens\./)
-  assert.match(prompt, /not recorded; take it from the shared team task board/)
+  assert.match(prompt, /not recorded; take it from this Lead's task board with list_my_tasks/)
 })
 
 test('a Lead with no stored template gets the built-in brief byte for byte', () => {
@@ -186,7 +187,7 @@ test('a Lead with no stored template gets the built-in brief byte for byte', () 
     'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
     'Its role was: Check the diff.',
     'What it was doing: Finish the parser unit tests.',
-    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Its unfinished work is still on this Lead\'s own task board under the name "reviewer"; read it with list_my_tasks and take those tasks over instead of redoing finished work',
     'Your task: Continue with the cache change.',
   ].join('\n'))
 
@@ -199,8 +200,8 @@ test('a Lead with no stored template gets the built-in brief byte for byte', () 
   assert.equal(bare, [
     'You are probe-g2, the successor of probe. probe has been retired and is gone; it cannot be messaged.',
     'Its role was: Audit the theme tokens.',
-    'What it was doing: not recorded; take it from the shared team task board',
-    'Its unfinished work is still on the shared team task board under the name "probe": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'What it was doing: not recorded; take it from this Lead\'s task board with list_my_tasks',
+    'Its unfinished work is still on this Lead\'s own task board under the name "probe"; read it with list_my_tasks and take those tasks over instead of redoing finished work',
     'Your task: Take over.',
   ].join('\n'))
 })
@@ -329,7 +330,7 @@ test('a stored template is interpolated with the real values when a successor st
   assert.match(text, /^Handoff: reviewer -> reviewer-g2\./)
   assert.match(text, /Its role was: Check the diff\./)
   assert.match(text, /Inherited work: Finish the parser unit tests\./)
-  assert.match(text, /Board: the shared team task board under the name "reviewer"/)
+  assert.match(text, /Board: this Lead's own task board under the name "reviewer"/)
   assert.match(text, /Do not redo finished work\.\nYour task: Continue\.$/)
   assert.ok(!text.includes('{'), 'every placeholder is replaced before it reaches the child')
 })
@@ -349,7 +350,7 @@ test('clearing the template returns that Lead to the built-in brief', async () =
     'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
     'Its role was: Check the diff.',
     'What it was doing: Finish the parser unit tests.',
-    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Its unfinished work is still on this Lead\'s own task board under the name "reviewer"; read it with list_my_tasks and take those tasks over instead of redoing finished work',
     'Your task: Continue the parser work.',
   ].join('\n'), 'clearing returns byte-identical built-in briefs')
 })

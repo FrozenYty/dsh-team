@@ -196,7 +196,7 @@ test('a profile with no team file renders the built-in brief byte for byte', asy
     'You are reviewer-g2, the successor of reviewer. reviewer has been retired and is gone; it cannot be messaged.',
     'Its role was: Check the diff.',
     'What it was doing: Finish the parser unit tests.',
-    'Its unfinished work is still on the shared team task board under the name "reviewer": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.',
+    'Its unfinished work is still on this Lead\'s own task board under the name "reviewer"; read it with list_my_tasks and take those tasks over instead of redoing finished work',
     'Your task: Continue with the cache change.',
   ].join('\n'))
 })

@@ -233,6 +233,22 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   reserved name, the no-file built-in brief and the unresolved-directory path; the live read/write stays
   the owner's install check.
 
+- [x] **P4-09** A member reads the work it owns (v0.20.0).
+  Done when a member Session that is not the Lead's can read the rows whose `owner` is its own target with
+  one read-only tool registered in the member scope, a member owning nothing gets an empty list rather than
+  an error, a caller that is neither the Lead nor a member is refused, the Lead's own tool set is
+  unchanged, and the board keeps exactly one writer.
+  Delivered (ADR 0022): `list_my_tasks`, no parameters, registered through `installMember` on every live
+  and subsequently published non-root Agent. It returns the member's own `target`, its rows (id, title,
+  body, status, timestamps and the read-time `problem`) and how many are open, filtered by
+  `task.owner === caller's target` resolved from the caller's Session id — never from an argument. The
+  Lead does not receive it (`task_board` is its whole board) and a child no roster names is refused, with
+  the adoption trigger named; the read never adopts. The `{task_board}` brief pointer and the
+  unrecorded-assignment fallback now name this Lead's own board and the member tool instead of the shipped
+  board and "ask the Lead". `tests/entry.test.mjs` carries the owner-scope, empty-answer and non-member
+  refusals and the schema conformance of a real member answer; the live call from inside a real member
+  Session is the owner's install check.
+
 ### P3 — Settings panel (cancelled in v0.4)
 
 > **Cancelled by [ADR 0008](docs/adr/0008-model-only-surface.md).** The panel and its HTTP bridge were

@@ -1267,3 +1267,55 @@
   filesystem and a `workingDirectory` fake, and never loads the Harness. The four frozen names in ADR 0014
   and the three `cordis.patch.yml` entries were not touched.
 - **Version.** `0.19.0`: the source of the handoff template changes, which is behaviour, not a comment.
+
+## 2026-11-12 — a member can read the work it owns, and the brief points at the right board (P4-09, v0.20.0)
+
+- **A live run found the gap this release closes.** A successor enumerated its tools, found no roster tool
+  at all (every one in `index.js` called `requireLead`, and `apply` installed only Lead scopes), and read
+  `~/.dsh/storages/team_roster.json` directly to discover the task body it had inherited. The body ADR
+  0020 added was therefore readable only by the Lead, which made "a successor reads the bodies from this
+  board" false in every document that repeated it. The same brief's `{task_board}` pointer named the
+  shipped board (whose tools v0.14.0 disabled) and told the successor to ask the Lead for ids.
+- **One member-scoped read, and no member write.** `list_my_tasks` takes no parameter and returns
+  `{ target, tasks, open, message }`: the rows whose `owner` is exactly the caller's own target, projected
+  through the same `taskRow` the Lead's board uses (id, title, body when present, status, owner,
+  timestamps, read-time `problem`). A member owning nothing gets `tasks: []`, `open: 0` and a sentence, not
+  an error. Another member's row, every unowned row and the Lead's whole board are absent. The authority
+  is the caller's Session id resolved across the rosters (`memberScopeOf`/`requireMember`), never an
+  argument, and the read never adopts. The board keeps exactly one writer: a member reports finished work
+  and the Lead closes the row with `task_board`; the ADR records why that round-trip is cheaper than a
+  second writer (ADR 0022).
+- **The member scope is registered the same way as the Lead's.** `installMember` registers on the
+  non-root Agent's own `agent.ctx` at load and on `agent/created`; `agent/disposed` and plugin unload
+  remove it. The Lead's `install` is untouched, so its ten tools and their schemas do not change; a member
+  whose Session is not this process's Lead still receives its tool, and whether it is on a roster is
+  decided at call time.
+- **The pointer was corrected where it was false.** `{task_board}` now renders "this Lead's own task board
+  under the name …; read it with list_my_tasks and take those tasks over instead of redoing finished
+  work" — no shipped board, no "ask the Lead", and no final period (a stored template that appends one
+  produced the `board..` a live brief showed). The unrecorded-assignment fallback and the "and N more"
+  remainder of the inherited-tasks line name the same board and tool. The `task_board` description,
+  `TASK_ROW`'s comment, the README pair, `docs/architecture-*.md` and ADR 0020's wording were corrected;
+  ADR 0009 and 0015 keep their historical bodies, and ADR 0022 records the wording adjustment.
+- **How this change was verified.** `node --check index.js actions.js roster.js definitions.js trash.js
+  host-hooks.js` exits 0; `node scripts/check.mjs` passes after the last edit; and
+  `node --test --test-isolation=none tests/*.test.mjs` is 170 tests, 170 passing (169 before, plus the new
+  member-scope test). `tests/entry.test.mjs`'s two existing scope assertions changed on purpose — a member
+  context now holds `list_my_tasks` instead of zero tools — and its conformance test drives a real member
+  answer through the tool's own declared schema.
+- **The main test was proved able to fail, and the proof edited the operation, not the test.** With the
+  owner filter removed from `listMyTasks`, `tests/entry.test.mjs` failed at line 254 with actual
+  `['mine-open', 'mine-done', 'theirs', 'nobody']` against expected `['mine-open', 'mine-done']`; 9 of 10
+  passed. The filter was restored and the file passed 10 of 10. `tests/entry.test.mjs` hashed
+  `AE9BE6F90DE72A299EA6913F51AC30E155659CC0D00D5FC66133AF0A79020C7E` before and after the proof, so the
+  test was never edited; `actions.js` was returned to the delivered text.
+- **Bilingual parity was measured before and after rather than assumed.** The README pair went from 18
+  `##` headings and 138 distinct backtick identifiers per side with identical sets to 18 and 139 per side,
+  still identical; the index pair from 5/43 identical to 5/44 identical; the architecture pair from 6 `##`
+  headings and 233 English/234 Chinese identifiers to 6 and 236/237, with the same three set differences
+  before and after (EN-only `put`; ZH-only `config`, `generation`), so no new difference was added.
+- **What stays unverified.** No install and no `plugin_manager` call was made. The live call from inside a
+  real member Session — the one thing the live run that found this gap did — is the owner's install check:
+  the suite registers on a fake Agent context and never loads the Harness. The four frozen names in ADR
+  0014 and the three `cordis.patch.yml` entries were not touched.
+- **Version.** `0.20.0`: the plugin now serves a tool a real member can call, which is behaviour.

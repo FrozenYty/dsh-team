@@ -47,6 +47,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-en.md  ->  the AD
 | Which assignment does a successor get, and what does a definition mean on a replace? | `docs/adr/0019-definition-precedence-on-replace.md` | English |
 | Why does a task carry a body, and why can a board write not undo a handover? | `docs/adr/0020-task-body-and-write-integrity.md` | English |
 | Why is the handoff template a team file, and why is a stored write refused while it exists? | `docs/adr/0021-team-file-handoff-template.md` | English |
+| Why can a member read the work it owns, and why does the board keep one writer? | `docs/adr/0022-member-reads-its-work.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap.md` | English |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
@@ -69,6 +70,7 @@ Harness disagree, the repository is wrong.
 | If you change | Also update |
 |---|---|
 | a tool name, parameter or result field | `docs/architecture-en.md` §2 or §4.5, `actions.js`, `README.md` + `README-zh.md`, `PLAN.md` task text |
+| which scope receives a tool, or what a member may read | `index.js`, `actions.js`, `docs/architecture-en.md` §4.5 and §4.5.2, `README.md` + `README-zh.md`, ADR 0022 |
 | an operation's behaviour or failure reason | `actions.js`, the tool schema in `index.js`, `docs/architecture-en.md` §4 |
 | what adoption covers, or the discovery-row shape it consumes | `actions.js`, `roster.js`, `docs/architecture-en.md` §4.5.1, `README.md` + `README-zh.md` |
 | a roster phase or transition | the state matrix in `docs/architecture-en.md` §4.3, and the ADR if the model changed |

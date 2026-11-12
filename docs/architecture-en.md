@@ -72,6 +72,10 @@ A short map, not a changelog: each release below names what it added and the sec
   member definitions, whose body is the handoff-brief template. The effective template is the file, then
   the stored template, then the built-in; the read form reports which source is in effect, and a
   `handoff_template` write or clear is refused while the file exists (§4.4, §4.5, §4.7, ADR 0021).
+- **v0.20** — the member scope gets the read a task's body was for: `list_my_tasks`, a read-only tool
+  registered on a member Agent, returns only the rows whose `owner` is that member's own target. The
+  Lead's tool set is unchanged, the board keeps one writer, and the brief's `{task_board}` pointer names
+  this plugin's board and this tool instead of the shipped board (§4.4, §4.5, §4.5.2, ADR 0022).
 
 ### 2.1 Compaction is enabled
 
@@ -419,7 +423,7 @@ one rule the whole matrix rests on: a handover hands over *work still owed*, not
 | **restore** of a member whose tasks were transferred | unchanged: a restore recovers a lifecycle record and an artifact, it does not re-assign work | `unowned` / `unowned_tasks` report the work still waiting for an owner — a fact, not a claim; no owner is written | unchanged |
 | retirement by the **ephemeral sweep** | the owner is cleared, through the same retirement the model would have called | the triggering call's `swept`/`swept_targets` gain `unowned`/`unowned_tasks` for the rows the sweep orphaned | stay with the tombstone |
 | an open task whose **owner name was later reused** by a new generation | nothing happens by name: `owner` is a *target*, and generation 2 of a name is `reviewer-g2`, a different target. A new generation inherits nothing by name alone, and the old target still resolves for re-assignment because a retired member is a valid owner handle | none | unchanged |
-| a task carrying a **`body`** through a handover | the row is re-addressed like any other one: the body moves with it, because the body belongs to the task and not to the member that happens to hold it | the same `transferred` / `transferred_tasks`; the brief names the id and title only, so the successor reads the body from the board | stays with the predecessor's tombstone |
+| a task carrying a **`body`** through a handover | the row is re-addressed like any other one: the body moves with it, because the body belongs to the task and not to the member that happens to hold it | the same `transferred` / `transferred_tasks`; the brief names the id and title only, so the successor reads the body from the board with `list_my_tasks` (§4.5.2) | stays with the predecessor's tombstone |
 | a **`task_board` write racing a handover** (`update`, `release` or `delete` computed before it lands) | `update` applies only the fields it names to the row as stored, so a status or body change keeps the successor's owner; `release` and `delete` find a row whose `status`/`owner` is no longer the one they read and write nothing at all | `changed: false` with the row as stored and a message naming what moved and how to repeat the call; `delete` also omits `deleted` | unchanged |
 
 What the cells depend on:
@@ -588,8 +592,8 @@ characters, so a record cannot grow without limit.
 
 **Replace.** `spawn_member` with `replace: <target>` composes a short, self-contained prompt for the
 successor: the successor's name, the predecessor's target and label, the recorded assignment, the fact
-that the predecessor is gone, its open tasks by id and title, and a pointer to the Lead's own task board
-under the predecessor's name. The board's rows are handed over, not copied and not duplicated. It then
+that the predecessor is gone, its open tasks by id and title, and a pointer to this Lead's own task board
+under the predecessor's name — read by the member with `list_my_tasks` (§4.5.2). The board's rows are handed over, not copied and not duplicated. It then
 runs steps 2–6 on the predecessor. **The successor starts first and the predecessor is retired second, in
 the same call**: a failed start leaves the predecessor untouched and live, and a failed retirement returns
 `predecessor_retired: false` with the reason, so one more `retire_member` call recovers it. A target
@@ -630,8 +634,9 @@ cannot look up is a round-trip and a title alone cannot be marked done — and t
 at most 5 rows, and at most 600 characters, which is five maximal titles (`TASK_TITLE_MAX`, 200) with room
 for the ids. **The line carries ids and titles and nothing else: never a row's `body`**, which is bounded
 for the board (`TASK_BODY_MAX`, 2000) and not for a child's prompt, so one maximal body per row would
-break the 600-character bound — the successor reads the bodies from `task_board` with `action: list`, the
-same board the pointer sentence sends it to (ADR 0020). A list that would not stay under either bound is
+break the 600-character bound — the successor reads the bodies from the board with `list_my_tasks` (the
+Lead with `task_board`), the same board the pointer sentence sends it to (ADR 0020, ADR 0022). A list that
+would not stay under either bound is
 dropped entirely and the successor keeps the `{task_board}` pointer sentence, which is exactly the brief
 the release before P2-09 produced. A successor whose predecessor owned no open task therefore gets a brief
 that is byte-identical to the old one, and a test pins that string — the brief carries ids and titles only
@@ -650,14 +655,15 @@ names the rows it stored.
 
 ### 4.5 Model-facing surface
 
-The plugin is Host-only, so every operation it owns is a tool (ADR 0008). All of them are Lead-scoped,
-and the `target` of a `list_members` row is the selector every member-scoped tool takes
-(`handoff_template` takes no target: it acts on the Lead's own record). `child_id` on the row
-is the durable identity the host's own listings show; it is reported, not used as a second selector,
-because a second addressing mode would have to be honoured by every member-scoped tool to stay consistent
-while the target is already unique among addressable members. The Lead check is deliberately forgiving
-about the membership projection: a live agent with no parent Session is the root agent and is treated as
-the Lead, so a failed projection cannot disable every tool.
+The plugin is Host-only, so every operation it owns is a tool (ADR 0008). Ten are Lead-scoped, and the
+`target` of a `list_members` row is the selector every member-scoped Lead tool takes (`handoff_template`
+takes no target: it acts on the Lead's own record). One is member-scoped and read-only, `list_my_tasks`:
+it registers on a member Agent rather than the Lead's, and §4.5.2 is the authority model for both scopes.
+`child_id` on the row is the durable identity the host's own listings show; it is reported, not used as a
+second selector, because a second addressing mode would have to be honoured by every member-scoped tool to
+stay consistent while the target is already unique among addressable members. The Lead check is
+deliberately forgiving about the membership projection: a live agent with no parent Session is the root
+agent and is treated as the Lead, so a failed projection cannot disable every tool.
 
 | Tool | Behaviour |
 |---|---|
@@ -671,6 +677,7 @@ the Lead, so a failed projection cannot disable every tool.
 | `compact_member` | `ctx.compaction.compactNow(agent, signal)` on a resident, idle target, returning a structured result rather than throwing: `done`, `busy`, `not-resident`, `nothing-to-compact`, `failed`. |
 | `handoff_template` | Read, store or clear this Lead's handoff-brief shape: omit `template` to read the effective one and its `source` (`file`, `stored` or `builtin`), pass a template to validate and store it, pass an empty string to clear it. The team file `team/team.md` wins while it exists, so a store or clear is refused with the file's path and the instruction to edit it; a broken file is reported by `file_problem` and does not shadow a usable stored template. A stored value that no longer passes validation is reported (`valid`, `problem`) and the composition falls back to the built-in (§4.7). |
 | `task_board` | This Lead's own work board: `create` adds a task, `list` reads the board, `update` sets a task's `status`, `owner` and/or `body` (`owner: null` and `body: null` clear them), `release` clears an owner, `delete` removes the row (§4.3.2). One tool with an `action` enum rather than five names, because the five operations share one row shape and one refusal vocabulary and each action carries at most three extra fields. A task id is a UUID, a title is refused past 200 characters, a body is refused past 2000 and one Lead holds at most 200 tasks; a stored row whose title or body no longer passes the read rule is served with `problem` rather than dropped (§4.2). `list` reports how many tasks are open, how many of those nobody owns, and every row's body — the acceptance criteria and stopping point the brief does not carry. An id-addressed write is built from the row as stored inside the serialized mutation, so an `update` keeps a field it did not name and a `release` or `delete` whose row moved since the call read it answers `changed: false` with the row it found instead of undoing a handover (ADR 0020). |
+| `list_my_tasks` | Registered on a **member** Agent, not the Lead: the read-only rows whose `owner` is this member's own target, each with its id, title, body, status, timestamps and the same read-time `problem` the Lead's board reports, plus `open` and the member's `target` (§4.5.2). It takes no parameter: the caller's Session is the selector. A member owning nothing gets `tasks: []` and a sentence, not an error; another member's row, an unowned row and the Lead's whole board are absent. The board has no member writer — a member reports finished work and the Lead closes the row (ADR 0022). |
 
 The operation bodies live in `actions.js`; `index.js` owns argument validation, the Lead-only authority
 check and the tool result schemas. Replacement deliberately has no tool of its own: `spawn_member` and
@@ -708,6 +715,38 @@ durable catalog. Message delivery is addressed through the Lead's direct-child a
 retirement proceeds even when the drain refuses. The shipped depth limit is 1, so every descendant is a
 direct child; a deeper tree — possible only when that limit is raised — is refused by message delivery
 and still retirable.
+
+#### 4.5.2 The authority model: what a Lead sees, what a member sees, and why (v0.20.0)
+
+A member receives no Lead tool, and the Lead receives no member tool. That is two scopes, not two
+permissions on one tool, and the split is what lets the board keep exactly one writer while the person
+doing the work can still read the work it owns (ADR 0022).
+
+| Caller | Tools it receives | What it reads | What it writes |
+|---|---|---|---|
+| The Lead of a Team | the ten Lead-scoped tools; `list_my_tasks` is not among them | the whole board with `task_board list`, every member with `list_members` | every roster operation and every board write |
+| A member: a non-root Agent whose Session a roster names | `list_my_tasks` only | the rows whose `owner` is exactly its own target — open and done — from that roster | nothing on the board: it reports finished work, and the Lead marks the row `done` |
+| A member that owns nothing | `list_my_tasks` | `tasks: []`, `open: 0` and a sentence | nothing |
+| A child no roster names (a root Agent, or an unadopted child) | `list_my_tasks` | a refusal naming `task_board` for the Lead and the adoption trigger for the child; a read never adopts | nothing |
+
+**The authority is the caller's Session, never an argument.** `requireMember` scans the rosters for the
+record whose `childId` is the calling Session and returns that row; the row's target is what the filter
+uses. A member therefore cannot ask for another member's rows by naming them, and there is no second way
+to address work. The read is deliberately non-writing: adoption already runs on `list_members` and
+`spawn_member`, and a member's read must not write a record onto a Lead it cannot see.
+
+**One writer is an invariant, not a convenience.** The board is one serialized document whose handover is
+a single mutation that re-addresses rows before a tombstone (§4.3.2), and whose `release`/`delete` actions
+act only on the state they read (ADR 0020). Every transition in the transfer matrix has exactly one owner
+because a member never writes. Giving the member a status change would add a second authority rule, a
+second compare-and-set story against the Lead's handover, and a row whose `done` cannot be told apart from
+"the member said so". A member's report and the Lead's transition are two different facts, and the
+round-trip that keeps them apart is cheaper than the ambiguity that removes it.
+
+**The registration follows the Agent, like the Lead's.** `installMember` registers on the member Agent's
+own `agent.ctx` at load and on `agent/created`, and `agent/disposed` and plugin unload remove it. The
+`target` a member reads under is resolved at call time, so registration can cover every non-root Agent
+while the answer stays as narrow as the roster row that names it.
 
 ### 4.6 Member definitions (v0.16.0)
 

@@ -473,7 +473,7 @@ test('a definition assignment applies when the predecessor recorded none', async
   assert.ok(successor.definition.from_file.includes('assignment'))
   // The brief describes the predecessor, which recorded nothing, so its fallback sentence is honest —
   // the successor's own assignment is the file's standing one, held on its record.
-  assert.match(ctx.started.at(-1).prompt[0].text, /not recorded; take it from the shared team task board/)
+  assert.match(ctx.started.at(-1).prompt[0].text, /not recorded; take it from this Lead's task board with list_my_tasks/)
   assert.equal(recordNamed(table, 'reviewer', 2).assignment, 'Keep the parser green')
 })
 

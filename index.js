@@ -10,10 +10,16 @@
  * created and keep using its Lead membership test.
  *
  * Tools: `spawn_member`, `list_members`, `wait_members`, `message_member`, `stop_member`,
- * `retire_member`, `restore_member`, `compact_member`, `handoff_template`, `task_board`. The operation
- * bodies live in `actions.js`; this file keeps argument validation, the Lead-only authority check, and
- * the tool result schemas, and nothing else. The plugin has no browser half: it is entirely
- * model-facing (ADR 0008).
+ * `retire_member`, `restore_member`, `compact_member`, `handoff_template` and `task_board` for the Lead;
+ * `list_my_tasks` for a member. The operation bodies live in `actions.js`; this file keeps argument
+ * validation, the Lead-or-member authority check, and the tool result schemas, and nothing else. The
+ * plugin has no browser half: it is entirely model-facing (ADR 0008).
+ *
+ * The two scopes are deliberate (ADR 0022). Every roster and board write is Lead-scoped, because the
+ * board has exactly one writer: a member reports that a task is finished and the Lead closes the row. The
+ * one member-scoped tool is read-only — it returns the rows whose `owner` is that member's own target,
+ * which is what lets a successor read the work it inherited from the board instead of from the plugin's
+ * private storage file. A member never sees another member's rows, an unowned row, or the Lead's board.
  *
  * `spawn_member` with `replace` is the whole replacement: it starts the successor from a short handoff
  * brief composed from the assignment recorded on the predecessor's record, then retires the
@@ -64,6 +70,7 @@ import {
   ensureAdopted,
   handoffTemplate,
   listMembers,
+  listMyTasks,
   messageMember,
   pressureOf,
   retireMember,
@@ -141,6 +148,47 @@ function requireLead(ctx, caller, toolName) {
     return
   }
   if (!isRootAgent(ctx, caller)) throw new Error(`${toolName} is available to the Team Lead only`)
+}
+
+/**
+ * Resolve the roster row that names this caller's Session, or undefined.
+ *
+ * The member scope is keyed by the Session id, not by a model-supplied target: a caller cannot ask for
+ * someone else's work by naming it, and there is no second addressing mode to keep honest. The search is
+ * across every Team because the roster table is keyed by Lead Session id while a member knows only its own
+ * Session. It is a read: no adoption runs here, so a child the roster has never seen is refused instead of
+ * being silently written into a Lead's record by a read (ADR 0022).
+ * @param table - roster table.
+ * @param caller - the calling Agent.
+ * @returns {{roster: object, member: object}|undefined} the scope, or undefined.
+ */
+function memberScopeOf(table, caller) {
+  const sessionId = String(caller.session.id)
+  for (const [, roster] of table.entries()) {
+    const member = roster.members.find((candidate) => candidate.childId === sessionId)
+    if (member !== undefined) return { roster, member }
+  }
+  return undefined
+}
+
+/**
+ * Refuse every caller that is not a member this board can place.
+ *
+ * A member owning no task is not refused — it gets an empty list — so this guard is about identity, not
+ * about work. The Lead is named in the refusal because the two scopes are different tools, not two
+ * permissions on one tool: the Lead reads the whole board with `task_board`, and an unknown child is
+ * adopted the next time the Lead reads its roster (ADR 0022).
+ * @param table - roster table.
+ * @param caller - the calling Agent.
+ * @param toolName - the tool whose authority is being checked.
+ * @returns {{roster: object, member: object}} the caller's scope.
+ */
+function requireMember(table, caller, toolName) {
+  const scope = memberScopeOf(table, caller)
+  if (scope !== undefined) return scope
+  throw new Error(
+    `${toolName} is available to a Team member only. The Lead reads the whole board with task_board; a child this roster has not adopted appears after the Lead calls list_members or spawn_member.`,
+  )
 }
 
 const COMPACT_VALUE = {
@@ -335,7 +383,8 @@ const MEMBER_ROW = {
  *
  * `body` is the task's own statement of what "done" means and where the predecessor stopped, present only
  * on a row that has one; the handover brief deliberately carries the id and title only, so the successor
- * reads the bodies from here (ADR 0020).
+ * reads the bodies from here — with `list_my_tasks` as a member, or `task_board` as the Lead (ADR 0020,
+ * ADR 0022).
  *
  * `problem` is present only on a stored task whose content no longer passes the read rules — a title or a
  * body over the cap, or one that is not a non-empty string. The row is still served, because the storage
@@ -359,6 +408,28 @@ const TASK_ROW = {
     created_at: { type: 'string' },
     updated_at: { type: 'string' },
     problem: { type: 'string' },
+  },
+}
+
+/**
+ * What one member reads about the work it owns.
+ *
+ * The row is `TASK_ROW`, the same shape `task_board` `list` serves, because the member is looking at the
+ * same rows and a second row vocabulary would let the two answers drift. `target` is the member's own
+ * handle, so it can correlate the rows with the brief; `open` counts the rows still owed. When the member
+ * owns nothing, `tasks` is empty and the message says so — no error, because owning no work is a state a
+ * member is allowed to be in. The property names are declared here because the host rejects an undeclared
+ * field after the tool has already returned (ADR 0022).
+ */
+const MY_TASKS_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['target', 'tasks', 'open'],
+  properties: {
+    target: { type: 'string' },
+    tasks: { type: 'array', items: TASK_ROW },
+    open: { type: 'integer' },
+    message: { type: 'string' },
   },
 }
 
@@ -1008,7 +1079,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           template: {
             type: 'string',
             maxLength: HANDOFF_TEMPLATE_MAX,
-            description: 'The template to store, or an empty string to clear it. Placeholders: {successor} and {predecessor} (their targets), {label} (the predecessor\'s role), {assignment} (what it was doing; required, or the successor is not told what it inherited) and {task_board} (the pointer to this Lead\'s own task board). An unknown placeholder is refused. The successor\'s own prompt is always appended after the rendered template.',
+            description: 'The template to store, or an empty string to clear it. Placeholders: {successor} and {predecessor} (their targets), {label} (the predecessor\'s role), {assignment} (what it was doing; required, or the successor is not told what it inherited) and {task_board} (the pointer to this Lead\'s own task board, which the member reads with list_my_tasks). An unknown placeholder is refused. The successor\'s own prompt is always appended after the rendered template.',
           },
         },
       },
@@ -1033,7 +1104,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'task_board',
-      description: 'This Lead\'s own work board: the tasks a replacement hands over. A task belongs to one Lead, lives on that Lead\'s roster record, and has an id, a title, a body, a status (open or done) and an optional member owner. `create` adds one; `list` reads the whole board; `update` sets status, owner and/or body; `release` clears the owner; `delete` removes the row. The board is what makes a handover hand over work rather than a description of it: spawn_member with replace moves every open task of the predecessor to the successor and the successor\'s brief names them by id and title, while retire_member without a successor leaves them unowned and reports their ids. The body is where the task states what "done" means and where the predecessor stopped; the brief stays short on purpose, so a successor reads the bodies from this board. A board write never rewrites a field the call did not name, and a `release` or `delete` whose row changed since the call read it answers `changed: false` with the row it found instead of overwriting a handover. A `done` task never moves. There are deliberately no priorities, dependencies, comments, sub-tasks or due dates: this is a handover channel, not a project tracker.',
+      description: 'This Lead\'s own work board: the tasks a replacement hands over. A task belongs to one Lead, lives on that Lead\'s roster record, and has an id, a title, a body, a status (open or done) and an optional member owner. `create` adds one; `list` reads the whole board; `update` sets status, owner and/or body; `release` clears the owner; `delete` removes the row. The board is what makes a handover hand over work rather than a description of it: spawn_member with replace moves every open task of the predecessor to the successor and the successor\'s brief names them by id and title, while retire_member without a successor leaves them unowned and reports their ids. The body is where the task states what "done" means and where the predecessor stopped; the brief stays short on purpose, so a successor reads the bodies from this board with list_my_tasks. A board write never rewrites a field the call did not name, and a `release` or `delete` whose row changed since the call read it answers `changed: false` with the row it found instead of overwriting a handover. A `done` task never moves. There are deliberately no priorities, dependencies, comments, sub-tasks or due dates: this is a handover channel, not a project tracker.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1118,7 +1189,35 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
 }
 
 /**
- * Install the tools in every live and subsequently published Lead scope.
+ * Install the one member-scoped tool on an Agent's own context.
+ *
+ * A member receives its tools the same way the Lead does — `agent.ctx.tools.register` on the exact Agent,
+ * unwound when that Agent is disposed — so a member Session that is not the Lead's gets this tool while the
+ * Lead's own list is unchanged (ADR 0022). The tool is read-only and takes no target: the caller's Session
+ * is the selector, resolved at call time against the roster, which is why registration can be broad (every
+ * non-root Agent) while the answer stays narrow (only the rows that Session owns).
+ * @param agent - the member Agent whose model should receive the tool.
+ * @param ctx - plugin context.
+ * @param store - promise of the roster table; resolved lazily by each call.
+ * @returns a disposer that removes the registration.
+ */
+function installMember(agent, ctx, store) {
+  return agent.ctx.tools.register(defineTool({
+    name: 'list_my_tasks',
+    description: 'Read the tasks you own on your Lead\'s work board: one row per task whose owner is your own target, each with its id, title, body, status and timestamps, and how many are still open. The body is what "done" means for the task and where the work stopped, so read it before starting or redoing anything. This is a read-only view: only the Lead writes the board, so when you finish a task say so in your reply and the Lead marks the row done. You cannot see another member\'s tasks, a task nobody owns, or the Lead\'s whole board.',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    output: { schema: MY_TASKS_VALUE },
+    async execute(_args, exec) {
+      const caller = callingAgent(exec.agent, 'list_my_tasks')
+      const table = await store
+      return listMyTasks(requireMember(table, caller, 'list_my_tasks'))
+    },
+  }))
+}
+
+/**
+ * Install the tools in every live and subsequently published Lead scope, and the one read-only tool in
+ * every live and subsequently published member scope.
  *
  * The retention cap is resolved first, on purpose: an out-of-range `trashLimit` in the patch row must
  * fail the load before anything is registered or opened, so a bad config is a visible activation error
@@ -1178,16 +1277,34 @@ export function apply(ctx, config) {
     installed.set(agent, install(agent, ctx, store, hooks, dataDir, trashLimit))
   }
 
-  for (const agent of ctx.agents.list()) maybeInstall(agent)
+  // The member scope is the other half of the same shape: an Agent that is not a root is a child, and
+  // a child gets the one read-only tool. Whether it is on a roster is decided at call time, not here,
+  // so a member whose Lead Session is not this process's Lead still receives its tool (ADR 0022).
+  const installedMembers = new Map()
+  const maybeInstallMember = (agent) => {
+    if (installedMembers.has(agent)) return
+    if (isRootAgent(ctx, agent)) return
+    installedMembers.set(agent, installMember(agent, ctx, store))
+  }
+
+  for (const agent of ctx.agents.list()) {
+    maybeInstall(agent)
+    maybeInstallMember(agent)
+  }
   ctx.on('agent/created', ({ agent }) => {
     maybeInstall(agent)
+    maybeInstallMember(agent)
   })
   ctx.on('agent/disposed', ({ agent }) => {
     installed.get(agent)?.()
     installed.delete(agent)
+    installedMembers.get(agent)?.()
+    installedMembers.delete(agent)
   })
   ctx.effect(() => () => {
     for (const dispose of installed.values()) dispose()
     installed.clear()
+    for (const dispose of installedMembers.values()) dispose()
+    installedMembers.clear()
   }, 'team-roster.scopedTools()')
 }

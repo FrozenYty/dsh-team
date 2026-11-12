@@ -123,24 +123,27 @@ export function memberRow(ctx, member) {
 /**
  * What a brief says about the work when the predecessor's record carries no assignment.
  *
- * The pointer sentence below is kept word for word, "shared team task board" included, because P2-09's
- * contract is that a member with no tasks starts from a byte-identical brief: it is pinned by a test, and
- * the successor follows the sentence by asking the Lead or reading the board (`task_board`) anyway. What
- * the plugin owns is the board the sentence means — the shipped board the words were originally written
- * about is not read by this plugin and is not migrated (§4.3.2, ADR 0017).
+ * It points at the board this plugin owns, not at the shipped one the sentence originally named: since
+ * P2-09 the work lives on the Lead's own board (ADR 0017), and since v0.20.0 the member can read its own
+ * rows there with `list_my_tasks`. The fallback is still one short sentence; it is simply true now.
  */
-const UNRECORDED_ASSIGNMENT = 'not recorded; take it from the shared team task board'
+const UNRECORDED_ASSIGNMENT = 'not recorded; take it from this Lead\'s task board with list_my_tasks'
 
 /**
- * The pointer a successor follows to the work it inherited: the task board under the predecessor's name.
- * The board is not copied and not duplicated, because the rows may already have changed and the child
- * pays for every word. Since P2-09 that board is this Lead's own (§4.2) — the open rows a replacement hands
- * over are named in full, bounded, by `inheritedTasksLine`; this sentence is what remains for the rest.
+ * The pointer a successor follows to the work it inherited: this Lead's own task board under the
+ * predecessor's name. The board is not copied and not duplicated, because the rows may already have changed
+ * and the child pays for every word. The open rows a replacement hands over are named in full, bounded, by
+ * `inheritedTasksLine`; this sentence is what remains for the rest.
+ *
+ * It names the tool the member reads with, so the successor no longer has to ask the Lead for ids: the rows
+ * it owns are what `list_my_tasks` returns (ADR 0022). It deliberately carries no final period, because a
+ * stored template commonly writes `{task_board}.` and the built-in shape places it inside a sentence;
+ * ending here as well would produce the doubled period a live brief showed.
  * @param {string} target - the predecessor's model-facing target.
  * @returns {string} the sentence the brief points with.
  */
 function boardPointer(target) {
-  return `the shared team task board under the name "${target}": take those tasks over instead of redoing finished work, and ask the Lead for their ids if you cannot read the board.`
+  return `this Lead's own task board under the name "${target}"; read it with list_my_tasks and take those tasks over instead of redoing finished work`
 }
 
 /**
@@ -164,10 +167,10 @@ const HANDOFF_TASK_LINE_MAX = 600
  * reference it must ask about, and a title alone cannot be marked done. **Nothing else is carried — the
  * body in particular, which is bounded for the board (`TASK_BODY_MAX`, 2000) and not for a cold child's
  * prompt (ADR 0020).** One maximal body per row would blow the 600-character bound this line exists to
- * stay inside, so the successor reads the bodies from `task_board` with `action: list`: the brief names
- * the work, the board describes it. The board pointer sentence stays in the brief's shape, so this line
- * is an addition to it rather than a replacement — which is also what keeps a Lead with no tasks
- * byte-identical to the release before this one.
+ * stay inside, so the successor reads the bodies from the board itself — with `list_my_tasks` as a member, or
+ * `task_board` as the Lead: the brief names the work, the board describes it. The board pointer sentence
+ * stays in the brief's shape, so this line is an addition to it rather than a replacement — which is also
+ * what keeps a Lead with no tasks byte-identical to the release before this one.
  * @param {object[]} tasks - the predecessor's open tasks, oldest first.
  * @returns {string|undefined} the line, or undefined.
  */
@@ -176,7 +179,7 @@ function inheritedTasksLine(tasks) {
   const rest = tasks.length - shown.length
   const items = shown.map((task) => `${task.id} "${task.title}"`).join(', ')
   const line = rest > 0
-    ? `Open tasks it still owned: ${items} (and ${rest} more on the shared team task board under the name it held).`
+    ? `Open tasks it still owned: ${items} (and ${rest} more on this Lead's task board, readable with list_my_tasks).`
     : `Open tasks it still owned: ${items}`
   if (line.length > HANDOFF_TASK_LINE_MAX) return undefined
   return line
@@ -1708,6 +1711,32 @@ function openTaskCount(roster) {
  */
 function unownedOpenTasks(roster) {
   return tasksOf(roster).filter((task) => task.status === TASK_STATUS.open && task.owner === undefined)
+}
+
+/**
+ * The work one member owns, read by that member.
+ *
+ * The filter is the whole authority model: only rows whose `owner` is exactly this member's target are
+ * returned, so another member's work and every unowned row are invisible here. The target is read from the
+ * roster row the caller's Session matched, never from an argument, because a caller-supplied name would be
+ * a second, unverified way to address someone else's work. A member that owns nothing gets an empty list and
+ * a sentence, not an error: owning no work is a normal state, and an error would tell a member its tool is
+ * broken. The rows are projected through the same `taskRow` the Lead's board uses, so the body, the status
+ * and the read-time `problem` are the same facts the Lead sees.
+ * @param {{roster: object, member: object}} scope - the roster that names this member, and its row.
+ * @returns {object} the tool's result object.
+ */
+export function listMyTasks({ roster, member }) {
+  const target = targetOf(member)
+  const tasks = tasksOf(roster)
+    .filter((task) => task.owner === target)
+    .map((task) => taskRow(task))
+  const open = tasks.filter((task) => task.status === TASK_STATUS.open).length
+  const value = { target, tasks, open }
+  value.message = tasks.length === 0
+    ? 'You own no tasks on this Team\'s board. Only the Lead writes it; report finished work in your reply.'
+    : `You own ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}: ${open} open and ${tasks.length - open} done. This read is the whole list; only the Lead can change it.`
+  return value
 }
 
 /**
