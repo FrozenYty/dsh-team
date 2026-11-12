@@ -14,7 +14,7 @@
 
 ## 状态
 
-- 当前版本：v0.13.0。
+- 当前版本：v0.13.1。
 - 在作者本机 profile 上实测：退役、恢复、发消息、停止，以及一次替换——继任者完成了前任的任务（v0.5.0，v0.6.0 复测）；回收站上限（v0.7.0）；可配置上限（v0.8.0），配置值生效，越界值在加载时被拒绝；临时成员清扫（v0.9.0）——两个临时成员跑完后，下一次 `list_members` 返回 `swept: 2` 与两个目标，两行都变为 `retired`。
 - 仅由单元测试覆盖：`label` 与 `assignment` 写入时的长度上限、spawn 尚在进行时发起退役、两个花名册操作重叠时的丢失更新保护、“仍在运行的成员永不被清扫”这一条，以及 spawn 选项——普通 spawn 发出的 request 逐字段一致、每个字段都被转发、Host 能力门拒绝时变成带类型的拒绝，以及陈旧 target 的拒绝指出的活持有者（v0.12.0）；还有任务板——写入时的两处上限、[docs/architecture-zh.md](docs/architecture-zh.md) §4.3.2 矩阵中每个事件的交接，以及“没有任务的成员仍得到与以前完全相同的交接书”（v0.13.0）。
 - 安装进 profile 有真实副作用，是否安装由所有者决定。
@@ -40,7 +40,7 @@
 | `handoff_template` | 读取、设置或清除继任者收到的交接书：不传 `template` 即读取已存的那份，传入模板即保存，传空串则回到内置版本。 |
 | `task_board` | 该 Lead 自有的工作板：用 `action` 选择 `create`、`list`、`update`、`release` 或 `delete`。一条任务有 id、标题、`open` 或 `done`，以及可选的成员 `owner`；未完成的任务会随替换一起过去。 |
 
-**成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值：`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 用于更便宜的模型、另一个 provider 或 token 上限；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。结果用 `started_with` 报告实际用了什么；Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
+**成员可以换个目录、换个模型、少几件工具。** `spawn_member.spawn_options` 转发 Harness 本就支持的三个字段，任何一个省略都继承 Lead 的值——只有一个例外：改了 `provider` 或 `model` 却没给 `reasoning_effort` 时，新路由解析自己的默认值。`cwd` 用于单独的检出或 worktree（相对路径按 Lead 的目录解析，子代理保留 Lead 的权限根，因此沙箱授权之外的目录仍会被拒绝）；`agent_options` 携带 `provider`、`model`、`reasoning_effort` 与 `max_tokens`，最后一项是 token 上限，也是挑更便宜模型的地方；`agent_preset` 用于更窄的工具集——preset 是获得只读成员的**唯一**途径，因为 Harness 没有按次调用的工具白/黑名单，而 preset id 来自 profile 的 bundle 补丁，不是某个目录路径。`started_with` 是插件转发内容的回执，不是子代理解析结果的确认：它原样回显传入的字段，既不解析也不回读，所以模型有没有真正生效，要靠成员的第一条请求去确认，而不是这个字段。Harness 拒绝的启动会返回 `started: false`、原因与出路；陈旧 target 的拒绝会带 `current_holder` 指出该名字现在的活持有者，于是换过人的 Lead 可以直接改投新名字。
 
 每次退役都会产生两个宿主侧效果，二者都带能力探测：宿主会话列表出口会从 `subagentCatalog` 与 `agentTeam` 帧中剔除已退役 id，于是顶部子代理选择器和内置团队面板不再渲染该成员（不改宿主源码，不重建 Web 应用）；spawn 期间，官方花名册的有效 `maxMembers` 按该 Lead 的退役数临时抬高，于是退役一个就还回一个名额。另外，补丁把官方 `compaction-basic` 行以 `disabled: false` 启用，自动压缩因此覆盖进程内所有智能体，子代理也包括在内。
 

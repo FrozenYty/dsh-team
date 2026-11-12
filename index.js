@@ -539,7 +539,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           spawn_options: {
             type: 'object',
             additionalProperties: false,
-            description: 'Optional settings the member starts with. Omit the object, or any field in it, to inherit the Lead: an omitted member runs in the Lead\'s working directory, on the Lead\'s model and route, and with the Lead\'s tool set. What was applied is reported back in started_with, so a model chosen for a delegated task is never invisible. With replace, the successor starts with these options and the predecessor\'s record is unaffected.',
+            description: 'Optional settings the member starts with. Omit the object, or any field in it, to inherit the Lead: an omitted member runs in the Lead\'s working directory, on the Lead\'s model and route, and with the Lead\'s tool set. One exception: a changed provider or model without reasoning_effort lets the new route resolve its own default instead of inheriting the Lead\'s effort. started_with reports back what the plugin forwarded, not what the child resolved: it echoes the supplied fields unresolved and unread, so it is a receipt for the request, never a confirmation that a chosen model took effect. With replace, the successor starts with these options and the predecessor\'s record is unaffected.',
             properties: {
               cwd: {
                 type: 'string',

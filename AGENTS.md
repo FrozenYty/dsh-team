@@ -18,9 +18,12 @@ change before you edit anything.
 
 ## 2. The project
 
-`dsh-team` is a DeepSeek Harness profile bundle. It gives an agent team the lifecycle the
-shipped experimental Agent Teams packages lack: a roster whose members can be retired, removed and
-replaced, instead of one that only grows.
+`dsh-team` is a DeepSeek Harness profile bundle. Its subject is the permission the shipped experimental
+Agent Teams packages do not have: a member can be retired, removed and replaced, so the roster shrinks as
+well as grows. Only the person changes, not the work — a retirement is a move into a trash this plugin
+controls, never a deletion. The shipped roster is a fold over the Lead Session's append-only log, where a
+transition out of a terminal phase throws and the projection records that throw as a permanent failure, so
+extending it is what the plugin avoids.
 
 Two layers, and they must not be confused:
 
