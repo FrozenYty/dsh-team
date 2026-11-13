@@ -100,6 +100,54 @@ export function pressureOf(ctx, agent) {
   return { pressureTokens, contextWindow, ratio }
 }
 
+/** The four counters one `tokenUsage` projection carries, which together are everything a Session spent. */
+const SPEND_COUNTERS = ['uncachedInputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+
+/**
+ * What one member has spent, out of the projections registry.
+ *
+ * **Not out of `tokenMeter`, which cannot answer this.** Its `tokenUsage` handle is registered and then
+ * discarded, and its `measure()` reports pressure — how full a context is — rather than spend. The registry
+ * is the path, and it is present wherever `tokenMeter` is active because `TokenMeter` injects it itself
+ * (ADR 0037).
+ *
+ * Three things about the read are deliberate:
+ *
+ *   - **`ctx.get` is the optional-access pattern this bundle already uses** (`host-hooks.js` asks for
+ *     `sessionController` and `agentTeams` the same way), so `sessionProjections` is not added to `inject`:
+ *     a profile without the registry must not stop the plugin loading, and a row without a number is a
+ *     truthful row.
+ *   - **the unit subset is named** — `['tokenUsage']` — because `snapshot` computes only the units it is
+ *     asked for and skips the host-only ones, which makes this one cheap projection read per row instead of
+ *     a full snapshot.
+ *   - **nothing is invented.** No registry, no session, no `tokenUsage` unit, or a counter that is not a
+ *     finite number all answer `undefined`, and the row omits the field: "nothing measured" and "nothing
+ *     spent" are different claims (ADR 0037).
+ * @param ctx - plugin context.
+ * @param {object|undefined} agent - the member's live Agent, when this process holds one.
+ * @returns {number|undefined} the four counters summed, or undefined when there is nothing to read.
+ */
+export function spendTokensOf(ctx, agent) {
+  if (agent === undefined || agent === null || agent.session === undefined) return undefined
+  const projections = typeof ctx.get === 'function' ? ctx.get('sessionProjections') : undefined
+  if (projections === undefined || projections === null || typeof projections.snapshot !== 'function') return undefined
+  let usage
+  try {
+    usage = projections.snapshot(agent.session, ['tokenUsage'])?.values?.tokenUsage
+  } catch (error) {
+    // A projection read is a read of something this plugin does not own: a Session the registry has already
+    // forgotten, or a unit it cannot compute. A row is not the place to fail over it.
+    return undefined
+  }
+  if (usage === null || typeof usage !== 'object') return undefined
+  let total = 0
+  for (const counter of SPEND_COUNTERS) {
+    if (!Number.isFinite(usage[counter])) return undefined
+    total += usage[counter]
+  }
+  return Number.isFinite(total) ? total : undefined
+}
+
 /**
  * The sentence a row carries when its member is still on a route its Lead has left.
  *
@@ -198,6 +246,11 @@ export function memberRow(ctx, member, leadRoute, members) {
       } catch (error) {
         row.note = 'Context pressure is not measurable for this member yet.'
       }
+      // What it has spent, which is a different question from how full it is (ADR 0037). Omitted — never
+      // reported as 0 — when the projection cannot be read: a retired or unloaded member's Session may no
+      // longer be attached, and "nothing measured" is not "nothing spent".
+      const spend = spendTokensOf(ctx, agent)
+      if (spend !== undefined) row.spend_tokens = spend
     }
   }
   // What the model recorded about the work, so the Lead can see it before replacing the member.

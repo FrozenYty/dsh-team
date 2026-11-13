@@ -354,7 +354,13 @@ export async function collectFromBundle({ archive = true } = {}) {
   // The services this fake Host answers, and nothing else is answered below. `compaction` is not one of
   // them: the bundle asks for it lazily and tolerates its absence, so it is a lookup, not an injection.
   const services = {
-    agents: { list: () => [lead, child], get: (id) => (id === lead.id ? lead : id === child.id ? child : undefined) },
+    // Every Session id resolves to an Agent, as it does in a real process while the child is attached: a row
+    // asks for one to read pressure and spend, and a harness that answered only for two ids would leave those
+    // fields out of every value the Host is asked to judge.
+    agents: {
+      list: () => [lead, child],
+      get: (id) => (id === lead.id ? lead : id === child.id ? child : { id, status: 'idle', session: { id } }),
+    },
     agentTeams: { tryMembership: () => undefined, listMembers: () => [] },
     subagents: {
       listDescendants: async () => [],
@@ -376,6 +382,13 @@ export async function collectFromBundle({ archive = true } = {}) {
         const dir = join(sessionsRoot, id)
         return existsSync(dir) ? { location: { path: dir } } : undefined
       },
+    },
+    // The projections registry `spend_tokens` comes from (ADR 0037). Optional in the bundle (`ctx.get`), but
+    // mounted here so a row value actually carries the field and the Host judges it.
+    sessionProjections: {
+      snapshot: () => ({
+        values: { tokenUsage: { uncachedInputTokens: 1200, outputTokens: 300, cacheReadTokens: 4000, cacheWriteTokens: 500 } },
+      }),
     },
   }
   const ctx = {

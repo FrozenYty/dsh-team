@@ -294,6 +294,23 @@ test('the harness half still matches the bundle: every injection is answered, ev
   const declaration = tools.find((tool) => tool.name === 'list_members')
   assertMatchesSchema(flagged.value, declaration.output.schema, 'list_members { archived: true }')
 
+  // `spend_tokens` is a value field the Host must accept, and it reaches the validator only if a row carries
+  // it — which is exactly the failure this plugin has already shipped once: an operation answered with a
+  // property the output schema did not declare, and the call was rejected after the side effect.
+  const plain = results.find((result) => result.tool === 'list_members' && Object.keys(result.args ?? {}).length === 0)
+  assert.ok(plain !== undefined, 'the harness made a plain list_members call')
+  const measured = plain.value.members.find((row) => row.spend_tokens !== undefined)
+  assert.ok(measured !== undefined, 'a row carries spend_tokens, so the Host judges the field')
+  assert.equal(typeof measured.spend_tokens, 'number', 'and it is the number the projection summed')
+  assert.equal(
+    measured.spend_tokens,
+    1200 + 300 + 4000 + 500,
+    'the four counters the harness projection reports',
+  )
+  // And that row is validated against the declaration, so a field the schema did not declare would fail by
+  // name here rather than after a side effect in production.
+  assertMatchesSchema(plain.value, declaration.output.schema, 'list_members (plain)')
+
   // The lookup, in both of its outcomes: a hit carries the record and the scan's cost, a miss carries the
   // sentence the read owes. Neither set of fields is a subset of the other, so both are walked.
   const lookupHit = results.find((result) => result.args?.archived_target === 'archivist-a')

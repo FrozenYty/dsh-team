@@ -650,6 +650,21 @@ test('the retire_member tool asks the person before ending a standing role', asy
   assert.equal(table.get('lead-1').members.find((member) => member.name === 'keeper').phase, 'retired')
 })
 
+test('the list_members row declares spend_tokens, and the description warns that it can fall', () => {
+  const { tools } = harness()
+  const list = tools.get('list_members')
+  // The field is declared, so a value carrying it survives the projection.
+  const row = list.output.schema.properties.members.items
+  assert.equal(row.properties.spend_tokens.type, 'integer')
+  // And the three things a reader needs before they trust the number: what it counts, what it is not, and
+  // that it can go down. A number that falls without a sentence saying so is a bug report waiting to happen.
+  assert.match(list.description, /spend_tokens/)
+  assert.match(list.description, /tokens and not money/)
+  assert.match(list.description, /cumulative rather than a rate/)
+  assert.match(list.description, /not monotone|can show a smaller number/)
+  assert.match(list.description, /absent when the projection cannot be read/)
+})
+
 test('list_members declares the archive flag and reads the Lead own root when asked for it', async () => {
   const { tools, table, lead, workspace } = harness()
   const exec = { agent: lead }
