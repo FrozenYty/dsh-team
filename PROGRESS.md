@@ -3306,3 +3306,32 @@
   assertion and prints which one it used.
 - **Version.** `0.36.4`: no shipped file changed, one check that now covers what it was written to cover, and
   a shared assertion so the rule holds off this machine.
+
+## 2026-11-13 — the live acceptance round becomes a procedure, and the check that has never run says so (v0.36.5)
+
+- **The plugin's real reliability gap is not in its logic.** `schema-check.mjs` proves the Host accepts the
+  shapes, the suite proves our logic, and **nothing proves the Host's *behaviour*** — a changed return from
+  `agentTeams.listMembers()` or `tokenMeter.contextPressure()` breaks the plugin with every check green. Only
+  a real call catches that. Today's round was the first since v0.27, and it was improvised; it is now a
+  procedure: **eight checks, each with what to call, what a correct answer looks like, and what a mismatch
+  most likely means** — the third column is what makes it a diagnosis instead of a ritual.
+- **One check has never run, and it says so.** The two-Lead isolation of the archive needs two Lead Sessions
+  in one data root and today's profile has one; it is marked as the first pending check with its precondition
+  written down, rather than described as though it passed. **A checklist that claims a run it never had is
+  worse than a shorter checklist**, and the same discipline applies to check 5, whose evidence only exists
+  because a member was retired on or after v0.34.0 — a precondition, not a detail.
+- **The arithmetic is written down because it is how a reader verifies without a debugger**: a plain read's
+  `archived_records` is trustworthy exactly when `retiredChildIds` minus the tombstones still in the roster
+  equals it (95 − 21 = 74 today). That subtraction is the hot-path rule made checkable by hand.
+- **The emergent archiving is named as expected, with both rules behind it** — a retirement prunes an older
+  artifact, and that pruning is what makes an older tombstone archivable, so one write can both tombstone and
+  archive. A reader who does not know it will file a **correct** run as a bug.
+- **The change was blocked by its own gate, and that is the cheapest test a rule can get.** Adding a §7 to the
+  new document made a bare `§7` in `PLAN.md` ambiguous between two documents, so the first commit was refused —
+  nothing committed, nothing pushed — and the reference was made to name its document. The pair rule and the
+  citation resolver caught a problem created by the same change that was documenting them.
+- **The document states what it cannot prove**: it is a snapshot of one Host build, and a live pass cannot
+  replace the suite — the two answer different questions, and the one that stays green between upgrades is the
+  suite.
+- **Version.** `0.36.5`: one document pair, both index rows, and one citation in `PLAN.md` that the gate
+  forced.

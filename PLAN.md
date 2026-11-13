@@ -472,7 +472,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Done when a citation to a document that does not exist fails by name, a citation to a section that document
   does not have fails by name, the rule is stated in `CONTRIBUTING.md`, and neither `PROGRESS.md` nor
   `CHANGELOG.md` is forced to rewrite a historical entry.
-  Delivered: `scripts/check.mjs` §7 resolves document references and §-references in `docs/`, `README` pair,
+  Delivered: the citation checker in `scripts/check.mjs` resolves document references and §-references in `docs/`, `README` pair,
   `AGENTS.md`, `CONTRIBUTING.md`, `PLAN.md` and the six host modules, following the document a citation names
   (including the short `member-lifecycle §3` form and same-line continuations), then the containing document,
   then the single English `docs/` document that has the section, and failing when none applies. The two

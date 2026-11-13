@@ -33,6 +33,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 工作板做什么，替换时未完成的工作去哪里？ | `docs/task-board-zh.md` | 双语 |
 | 继任者如何被交接，哪个模板生效？ | `docs/handoff-zh.md` | 双语 |
 | 存了什么，回收站如何被约束？ | `docs/roster-storage-zh.md` | 双语 |
+| 什么能证明 Host 仍按本插件的预期行事，以及一轮怎么跑？ | `docs/live-acceptance-zh.md` | 双语 |
 | 成员跑在哪个模型上，什么在计费？ | `docs/routes-zh.md` | 双语 |
 | 从旧版本升级要改什么？ | `docs/upgrading-zh.md` | 双语 |
 | 为什么花名册要自建而不是扩展官方？ | `docs/adr/0001-own-roster-on-subagents.md` | 英文 |

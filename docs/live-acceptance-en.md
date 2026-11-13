@@ -1,0 +1,126 @@
+# Live acceptance
+
+> Owner: @FrozenYty · Revisit when: the checklist is run against a new Host build, a check gains a
+> precondition, or a check is retired
+
+This is the **only** check in this repository that proves the **Host's service behaviour**. Everything
+else proves something narrower: `scripts/check.mjs` proves the bundle matches itself, `scripts/schema-check.mjs`
+proves the Host's validator accepts our *shapes*, and the suite proves our *logic* on fixtures. None of
+them can notice that `agentTeams.listMembers()` or `tokenMeter.contextPressure()` started returning a
+different shape — a change that breaks this plugin with every automated check green.
+
+So this procedure is run **after every Harness upgrade**, and only a real call catches that class of
+breakage. Its result is recorded in `PROGRESS.md` with the **Host version** it ran against: this document
+is the procedure, `PROGRESS.md` is the record, and `PLAN.md` earns a task only when the checklist has to be
+scheduled rather than performed.
+
+**What it cannot prove:** it is a snapshot of **one Host build**. A pass says the Host behaved as expected
+on the day it ran; it says nothing about the next build, and it cannot replace the suite — a live round that
+passes while a fixture test fails is a live round that measured the wrong thing.
+
+**Read the numbers as relationships, not literals.** Every count below belongs to one profile and one day.
+A different profile has different counts; what must hold is the relation between them, which is why each
+check states the relation rather than the value.
+
+## 1. The archive is bounded and says so
+
+**Call** `list_members` with `archived: true`.
+**Correct looks like** `archived_returned` equals the cap (50 today) **and** is smaller than `archived_total`
+whenever more records exist, so the answer says both how much it shows and how much it holds. Observed
+2026-11-13: `archived_returned: 50`, `archived_total: 74`.
+**If it does not match** — `archived_returned` above 50: the cap is not being applied, and an unbounded
+read is the failure the cap exists to prevent. `archived_total` equal to `archived_returned` when the file
+clearly holds more: the total is being computed from the returned slice, so a caller can no longer tell
+that history is being withheld.
+
+## 2. A plain read never opens the archive — check it by arithmetic
+
+**Call** `list_members` with no flag.
+**Correct looks like** `archived_records` reported, `archived` rows absent, and the **arithmetic closing**:
+`retiredChildIds` length minus the number of tombstones still in the roster equals `archived_records`.
+Observed 2026-11-13: **95 − 21 = 74**. That subtraction is how you verify the hot path was respected
+without a debugger: if the hot path had read the file, the count could come from the wrong place and the
+difference would not close.
+**If it does not match** — the arithmetic not closing: the count and the file disagree, so either the
+archive is being read when it should not be or the window flushed without writing. `archived` rows
+appearing without the flag: the flag has stopped meaning anything.
+
+## 3. Restoring an archived tombstone refuses, by name
+
+**Call** `restore_member` against a target known to be archived.
+**Correct looks like** `reason: "archived"`, the message **naming the archive file and the archived time**,
+and **nothing changed** — no trash entry, no record movement, the roster identical afterwards.
+Observed 2026-11-13: the refusal named the file and the archive time and moved nothing.
+**If it does not match** — a generic "not found" instead: the typed refusal was lost, and a person can no
+longer tell "never existed" from "left the roster". Anything moving: a restore that writes on a refusal is
+the false-success defect this plugin has been repaired for more than once.
+
+## 4. A live retirement writes the workspace trash and a portable origin
+
+**Call** `retire_member` on a member whose artifact exists.
+**Correct looks like** the artifact inside the **workspace** trash (`<workspace>/.agents/team/trash/…`,
+never `~/.dsh/team-roster`); `originalRelPath` written **with forward slashes** as `<slug>/<leaf>`; and
+**neither `originalPath` nor `trashPath`** on the record (ADR 0034).
+Observed 2026-11-13: exactly that — the moved artifact under the workspace, the relative origin with forward
+slashes, both absolute fields absent.
+**If it does not match** — the artifact under `~/.dsh/team-roster`: the frozen directory is being used as a
+write target instead of only as a legacy read leg. `originalPath` or `trashPath` present on a new record: a
+release went back to writing an absolute path, and the roster stopped being portable.
+
+## 5. A restore works from a record with no absolute path
+
+**Precondition, and it is not optional:** the member must have been **retired on or after v0.34.0**, so its
+record carries `originalRelPath` and no absolute path.
+**Call** `restore_member` on it.
+**Correct looks like** the sessions root derived from a **sibling Session the persistence service still
+reports**, the slug taken from the record, and the artifact moved back to its original path — with the
+record returning to `active` and the trash entry gone.
+Observed 2026-11-13: succeeded on exactly those terms. **This is the strongest check in the list**: it
+proves the relative origin resolves on a live store, which no fixture can.
+**If it does not match** — `unresolved-root` or a generic failure: the sibling leg did not find the root, so
+the sessions root derivation is what to inspect first, not the record. A move to a path that does not exist:
+the slug joined against the wrong root.
+
+## 6. The cap runs, and a prune can archive a tombstone in the same write
+
+**Call** a retirement that takes the trash past the effective cap.
+**Correct looks like** one artifact pruned (`pruned` above zero in the retirement result) **and** an older
+tombstone becoming archivable as a consequence — so the same write moves it to the archive and the file
+grows by one line while the roster shrinks by one tombstone. Observed 2026-11-13: one pruned, **74 → 75**
+lines, the newly archivable tombstone flushed in the same write.
+**This emergent behaviour is expected and is not an error.** It is two rules meeting: the cap removes the
+artifact (ADR 0011/0012), and the window then allows the record to leave because its bytes are gone (ADR
+0030). A checklist reader who does not know this will read a correct run as a bug.
+**If it does not match** — a pruned artifact whose record stays on the roster: the window is not being
+applied on that write, so the bound is being forgotten somewhere. The archive growing without a prune: a
+record left for a reason other than the cap, which the four conditions should have refused.
+
+## 7. The host hooks report themselves, and the storage block names the file
+
+**Call** `list_members` (with or without the flag).
+**Correct looks like** `host_hooks.panel_filter`, `roster_filter` and `slot_credit` all `installed`,
+`stripped_ids` equal to the number of retired child ids the filters are removing (observed 2026-11-13: 95),
+and `storage.source: "file"` with a workspace `path` — not `storage-domain`, which the schema no longer
+publishes (ADR 0031/0033).
+**If it does not match** — a hook `absent`: that service did not exist when the plugin loaded, and the
+shipped panel or `list_agents` will show members it should hide. `stripped_ids` zero while retired members
+exist: the filter is installed but reading nothing, which is worse than absent because it looks healthy.
+`storage.source: "none"`: this Lead was never bound, which on a real profile means the root was not
+resolved.
+
+## 8. Two Leads in one data root see only their own archived records
+
+**Status: not yet run — this is its first pending check.** The archive is one file per data root and the
+reader must answer one Lead only (ADR 0035). Today's profile has a single Lead Session, so the rule is
+covered by the suite and by no live observation.
+**Precondition:** two Lead Sessions sharing a data root, each with at least one archived tombstone.
+**Correct looks like** each Lead's flagged read returning only its own records, with `archived_total`
+matching that Lead's lines rather than the file's.
+**If it does not match** — one Lead's records appearing in the other's answer: the reader is answering by
+file rather than by Lead, and every count in checks 1 and 2 becomes meaningless once a second Lead exists.
+
+## Recording a round
+
+Write the Host version, the date, each check's observed values, and any check that could not be run and
+why, into `PROGRESS.md` as one entry. A check that was skipped is recorded as skipped — silence about which
+checks ran is how a procedure comes to be believed while it is broken.
