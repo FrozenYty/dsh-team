@@ -3369,3 +3369,27 @@
   point of the feature asserts a lookup reads past the cap — `ARCHIVE_READ_LIMIT + 5` lines.
 - **Version.** `0.37.0`: one parameter, two fields, and the first operation on the archive that is not a
   view.
+
+## 2026-11-14 — the lookup's decision is recorded, and a status that would have gone stale was caught (v0.37.1)
+
+- **ADR 0036 supersedes nothing and says what it is instead**: the other half of ADR 0035's capability —
+  *"one answers what left the roster lately, this answers what happened to **this** member"*. Neither
+  replaces the other, and a reader who finds only one of them should be able to tell that from the header.
+- **The decision reduced to one sentence**: the cap constrains what an answer carries, not what a search may
+  read. Everything else in the ADR follows from it — the miss fields exist so an empty answer carries the
+  work behind it, and `archived_scanned` is that work made visible.
+- **Two details were decided rather than inherited, and both are the kind that go wrong silently.** A lookup
+  takes the **last** match, so the crash window's duplicate line is answered by its newest rather than its
+  first. And matching is identity — `targetOf` or the raw `member_id` — with the ADR noting that a text match
+  would have been **the first place in this bundle to break a rule that holds everywhere else**.
+- **A status that would have become false was fixed in the same breath.** Check 8 read *"the first check that
+  has never run"*; adding check 9 made that untrue, so it now says **one of two**. A status is a claim with a
+  shelf life, and the moment the next thing arrives it starts to rot — the same failure this repository has
+  now recorded for a version number, a plan, a schema and a manual check.
+- **The checklist's own count was corrected with it** — nine checks, two never run — because a document that
+  lists its own totals has one more number that can drift.
+- **What the two unrun checks have in common**: neither can be simulated faithfully in the suite. Check 8
+  needs two Lead Sessions sharing one data root; check 9 needs an archive larger than the cap with the target
+  beyond it. That is exactly why the live round is the only instrument for the Host's behaviour, and why the
+  document says so at the top rather than in a footnote.
+- **Version.** `0.37.1`: one ADR, one checklist pair, and a stale status caught before it shipped.
