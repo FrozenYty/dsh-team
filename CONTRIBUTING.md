@@ -75,6 +75,14 @@ CI runner is fast enough to produce two retirements in one millisecond, and a te
 was green locally and red in CI. The same class has cost this repository three times today, so it is a rule
 here rather than a comment in the test that survived.
 
+**The schema check has two halves, and CI runs one of them.** `node --test` drives the harness half on every
+push: it checks that every tool's input and result schemas still match what the bundle declares, and — on a
+machine that has the archive — that the Host's own validator accepts them. CI has no archive, so it covers
+**"the input still matches the bundle"** and not **"the Host still accepts these schemas"**. The second half
+is `node scripts/schema-check.mjs`, run locally against the installed build (`DSH_ASAR` points it at another
+one), and it is the half nobody runs but you. The test says which half it skipped rather than passing quietly,
+because that is how the script came to be believed while it was broken.
+
 ## 5. Files
 
 - **Filenames are English**, lowercase, hyphen-separated.

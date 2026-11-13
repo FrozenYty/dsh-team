@@ -3053,3 +3053,41 @@
   comparison fails as `'rewrite' !== 'noop'`.
 - **Version.** `0.35.0`: one exported function and the coverage that makes it meaningful, one separator
   convention, and one migration comparison fixed on the way past.
+
+## 2026-11-13 — a travelling path's rule is documented, and the ADR that named the debt says it is settled (v0.35.1)
+
+- **The separator rule gets no ADR, and the reason is a rule about ADRs.** ADR 0034 had **already recorded
+  this exact follow-up** — *"`trashRelPath` still uses platform separators while this field uses forward
+  slashes — a recorded follow-up of the same class"* — so v0.35.0 pays a debt a document had named, and the
+  rule itself is the path chain's existing one (strict on write, tolerant on read) applied to one more
+  field. **A new ADR would have restated a rule that did not change, and an ADR that restates something
+  unchanged is a document nobody maintains.**
+- **What replaces it is a pointer, which is the precedent this repository already set**: ADR 0034's header
+  now says the follow-up is settled, that there is no successor, and where the documents state the rule —
+  because without that line 0034 still reads as carrying unpaid debt, and a reader would go looking for an
+  ADR that does not exist. Amendment by pointer has now been used for 0014, 0021, 0027 and 0034, always for
+  the same reason: the name or the rule stands, a fact around it moved.
+- **Three parts of the rule are documented rather than asserted.** Why the tolerance is needed at all — a
+  roster travels and the reader may not be the writer, and a record carrying the writing machine's separator
+  read with `join` once put an artifact under a path with a literal `trash\lead\dir` in it. Why the
+  tolerance is **constructive rather than hopeful** — no legal segment of that field can contain a
+  backslash, because both are encoded identities, so splitting on either separator cannot split a segment.
+  And the migration repair that came out of it: comparing by segment, because comparing characters reported
+  every already-migrated Windows record as pending and rewrote it.
+- **`CONTRIBUTING.md` §4 now carries both halves of the schema check in one breath**: the unit test drives
+  the harness half on every push and checks the input still matches the bundle, while **CI has no archive
+  and so covers that and not "the Host still accepts these schemas"**, with the local command named as the
+  half nobody runs but the contributor. A future contributor reading §4 learns which check protects them and
+  which one is theirs alone.
+- **The wording was checked against the code rather than against the brief.** The instruction said the
+  archive leg reports rather than skips; the member read `tests/schema-check.test.mjs` and cited the lines
+  that skip it when the asar is absent, plus the exact sentence printed. **A brief is a hint and the code is
+  the source**, and saying which one was consulted is the difference between a document that describes the
+  system and one that describes a conversation about it.
+- **The one thing left unenforced, named as a class rather than as a one-off.** Nothing stops a future edit
+  from rendering a backslash into a legal segment, which would make the tolerant read ambiguous — and no
+  check would notice. That is the **third rule today recorded with evidence and no enforcement** (the
+  tie-break rule, the single-member hole, this). Recording them as a class is more honest than fixing two
+  and letting the third imply the rest are safe.
+- **Version.** `0.35.1`: one document pair, one pointer in a closed ADR, and a section of `CONTRIBUTING.md`
+  that says what CI does not cover.

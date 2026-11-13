@@ -6,6 +6,11 @@
   other half of the same record: 0028 made the *destination* portable, this makes the *origin* portable.
 - **Related:** [0027](0027-roster-file-under-the-workspace.md), [0031](0031-files-only-state.md) (the file
   a person can carry, which is what made this necessary), [0033](0033-domain-removed.md).
+- **Its recorded follow-up is settled, with no successor ADR:** v0.35.0 writes `trashRelPath` with forward
+  slashes and reads it on either separator, which is this ADR's own rule and ADR 0028's applied to the field
+  that was left behind — strict on write, tolerant on read, safe because no legal segment of that field can
+  contain a backslash. A new ADR would have restated the path chain's existing rule for one more field, so
+  the documents state it instead (`docs/roster-storage-en.md` §3).
 
 ## Context
 
