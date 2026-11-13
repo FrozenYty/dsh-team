@@ -123,6 +123,8 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 交接书的形状——占位符、各自的边界，以及它可能来自的三个来源——见 `docs/handoff-zh.md` `docs/architecture-zh.md` §1。
 
+**一次替换会把链接写在两条记录上。** 继任者的行带 `predecessor`，墓碑带 `successor`，各自写明 `target` 与 `member_id`；两者都写在“把该记录变成墓碑”的那次变更里，因为只有一端存在的链是读者能观测到的半成品。链接写的是成员 id，绝不是名字——`reviewer` 与 `reviewer-g2` 是同一个基名的两位持有者，存名字会解析到错误的那位。走到一个已不在花名册里的 id 时，遍历报告该 id 而**不带 target**，并且不声称前任已归档：那意味着在热路径上打开归档，而 `archived_records` 与 `archive_file` 已经说明那段历史去了哪里（ADR 0032、ADR 0030）。
+
 ## 4. 退役会移走产物
 
 `retire_member` 先立碑、再碰文件系统：墓碑带上即将使用的回收站目录与 `trashState: 'pending'` 标记，随后把持久化会话移入 `<数据根>/trash/<leadSessionId>/<childId>-<ms>/`，最后把记录确认为 `trashState: 'done'`；这些步骤由 §3 负责。名字里带的是**子会话 id**，不是记录的 `memberId`；记录把它存为 `trashDir` 与 `trashRelPath` 而不是绝对路径，所以数据根移动之后产物仍然找得到（ADR 0028）。顺序是刻意的：两者之间崩溃留下的是“一条 `retired` 记录配一份要么还没移动、要么已经进回收站的产物”——两种情况都可恢复，因为 `pending` 表示“移动可能发生也可能没有”，而恢复会先去回收站找。反过来则会留下“已进回收站的会话 + `active` 记录”，之后任何一次读取都解释不通。

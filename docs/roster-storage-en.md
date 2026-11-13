@@ -151,9 +151,12 @@ its import marker, `provenance.json` and `archive.jsonl` beside it, and the tras
 A new root with no `roster.json` reads its records **once** from `DSH_TEAM_SEED`, a file the person names,
 which accepts this plugin's own shape or a storage-domain dump and is never written; a seed that is
 configured and unusable is a **problem, not a fallback** — the root stays empty and `list_members` says why
-(ADR 0031). The storage domain **answers no read**: it is the last leg of the import order,
-`seed → domain → nothing`, it is opened once more for one release only to migrate a profile that has never
-bound a workspace, and on this machine its file has been deleted (ADR 0014, ADR 0031). Records are replaced
+(ADR 0031). The storage domain **answers no read and is not opened at all**: the import order is
+`seed → nothing`, and a root with no file starts empty or from a seed (ADR 0033). `provenance.json` still
+records a domain-era `source` as a **value** — nothing writes it and nothing branches on it, so a reader of
+an older file is not told its history is impossible. A path whose ancestor is a file counts as **no file**
+(`ENOENT` or `ENOTDIR`), because the platforms disagree there and that boolean decides whether a root is
+seeded at all (ADR 0033). Records are replaced
 by a temporary file plus a rename, so a crash leaves either the whole previous file or the whole new one.
 `storage.source` is `'file'`, or `'none'` for a Lead this process has never bound — a file that cannot be
 read is reported as `source: 'file'` with a `read_problem`, never as a fallback to the domain.
