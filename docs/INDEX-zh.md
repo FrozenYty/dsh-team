@@ -36,6 +36,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 什么能证明 Host 仍按本插件的预期行事，以及一轮怎么跑？ | `docs/live-acceptance-zh.md` | 双语 |
 | 当一条归档记录位于上限之外时，如何按身份找到它？ | `docs/adr/0036-archive-lookup-by-identity.md` | 英文 |
 | 成员花费的 token 数据从哪里来，以及为什么它被省略而不是记为零？ | `docs/adr/0037-member-spend.md` | 英文 |
+| 哪三个来源回答成员的花费，以及这个数字在墓碑上意味着什么？ | `docs/adr/0038-spend-three-sources.md` | 英文 |
+| 恢复能回溯多少次退役，以及为什么默认值这么大？ | `docs/adr/0039-retention-default.md` | 英文 |
 | 成员跑在哪个模型上，什么在计费？ | `docs/routes-zh.md` | 双语 |
 | 从旧版本升级要改什么？ | `docs/upgrading-zh.md` | 双语 |
 | 为什么花名册要自建而不是扩展官方？ | `docs/adr/0001-own-roster-on-subagents.md` | 英文 |

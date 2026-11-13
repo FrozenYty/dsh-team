@@ -3474,3 +3474,59 @@
   running. **That second decision is reversed in the next release**, and this clause is written so its
   replacement is a rewrite of one sentence rather than a patch beside it.
 - **Version.** `0.38.2`: one clause, three assertions, and a reader who is told before it asks.
+
+## 2026-11-14 — the spend field's three sources are decided, and the one sentence they replace is named (v0.38.3)
+
+- **Changing a decision now has a shape, and this is the second use of it.** ADR 0038 replaces **one sentence**
+  of ADR 0037 — the resident-only limit, quoted verbatim so a reader can see exactly what moved — leaves the
+  rest standing and names it as standing, and ADR 0037 gets a pointer line rather than a rewrite. **A
+  supersession that says which clause died is worth more than one that replaces a document**, because the
+  decisions that did *not* change are the ones a later reader would otherwise re-litigate.
+- **The field now has two meanings and the ADR says which is which**: on a live or unloaded row it is what the
+  session has processed so far, which can still grow **and can still fall**; on a tombstone it is what the
+  member had processed when it was retired — frozen, and never changing again. **A number with two meanings
+  must name them, or a reader compares two values that are not the same kind of thing.**
+- **The third source exists because of a moment, not a method.** The number is captured **before the artifact
+  moves**, because the move is what drops the artifact out of the session-query index — which the plugin's own
+  comment in `trash.js` already said — and afterwards the cache row's identity no longer matches anything in
+  the listing while the tombstone stores no `createdAt`. **The plugin's last chance to know is the instant it
+  performs the retirement.**
+- **The fallback is placed where its cost is paid once.** The projection cache rejects a row whose
+  `stateVersion` no longer matches the live unit, so a token-meter bump silently blanks every cold read; at
+  retirement — one member, once, with the data unrecoverable a moment later — folding the durable log is
+  affordable. On a row it never is, because an exact read replays the whole log.
+- **The field starts existing at retirement, not before**: tombstones written earlier carry no number and none
+  can be recovered, and **inventing one is the failure this field exists to avoid**.
+- **The ADR states plainly that v0.38.1 implements only the mounted source** — the premise was checked against
+  the code before writing, so a reader of the document is not misled about the plugin. The implementation of
+  the other two is in flight, which is the honest state of a decision recorded ahead of its code.
+- **Version.** `0.38.3`: one ADR, one pointer line, and a decision that names the sentence it replaces.
+
+## 2026-11-14 — the retention default is decided on a measurement, and the failure sets its direction (v0.38.4)
+
+- **Twenty was never a storage decision, and the measurement shows it.** Twenty trash directories occupy
+  **4.2 MB** on this machine — 210 KB on average, the largest 467 KB — so two hundred is about **41 MB** against
+  **616 GB free**. The cap was protecting a rounding error while **destroying something irreversible**: a pruned
+  artifact cannot be restored, and **75 of the 95 retired records here have already lost their bytes**.
+- **The decision sentence is written to outlive these numbers**: *a default belongs on the generous side when the
+  failure is irreversible and the cost is a rounding error.* That is why the default moves and why the direction
+  of the error was the thing being chosen, not the number.
+- **What expires is resumability, not history.** The artifact is the transcript — the only way back to a member's
+  session. The *record* — name, assignment, lifetime, succession edges — lives in an archive that is unbounded by
+  design at about 870 bytes a line. **So the promise "a retirement is a move, not a deletion" has an expiry, and
+  until now that expiry was stated nowhere a person would meet it before it bit**: they learned of it from a
+  `pruned` refusal or from a prune message *after* the bytes were gone.
+- **Two things follow, and both are about position rather than content**: the window gets stated where the
+  decision to retire is made, and the cost gets reported per Lead — so the number can be **chosen** instead of
+  inherited, and "why did my artifact disappear" has an answer. The walk that measures the size is bounded by
+  the cap itself, so reporting it cannot grow without limit.
+- **The escape hatch is recorded and not built**: compressing an artifact changes the trade by about an order of
+  magnitude, at the price of a decompression step in what is currently a move. It becomes worth doing only when
+  200 × the measured average stops being a rounding error.
+- **And the sentence that had to be there**: raising the default **restores nothing already pruned**. No future
+  change recovers those transcripts; the archive keeps their history, not their bytes.
+- **The merge conflict was real and was resolved by ordering rather than by preference.** Two ADRs were written
+  in parallel, each appending a row to the same ordered index, so both landed on the same insertion point —
+  **a list with one append point per version serialises parallel work, and this will happen every time**. The
+  resolution keeps both rows in numeric order; dropping either would have been the easy and wrong fix.
+- **Version.** `0.38.4`: one ADR, one pointer line into 0012, and a default that is now wrong on the safe side.
