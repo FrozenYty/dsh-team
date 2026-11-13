@@ -28,7 +28,9 @@ adopted       true when the record was adopted from another roster instead of sp
 note          the start error, present only on a record whose spawn failed
 retiredAt     ISO timestamp, present only on a tombstone
 retireReason  the reason the model gave for the retirement, when it gave one
-trashPath     the trash directory the Session artifact was moved to, on a tombstone
+trashDir      the name retirement gave the trash directory, on a tombstone; the part that survives the root moving
+trashRelPath  where that directory sits under the data root, on a tombstone; the absolute path is read-time
+trashPath     the absolute path a move used, present only on a tombstone written before v0.26.0
 originalPath  where that artifact came from, so restore is a move and not a guess
 trashKind     what was moved: `directory` for the Session directory, `file` for a single artifact
 trashState    `pending` while the move is in flight, `done` once it landed, `none` when there was none,
@@ -73,8 +75,9 @@ tasks         on the roster record, not on a member: this Lead's work board, an 
 ```
 
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
-`pruned` keeps `trashPath`, `trashKind` and `originalPath` — the tombstone still says where
-the artifact went — and is the only value that makes `restore_member` a typed refusal without a move.
+`pruned` keeps `trashDir` and `trashKind` and `originalPath` — the tombstone still says which directory
+went and where the artifact came from, and a record written before v0.26.0 keeps its absolute `trashPath`
+instead — and is the only value that makes `restore_member` a typed refusal without a move (ADR 0028).
 
 There is no other field, and in particular no `dormant` phase (`docs/member-lifecycle-en.md` §1) and
 no `briefPath`: the brief is composed at replacement time from `assignment` and from the effective
@@ -102,11 +105,21 @@ overwriting it (`docs/member-lifecycle-en.md` §1).
 **Bound the trash, only here.** A retirement that moved an artifact in removes the entries past the
    **effective** cap from this Lead's trash directory, oldest first; the cap is the `trashLimit` config
    field `apply` resolved (default `DEFAULT_TRASH_LIMIT`, 20), not a constant in the code; each removed
-   tombstone keeps its `trashPath` and becomes `trashState: 'pruned'` (ADR 0011, ADR 0012). Only direct
-   children whose name and tombstone both parse are candidates, a `pending` move is counted against the
-   cap but never pruned, and only this plugin's own trash copies are deleted — the platform has no
-   Session-deletion API, and its only "hide it" mechanism is a reversible archive that cannot bound
-   bytes. A retirement that moved nothing prunes nothing. No timer and no read-time sweep exists.
+   tombstone keeps the directory name it recorded — `trashDir`, or the absolute `trashPath` a record
+   written before v0.26.0 carries — and becomes `trashState: 'pruned'` (ADR 0011, ADR 0012, ADR 0028).
+   Only direct children whose name parses are candidates, and a tombstone is matched to one **by
+   directory name**: that name is the part of a trash location which survives the data root moving, and
+   the id inside it is the **child Session id**, not the record's `memberId`, which is why the flip
+   compares the record's own id instead of parsing the name (ADR 0028). A `pending` move is counted
+   against the cap but never pruned, and only this plugin's own trash copies are deleted — the platform
+   has no Session-deletion API, and its only "hide it" mechanism is a reversible archive that cannot
+   bound bytes. A retirement that moved nothing prunes nothing. No timer and no read-time sweep exists.
+
+**Restore never trusts a recorded absolute path.** An artifact is looked for on three legs in order: the
+   data root in effect (the recorded relative path, or the layout rebuilt from the directory name), the
+   absolute path the record itself carries, and the frozen `~/.dsh/team-roster`. Duplicates are dropped,
+   so the ordinary case is one candidate per leg, and a tombstone written by any earlier release restores
+   with no migration at all (ADR 0028).
 
 ## 4. Where the file lives, and who may write it
 

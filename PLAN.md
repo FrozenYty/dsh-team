@@ -123,7 +123,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Done when the effective `maxMembers` is raised only while that Lead spawns, and the patch is skipped
   when the roster has no such shape.
 - [x] **P2-13** `restore_member`: move a trashed session back and return the record to `active`.
-  Done when a retired member with a `trashPath` can be restored and appears in `list_members` again.
+  Done when a retired member with a recorded trash directory can be restored and appears in `list_members` again.
 - [x] **Gate P2** — removal and replacement work in a live session.
 - [x] **P2-14** Model control of every subagent, not only the shipped roster's members (v0.4).
   Done when `list_members` reports children spawned with the shipped `subagent` / `subagent_fork` tools,
@@ -149,8 +149,8 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Session no longer exists, and running it twice leaves the same state.
   Delivered (v0.7.0, ADR 0011): the trash is bounded by a fixed per-Lead cap (`TRASH_LIMIT`, 20),
   enforced only inside a retirement that actually moved an artifact in — oldest first by the
-  `<memberId>-<ms>` stamp, skipping a `pending` move, touching only direct children whose name and
-  tombstone both parse. A pruned tombstone keeps `trashPath` and records `trashState: 'pruned'`,
+  `<childId>-<ms>` stamp, skipping a `pending` move, touching only direct children whose name and
+  tombstone both parse. A pruned tombstone keeps its `trashDir` and records `trashState: 'pruned'`,
   `restore_member` refuses with `reason: 'pruned'` and never calls the workspace, and the retirement
   reports `pruned`. Pruning twice leaves the same state. The tombstone half is a decision rather than a
   deletion: a tombstone is never dropped, because the drained row still sits in the parent's catalog and

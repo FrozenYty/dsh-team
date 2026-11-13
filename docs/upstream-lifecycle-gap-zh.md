@@ -28,7 +28,7 @@
 `dsh-team` 不扩展官方投影。它在 Harness 的子代理底座上自建花名册，从不写会话事件，持久状态放在 `storageDomain` 域里（`docs/adr/0001-own-roster-on-subagents.md:34-39`；`docs/architecture-zh.md` §4）。它绕出来的就是官方花名册没有的那段生命周期：
 
 - **一个自有的 `retired` 相态。** 退役是一套协议而不是删除：记下原因、排空子代理、给记录立碑、把持久化会话移进插件掌控的回收站、确认这次移动、执行上限、把成员从投影出口隐藏，并报告发生了什么（`docs/member-lifecycle-zh.md` §3）。
-- **是移动，不是抹除。** 会话被移到 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，恢复就是把目录移回去（`docs/member-lifecycle-zh.md` §4）。因为平台没有删除 API，保留上限只删插件自己移进回收站的那份副本（`docs/adr/0011-trash-retention.md:28-30, 44-52`）。
+- **是移动，不是抹除。** 会话被移到 `<数据根>/trash/<leadSessionId>/<childId>-<ms>/`，恢复就是把目录移回去（`docs/member-lifecycle-zh.md` §4）。因为平台没有删除 API，保留上限只删插件自己移进回收站的那份副本（`docs/adr/0011-trash-retention.md:28-30, 44-52`）。
 - **可复用的名字。** 代次 1 是裸基名，代次 2 起是 `<base>-g<N>`，因此继任者复用的是名字，而不是撞上一个被永久占用的名字（`docs/roster-storage-zh.md` §1）。
 - **有交接书的继任者，以及它接手的工作。** 替换会依据前任的记录合成一份交接书来启动继任者，并在同一次调用里把前任的未完成任务交出去；而一次没有继任者的退役会让这些任务变为无主，并把它们点名（`docs/task-board-zh.md` §2）。任务板归插件自己所有，因为官方任务板属于官方花名册（`docs/adr/0017-own-task-board.md:9-13, 44-48`）。
 - **它自己的模型侧接口。** 插件提供 `spawn_member`、`list_members`、`message_member`、`stop_member`、`retire_member`、`restore_member`、`compact_member`、`handoff_template` 与 `task_board`，而 v0.14.0 禁用了官方那条原本提供同类工具集的 `tool-agent-team` 行（`cordis.patch.yml:28-44`）。
