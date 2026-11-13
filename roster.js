@@ -1126,26 +1126,47 @@ export function createRosterSource({
     return next.rosters[leadSessionId]
   })
 
+  /**
+   * The root one Lead's bytes belong to.
+   *
+   * Every Session is bound (`createRootBinder` answers the frozen directory when there is no workspace), so
+   * a write with no root is a caller that never bound the Lead — a bug worth naming, not a case worth
+   * silently falling through to the storage domain, which is what this plugin used to do and what it must
+   * never do again: the domain is read-only history now.
+   * @param {string} leadSessionId - the Lead whose root is wanted.
+   * @returns {string} the bound root.
+   */
+  const rootFor = (leadSessionId) => {
+    const root = binder?.rootOf?.(leadSessionId)
+    if (root === undefined) {
+      throw new Error(`team_roster: no data root is bound for "${leadSessionId}", so there is nowhere to write — bind the Lead before its roster is written`)
+    }
+    return root
+  }
+
   const table = {
+    /**
+     * One Lead's record, or undefined when this process has not loaded its root yet.
+     *
+     * A read does not fall back to the storage domain: the domain's records reach a file through the import
+     * in `importLead`, and answering from two places at once is how a reader ends up with records its file
+     * does not have.
+     */
     get(leadSessionId) {
       const root = binder?.rootOf?.(leadSessionId)
-      if (root === undefined) return domainTable?.get?.(leadSessionId)
+      if (root === undefined) return undefined
       const state = states.get(root)
-      if (state === undefined || !state.loaded) return domainTable?.get?.(leadSessionId)
+      if (state === undefined || !state.loaded) return undefined
       return state.content.rosters[leadSessionId]
     },
     async put(leadSessionId, value) {
-      const root = binder?.rootOf?.(leadSessionId)
-      if (root === undefined) return await domainTable.put(leadSessionId, value)
-      const state = stateOf(root)
+      const state = stateOf(rootFor(leadSessionId))
       state.loading ??= load(state)
       await state.loading
       return await write(state, leadSessionId, () => value)
     },
     async update(leadSessionId, mutate) {
-      const root = binder?.rootOf?.(leadSessionId)
-      if (root === undefined) return await domainTable.update(leadSessionId, mutate)
-      const state = stateOf(root)
+      const state = stateOf(rootFor(leadSessionId))
       state.loading ??= load(state)
       await state.loading
       return await write(state, leadSessionId, (current) => {
@@ -1155,15 +1176,8 @@ export function createRosterSource({
     },
     entries() {
       const rows = []
-      const boundKeys = new Set(binder?.roots?.().keys() ?? [])
       for (const state of states.values()) {
         for (const [leadSessionId, roster] of Object.entries(state.content.rosters)) rows.push([leadSessionId, roster])
-      }
-      if (domainTable?.entries !== undefined) {
-        for (const [leadSessionId, roster] of domainTable.entries()) {
-          if (boundKeys.has(leadSessionId)) continue
-          rows.push([leadSessionId, roster])
-        }
       }
       return rows[Symbol.iterator]()
     },
@@ -1175,7 +1189,7 @@ export function createRosterSource({
      * Bind one Lead to the root its workspace names, and start loading that root.
      * Synchronous on purpose: it is called while a Lead's tools are registered, and the load continues
      * on its own while the first tool call is still on its way.
-     * @returns {string|undefined} the bound root, or undefined when this Lead keeps the domain.
+     * @returns {string} the bound root — every Session gets one.
      */
     bind(leadSessionId, cwd) {
       const root = binder?.bind?.(leadSessionId, cwd)
@@ -1205,18 +1219,11 @@ export function createRosterSource({
     report(leadSessionId) {
       const root = binder?.rootOf?.(leadSessionId)
       if (root === undefined) {
-        // No workspace to own bytes in. The legacy domain may still hold this Lead's records; if it does
-        // not — a fresh profile, or a domain file that has been deleted — an empty roster is the true
-        // answer, and the tool says so instead of serving someone else's records.
-        if (domainTable?.get?.(leadSessionId) === undefined) {
-          return {
-            source: 'none',
-            message: 'This Session has no workspace to own bytes in, and there are no records to serve it: it is a new Lead with an empty roster. Give the Session a working directory, so its roster lives under <workspace>/.agents/team/, or set DSH_TEAM_DATA_DIR to name that directory. Set DSH_TEAM_SEED to a roster file to carry records into a new root from another machine.',
-          }
-        }
+        // Every Session is bound when its tools are installed, so this is the shape of a read that arrived
+        // before the binding — a caller that never bound its Lead, rather than a state a person can reach.
         return {
-          source: 'storage-domain',
-          message: 'This Session has no workspace to own bytes in, so its roster is still served from the storage domain — the legacy leg. Give the Session a working directory, or set DSH_TEAM_DATA_DIR, to move it under the workspace.',
+          source: 'none',
+          message: 'This process has not bound a data root for this Lead, so it has no roster to report. Give the Session a working directory, so its roster lives under <workspace>/.agents/team/, or set DSH_TEAM_DATA_DIR to name that directory; with neither, the roster goes to <home>/.dsh/team-roster.',
         }
       }
       const state = states.get(root)

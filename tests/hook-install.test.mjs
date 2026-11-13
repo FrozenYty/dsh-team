@@ -11,6 +11,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,10 +57,14 @@ function fakeHost({ agentTeams, sessionController, table = seededTable() } = {})
   const subscriptions = []
   const tools = new Map()
   const disposers = []
+  // Every Lead is bound to a root, so a session with no working directory would write its roster under the
+  // real home directory — which a test must never touch. A production session always has one; here it is a
+  // fresh temporary workspace per host, so two tests never share a roster file either.
+  const workspace = join(tmpdir(), `dsh-team-hook-${randomUUID()}`)
   const lead = {
     id: 'lead-1',
     status: 'idle',
-    session: { id: 'lead-1', header: {} },
+    session: { id: 'lead-1', header: { cwd: workspace } },
     ctx: { tools: { register: (definition) => { tools.set(definition.name, definition); return () => tools.delete(definition.name) } } },
   }
   const child = {

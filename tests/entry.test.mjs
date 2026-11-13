@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +8,8 @@ import { test } from 'node:test'
 
 import { apply } from '../index.js'
 import { WAIT_TIMEOUT_MAX } from '../actions.js'
+import { ROSTER_FILE_NAME } from '../roster.js'
+import { TEAM_DIR } from '../trash.js'
 import { memoryTable } from './memory-table.mjs'
 
 /**
@@ -19,15 +23,44 @@ import { memoryTable } from './memory-table.mjs'
  * `requestHeader()` — the source a member's route is resolved from (ADR 0024); omitting it is a Session
  * whose header cannot be read, which is the inherit path.
  */
+/**
+ * The roster file, addressed the way these tests used to address the storage domain's table.
+ *
+ * The store writes a file now (`roster.json` under the Lead's root) instead of the domain, so a test that
+ * seeds a record, or reads back what a tool wrote, has to look where the bytes are. `get` is synchronous
+ * like the table it replaces — the assertions that use it are not async — and `put` writes a whole record
+ * the way the store's own table does, with a bumped serial so the store notices a second writer.
+ * @param {string} workspace - the Lead's temporary working directory.
+ * @returns {{get: Function, entries: Function, put: Function}} a table-shaped view of the file.
+ */
+function rosterFile(workspace) {
+  const file = join(workspace, TEAM_DIR, ROSTER_FILE_NAME)
+  const load = () => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { version: 1, serial: 0, rosters: {} })
+  return {
+    get: (leadSessionId) => load().rosters[leadSessionId],
+    entries: () => Object.entries(load().rosters),
+    async put(leadSessionId, value) {
+      const current = load()
+      await mkdir(join(workspace, TEAM_DIR), { recursive: true })
+      await writeFile(file, `${JSON.stringify({ ...current, serial: current.serial + 1, rosters: { ...current.rosters, [leadSessionId]: value } }, null, 2)}\n`, 'utf8')
+    },
+  }
+}
+
 function harness({ tryMembership = () => undefined, listMembers = () => [], config, capture = false, cwd, route } = {}) {
-  const table = memoryTable()
   const tools = new Map()
   const childTools = new Map()
   const disposers = []
   const requests = []
+  // Every Lead is bound to a root now, so a session with no working directory would write its roster under
+  // the real home directory — which a test must never touch. A production session always has one; here it
+  // is a fresh temporary workspace per harness, so two tests never share a roster file either.
+  const workspace = join(tmpdir(), `dsh-team-entry-${randomUUID()}`)
+  const table = rosterFile(workspace)
+  const domain = memoryTable()
   const leadSession = route === undefined
-    ? { id: 'lead-1', header: {} }
-    : { id: 'lead-1', header: {}, requestHeader: () => ({ config: route }) }
+    ? { id: 'lead-1', header: { cwd: workspace } }
+    : { id: 'lead-1', header: { cwd: workspace }, requestHeader: () => ({ config: route }) }
   const lead = {
     id: 'lead-1',
     status: 'idle',
@@ -76,7 +109,7 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
         : undefined),
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
-    storageDomain: { open: async () => ({ table: () => table, close: async () => {} }) },
+    storageDomain: { open: async () => ({ table: () => domain, close: async () => {} }) },
     get: (name) => {
       if (name === 'workingDirectory' && cwd !== undefined) return { ensure: async () => cwd }
       // The service the plugin already declares as a hard dependency. `sessionController` is
@@ -421,6 +454,15 @@ test('every answer conforms to the output schema its own tool declares', async (
   }
 
   const born = await answer('spawn_member', { name: 'reviewer', label: 'Reviewer', prompt: 'Review the parser.' })
+  // The member-scoped read is a second declared shape: point the spawned row's child id at the harness's
+  // member Agent, so a real answer goes through the wrapper and its own output schema (ADR 0022). This is a
+  // second writer touching the file, so it goes in before the next store write, which is the point the
+  // store merges a change it did not write (T2) — a plain read serves what this process loaded.
+  const spawned = table.get('lead-1')
+  await table.put('lead-1', {
+    ...spawned,
+    members: spawned.members.map((member) => (member.name === 'reviewer' ? { ...member, childId: 'child-1' } : member)),
+  })
   const task = await answer('task_board', {
     action: 'create',
     title: 'Recheck the curve',
@@ -428,13 +470,6 @@ test('every answer conforms to the output schema its own tool declares', async (
     body: 'Done when the curve is rechecked against the shipped build. Stopped at the fixture.',
   })
   assert.equal(task.task.body, 'Done when the curve is rechecked against the shipped build. Stopped at the fixture.')
-  // The member-scoped read is a second declared shape: point the spawned row's child id at the harness's
-  // member Agent, so a real answer goes through the wrapper and its own output schema (ADR 0022).
-  const spawned = table.get('lead-1')
-  await table.put('lead-1', {
-    ...spawned,
-    members: spawned.members.map((member) => (member.name === 'reviewer' ? { ...member, childId: 'child-1' } : member)),
-  })
   const myTasks = childTools.get('list_my_tasks')
   assert.ok(myTasks, 'the member read is registered on the member context')
   const mine = await myTasks.execute({}, { agent: child })

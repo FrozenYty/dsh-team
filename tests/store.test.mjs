@@ -305,19 +305,21 @@ test('a change this process did not write is merged, and reported as a second wr
   assert.match(source.report('lead-1').message, /one writer per workspace/)
 })
 
-test('a Session with no workspace keeps using the domain, which is the rollback path', async () => {
+test('a Session with no workspace gets the frozen directory as its root, and the domain is never written', async () => {
   const root = await scratch()
   const home = join(root, 'home')
+  const frozen = join(home, '.dsh', 'team-roster')
   const domain = await realDomain()
   const source = createRosterSource({ domainTable: domain, binder: workspaceBinder(home) })
 
-  assert.equal(source.bind(REAL_LEAD, undefined), undefined, 'no workspace, no root to own')
+  assert.equal(source.bind(REAL_LEAD, undefined), frozen, 'a Session always has a root: the frozen one, when there is no workspace')
   await source.readyFor(REAL_LEAD)
-  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 100, 'the domain still answers')
-  assert.equal(source.report(REAL_LEAD).source, 'storage-domain')
-  assert.equal(existsSync(home), false, 'and the frozen pre-move directory is not a write target')
+  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 26, 'the legacy domain is the source order behind the seed, and lands in that file')
+  assert.equal(source.report(REAL_LEAD).source, 'file')
+  assert.equal(source.report(REAL_LEAD).path, join(frozen, ROSTER_FILE_NAME), 'and the report says which file')
+  assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'the domain is history now: nothing was written to it')
 
   await updateRoster(source.table, REAL_LEAD, (roster) => ({ ...roster, handoffTemplate: '{successor} {predecessor} {label} {assignment} {task_board}' }))
-  assert.equal(domain.writes.update > 0 || domain.writes.put > 0, true, 'the write went to the domain, as it did before this change')
-  assert.equal(existsSync(home), false)
+  assert.equal(JSON.parse(await readFile(join(frozen, ROSTER_FILE_NAME), 'utf8')).rosters[REAL_LEAD].handoffTemplate, '{successor} {predecessor} {label} {assignment} {task_board}', 'the write went to the frozen file')
+  assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'and still not to the domain')
 })
