@@ -68,6 +68,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么一次替换会写两条记录，以及为什么链接写成员 id 而不是名字？ | `docs/adr/0032-bilateral-succession.md` | 英文 |
 | 为什么宿主存储域被移除，以及为什么路径的祖先是文件时算作没有文件？ | `docs/adr/0033-domain-removed.md` | 英文 |
 | 为什么产物的来源按会话根相对存储，以及被带走的花名册按什么解析它？ | `docs/adr/0034-relative-artifact-origin.md` | 英文 |
+| 为什么归档可以按请求读取，以及读取者承担了哪些写入者承担不了的规则？ | `docs/adr/0035-archive-readable-on-request.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap-zh.md` | 双语 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
