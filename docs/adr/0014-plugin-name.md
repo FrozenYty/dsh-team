@@ -8,6 +8,9 @@
   source and the rollback path rather than where records live, and a tombstone records a directory name
   with its path relative to the root rather than an absolute path under `~/.dsh/team-roster`. The four
   frozen identifiers themselves, and the reason they are frozen, stand unchanged.
+- **Amended by [0031](0031-files-only-state.md) for the storage-domain row's description only** — the name
+  `team_roster` is still frozen for the reason the table gives, but the domain no longer holds the data it
+  describes: records live in files now, and the domain answers no read.
 
 ## Context
 

@@ -8,6 +8,12 @@
   supersedes the storage-domain row of [0014](0014-plugin-name.md): the domain still has that name, but it
   is no longer where a live roster lives.
 
+- **Superseded by [0031](0031-files-only-state.md) for its storage-domain clause only** — the domain is no
+  longer an import source and rollback path: it cannot answer a read at all, and on this machine its file
+  has been deleted after a SHA256 comparison with both backups. Everything else here stands: the file is
+  the store of record, the root is bound in-process, writes replace atomically, one writer per workspace
+  with `foreign_write_at`, the import marker, and the record layout.
+
 ## Context
 
 ADR 0003 chose the storage domain because it was the only durable facility a zero-import bundle could
