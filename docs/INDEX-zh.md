@@ -65,6 +65,8 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么成员定义从一条链上读取，以及为什么随包模板会输给工作区里的文件？ | `docs/adr/0029-definition-chain.md` | 英文 |
 | 为什么墓碑会离开花名册，以及是什么让它的成员不再出现在官方面板里？ | `docs/adr/0030-tombstone-window-and-archive.md` | 英文 |
 | 为什么插件的状态只有文件，以及为什么存储域不再回答读取？ | `docs/adr/0031-files-only-state.md` | 英文 |
+| 为什么一次替换会写两条记录，以及为什么链接写成员 id 而不是名字？ | `docs/adr/0032-bilateral-succession.md` | 英文 |
+| 为什么宿主存储域被移除，以及为什么路径的祖先是文件时算作没有文件？ | `docs/adr/0033-domain-removed.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap-zh.md` | 双语 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
