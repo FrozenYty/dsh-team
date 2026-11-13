@@ -633,7 +633,9 @@ test('the visibility fields report this Lead trash, measured by walking it here'
   const root = await scratch()
   const table = memoryTable()
   const members = []
-  for (const [index, bytes] of [[0, 3], [1, 7]].entries()) {
+  // Written sizes are asserted explicitly below as well as by the walk: a comparison of two computations can
+  // go vacuous on both sides at once, which is exactly what happened here when the destructuring was wrong.
+  for (const [index, bytes] of [[0, 3], [1, 7]]) {
     const childId = `child-${index}`
     const artifact = join(root, 'sessions', childId)
     await mkdir(artifact, { recursive: true })
@@ -649,7 +651,8 @@ test('the visibility fields report this Lead trash, measured by walking it here'
   const listed = await listMembers({ ctx: retirementCtx({ artifactOf }), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks() })
   const trashRoot = trashRootOf(root)
   assert.equal(listed.trash_count, 2, 'two artifacts')
-  assert.equal(listed.trash_bytes, await bytesOnDisk(trashRoot), 'and the bytes actually on disk')
+  assert.equal(listed.trash_bytes, 10, 'the two files are three and seven bytes')
+  assert.equal(listed.trash_bytes, await bytesOnDisk(trashRoot), 'and that is what is on disk, walked here independently')
   assert.equal(listed.trash_limit, DEFAULT_TRASH_LIMIT, 'with the cap in force reported beside them')
 })
 
@@ -673,3 +676,39 @@ test('trash_limit is the effective cap, not the default', async () => {
   assert.equal(listed.trash_limit, TRASH_LIMIT_MINIMUM, 'the minimum is a legal cap and the answer names it')
   assert.notEqual(listed.trash_limit, DEFAULT_TRASH_LIMIT)
 })
+
+test('the horizon is in the answers a caller receives, not only in the descriptions', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  const childId = 'child-horizon'
+  const artifact = join(root, 'sessions', childId)
+  await mkdir(artifact, { recursive: true })
+  await writeFile(join(artifact, 'session.jsonl'), 'log')
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [record({ memberId: 'horizon', name: 'horizon', childId })] }))
+  const retired = await retireMember({
+    ctx: retirementCtx({ artifactOf: () => artifact }),
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: lead,
+    dataDir: root,
+    hooks: hooks(),
+    target: 'horizon',
+    reason: 'a fixture retires it',
+  })
+  assert.match(retired.message, /that is how far back a restore can reach/, 'retire_member states the window it just moved an artifact into')
+  assert.equal(retired.trash_limit, DEFAULT_TRASH_LIMIT)
+
+  // The refusal is the other place a caller meets it: the artifact is already gone by then.
+  await updateRoster(table, 'lead-1', (current) => ({
+    ...current,
+    members: current.members.map((member) => ({ ...member, trashState: TRASH_STATE.pruned })),
+  }))
+  const refused = await restoreMember({ ctx: retirementCtx({ artifactOf: () => artifact }), table, leadSessionId: 'lead-1', target: 'horizon' })
+  assert.equal(refused.reason, 'pruned')
+  assert.match(refused.message, /Raising the limit later restores nothing already pruned/, 'and the refusal says raising it recovers nothing')
+})
+
+// Why the walk's *bound* has no test of its own: counting stat calls would bind this test to how the
+// measurement is implemented, while the semantics are already covered by the raised-cap test above — a
+// trash of 25 artifacts under a cap of 25 is the largest trash the cap allows, so at most 25 entries can
+// be inspected there. A test that binds implementation detail is worth less than this sentence.
