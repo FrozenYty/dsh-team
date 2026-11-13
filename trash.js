@@ -52,9 +52,10 @@ export const TRASH_LIMIT_MINIMUM = 1
 /**
  * The data directory every earlier release wrote into, under the frozen name ADR 0014 protects.
  *
- * It is the last leg of the read-time fallback chain: an artifact that is not under the directory in
- * effect is still looked for here, which is what keeps a trash a Lead already has restorable after the
- * configured root moves.
+ * Two jobs. It is the last leg of the read-time fallback chain — an artifact that is not under the
+ * directory in effect is still looked for here, which is what keeps a trash a Lead already has restorable
+ * after the configured root moves — and it is the root of last resort: a Session with no workspace, and no
+ * override, keeps its roster here, so every Session has somewhere a person could open.
  * @param {string} home - user home directory.
  * @returns {string} the frozen default data directory.
  */
@@ -87,9 +88,8 @@ function configuredDataDir(env) {
  * Resolve the plugin data directory.
  *
  * The order is the operator's override, then the workspace the caller named, then the frozen pre-0.26.0
- * directory. The last one is a read-time fallback, not a destination: it is where an artifact from an
- * earlier release still sits (see `trashPathCandidates` below), and a caller that means to *write*
- * asks `createRootBinder` instead, which answers `undefined` rather than pointing new bytes there.
+ * directory. All three are destinations: the frozen one is where a Session with no workspace keeps its
+ * roster, and where an artifact from an earlier release still sits (see `trashPathCandidates` below).
  * @param {NodeJS.ProcessEnv} env - process environment.
  * @param {string} home - user home directory.
  * @param {string} [cwd] - the workspace directory this call is for.
@@ -113,10 +113,10 @@ export function resolveDataDir(env = process.env, home = homedir(), cwd) {
  * `working_directory` call touches can reach it — and it is keyed by Lead Session id, so two Leads in
  * two workspaces each keep their own root.
  *
- * `undefined` is a real answer: a session whose workspace cannot be known (no working directory, no
- * override) has nowhere this plugin may write, and the caller keeps using the storage domain instead of
- * inventing a location. That is also what keeps a profile without a workspace behaving exactly as it did
- * before the roster file existed.
+ * `undefined` is no longer an answer: a Session whose workspace cannot be known (no working directory, no
+ * override) keeps its roster under the frozen pre-0.26.0 directory — a real directory, a real file, and one
+ * a person can open. That is what let the storage domain stop being written: there is always somewhere for
+ * the bytes to go, so nothing has to fall through to it.
  *
  * The binding is deliberately not persisted. A file that recorded it would itself live at a location the
  * current directory decides, so it could not settle the very question it was written to answer; and after
@@ -125,7 +125,7 @@ export function resolveDataDir(env = process.env, home = homedir(), cwd) {
  * later process reads.
  * @param {{env?: NodeJS.ProcessEnv, home?: string}} [options] - the environment and home directory the
  *   configured override is read from.
- * @returns {{bind: (leadSessionId: string, cwd?: string) => string|undefined,
+ * @returns {{bind: (leadSessionId: string, cwd?: string) => string,
  *   rootOf: (leadSessionId: string) => string|undefined, roots: () => Map<string, string>}}
  */
 export function createRootBinder({ env = process.env, home = homedir() } = {}) {
@@ -135,8 +135,8 @@ export function createRootBinder({ env = process.env, home = homedir() } = {}) {
     bind(leadSessionId, cwd) {
       const existing = bound.get(leadSessionId)
       if (existing !== undefined) return existing
-      const root = configured ?? (typeof cwd === 'string' && cwd !== '' ? resolve(cwd, TEAM_DIR) : undefined)
-      if (root === undefined) return undefined
+      const root = configured
+        ?? (typeof cwd === 'string' && cwd !== '' ? resolve(cwd, TEAM_DIR) : frozenDataDir(home))
       bound.set(leadSessionId, root)
       return root
     },

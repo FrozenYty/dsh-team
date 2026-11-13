@@ -574,10 +574,10 @@ const HOST_HOOKS_VALUE = {
 /**
  * Where this Lead's roster lives, and what a reader has to know about it.
  *
- * `file` is this plugin's own `roster.json` under the bound workspace root. `storage-domain` is the legacy
- * leg: a Session with no workspace whose records the domain still holds. `none` is a Session with no
- * workspace and no records at all — a new Lead whose roster is genuinely empty, which the message explains
- * rather than hiding behind someone else's records. `foreign_write_at` is a writer this process did not
+ * `file` is this plugin's own `roster.json` under the Lead's bound root — a workspace root, an override, or
+ * the frozen `<home>/.dsh/team-roster` for a Session with no workspace; every Session has one, and the
+ * report names which. `none` is a Lead this process never bound, which is a read that arrived before the
+ * binding rather than a state a person can reach. `foreign_write_at` is a writer this process did not
  * expect: the workspace is expected to have exactly one, and a second one is reported rather than locked
  * out.
  */
@@ -586,7 +586,7 @@ const STORAGE_VALUE = {
   additionalProperties: false,
   required: ['source'],
   properties: {
-    source: { type: 'string', enum: ['file', 'storage-domain', 'none'] },
+    source: { type: 'string', enum: ['file', 'none'] },
     path: { type: 'string' },
     imported_at: { type: 'string' },
     foreign_write_at: { type: 'string' },

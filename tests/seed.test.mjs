@@ -202,26 +202,21 @@ test('a seed whose records the loader refuses is a problem rather than a silent 
   assert.deepEqual(readRoster(source.table, LEAD).members, [])
 })
 
-test('a Session with no workspace and no records says so, with both ways out', async () => {
+test('an unbound Lead reports none, with both ways out, instead of an empty file path', async () => {
   const f = await present({ seed: false })
-  // Never bound: the Lead's root cannot be resolved, and the legacy domain holds nothing for it. `storage`
-  // is the block the tool wrapper copies out of `report`, which is where the source is decided.
+  // Never bound: this process has no root for the Lead. `storage` is the block the tool wrapper copies out
+  // of `report`, which is where the source is decided.
   const source = createRosterSource({ domainTable: domainWith({}), binder: f.binder, home: f.home })
   const { ctx, lead } = fakeCtx()
   const listed = await listMembers({ ctx, table: source.table, leadSessionId: LEAD, leadAgent: lead, dataDir: f.dataDir, hooks: hooks() })
   const storage = source.report(LEAD)
 
-  assert.equal(storage.source, 'none', 'an empty roster is the true answer, not someone else\u2019s records')
+  assert.equal(storage.source, 'none', 'an unbound Lead has no root to report, and the message says what to do')
   assert.match(storage.message, /working directory/)
   assert.match(storage.message, /DSH_TEAM_DATA_DIR/)
   assert.deepEqual(listed.members, [])
-
-  // The legacy leg still reports itself when it does hold records.
-  const legacy = createRosterSource({ domainTable: domainWith({ [LEAD]: carried() }), binder: f.binder, home: f.home })
-  const other = fakeCtx()
-  const served = await listMembers({ ctx: other.ctx, table: legacy.table, leadSessionId: LEAD, leadAgent: other.lead, dataDir: f.dataDir, hooks: hooks() })
-  assert.equal(legacy.report(LEAD).source, 'storage-domain')
-  assert.deepEqual(served.members.map((member) => member.target), ['reviewer', 'scribe'])
+  // A bound Lead is never in that state — the legacy leg's records reach a file through the import, which
+  // `tests/rooted.test.mjs` covers — so `none` is the answer for a read that arrived before the binding.
 })
 
 test('a seeded root runs the ordinary lifecycle: the member retires and comes back', async () => {
