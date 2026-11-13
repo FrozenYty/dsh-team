@@ -83,6 +83,14 @@ is `node scripts/schema-check.mjs`, run locally against the installed build (`DS
 one), and it is the half nobody runs but you. The test says which half it skipped rather than passing quietly,
 because that is how the script came to be believed while it was broken.
 
+**Run the gate as its own step.** A check and the commit it protects must not be one command:
+`check; git add; git commit; git push` reads as one action and is really two decisions, and whether a shell
+stops on a non-zero exit is the shell's business — the one this repository is driven from does not, so a
+failing check has reached the remote as a red commit that had to be amended away. Run
+`node scripts/check.mjs` on its own and read its exit code, or write the list so every later step is gated on
+it (`&&`, or an explicit test of `$LASTEXITCODE`). A contributor who thinks of the check as a step *inside*
+the publish will keep publishing red.
+
 ## 5. Files
 
 - **Filenames are English**, lowercase, hyphen-separated.
@@ -146,3 +154,5 @@ folder names. Write commands relative to the repository root.
 - [ ] `docs/INDEX-en.md` and `INDEX-zh.md` updated if a document was added, renamed or removed
 - [ ] Any test that asserts an **ordering or an identity among equals** respects §4's same-millisecond
       rule: assert the set or the count, never which one of two equally old records went
+- [ ] The gate was run as its own step, or every step after it was gated on its exit code — §4's rule: a
+      failing check must not be able to reach the remote inside one command list
