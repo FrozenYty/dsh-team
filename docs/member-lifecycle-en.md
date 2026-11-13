@@ -291,6 +291,15 @@ thin the record out one generation at a time.
 The brief's shape — its placeholders, their bounds, and the three sources it can come from —
 is `docs/handoff-en.md` `docs/architecture-en.md` §1.
 
+**A replacement writes the link on both records.** The successor's row carries `predecessor` and the
+tombstone carries `successor`, each naming a `target` and a `member_id`; both are written in the mutation
+that makes the record a tombstone, because a chain with one end missing is a chain a reader can observe
+half-built. An edge names the member id and never the name — `reviewer` and `reviewer-g2` are two holders of
+one base name, so a stored target would resolve to the wrong holder. A walk that reaches an id no longer in
+the roster reports the id **without a target** and does not claim the predecessor is archived: that would
+mean opening the archive on the hot path, and `archived_records` and `archive_file` already say where the
+history went (ADR 0032, ADR 0030).
+
 ## 4. A retirement moves the artifact
 
 `retire_member` tombstones the record *before* it touches the filesystem, carrying the trash directory the
