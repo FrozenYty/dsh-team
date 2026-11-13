@@ -599,7 +599,8 @@ test('a retirement records archived only for the branch that ran, never beside a
   assert.equal(retired.trashed, true)
   assert.equal(retired.archived, false)
   const record = memberNamed(table, 'reviewer', 1)
-  assert.equal(typeof record.trashPath, 'string')
+  assert.equal(record.trashPath, undefined, 'the tombstone carries no absolute path')
+  assert.equal(typeof record.trashRelPath, 'string', 'it carries a path relative to the data root')
   assert.equal(record.trashState, 'done')
   assert.equal(record.archived, false, 'archived means the archive ran, and here a move did')
 

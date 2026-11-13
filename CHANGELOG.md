@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.26.0] - 2026-11-13
+
+- A retirement tombstone stores where its artifact went, not where the root was.
+
 ## [0.25.6] - 2026-11-13
 
 - The architecture pair points at the document that holds the statement.

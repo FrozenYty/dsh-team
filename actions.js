@@ -60,9 +60,13 @@ import {
 import {
   DEFAULT_TRASH_LIMIT,
   applyMemberTrash,
+  locateTrashedArtifact,
   pathExists,
   planMemberTrash,
   pruneLeadTrash,
+  recordedTrashDir,
+  recordedTrashPath,
+  resolveDataDir,
   restoreSessionArtifact,
   sessionRootFromSibling,
 } from './trash.js'
@@ -1538,10 +1542,10 @@ export async function spawnMember({
  * call (ADR 0011, ADR 0012), because that is the moment the trash grew. It removes the oldest entries
  * past the effective `trashLimit` — the value `apply` resolved from the plugin config, or the
  * documented default when the profile configures nothing — flips each removed tombstone to
- * `trashState: 'pruned'` while keeping its `trashPath`, and reports how many went in `pruned` and what
- * cap it applied. A retirement that moved nothing leaves the trash alone. The platform has no
- * Session-deletion API, so this is the only deletion on the path, and it touches only this plugin's own
- * trash copies.
+ * `trashState: 'pruned'` while keeping the trash directory it recorded, and reports how many went in
+ * `pruned` and what cap it applied. A retirement that moved nothing leaves the trash alone. The
+ * platform has no Session-deletion API, so this is the only deletion on the path, and it touches only
+ * this plugin's own trash copies.
  *
  * Without a live Lead Agent there is nothing to drain through, so the operation refuses with a reason
  * instead of throwing. The tool path always runs in the Lead's own Agent context; the guard exists so a
@@ -1669,15 +1673,18 @@ export async function retireMember({
     return base
   }
 
-  // Step 1: the tombstone, with the trash path the move is about to use. The member's open tasks were
-  // already re-addressed to the successor (or left unowned) by the handover write above, so this record
-  // only changes its own lifecycle fields.
+  // Step 1: the tombstone, with the trash directory the move is about to use. The member's open tasks
+  // were already re-addressed to the successor (or left unowned) by the handover write above, so this
+  // record only changes its own lifecycle fields. What it stores is the directory name and a
+  // root-relative path, never the absolute one: the absolute path is computed at read time from the
+  // data directory in effect, which is what lets the root move without rewriting a single record.
   const plan = await planMemberTrash(ctx, { leadSessionId, memberId: member.childId, dataDir })
   await updateRoster(table, leadSessionId, (current) => {
     const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
     const fields = plan.planned
       ? {
-        trashPath: plan.trashPath,
+        trashDir: plan.dirName,
+        trashRelPath: plan.trashRelPath,
         trashKind: plan.kind === 'file' ? 'file' : 'directory',
         originalPath: plan.originalPath,
         trashState: TRASH_STATE.pending,
@@ -1710,19 +1717,21 @@ export async function retireMember({
     }
   }
 
-  // Step 3: confirm what actually happened. A tombstone that still named a trash path the artifact
+  // Step 3: confirm what actually happened. A tombstone that still named a trash directory the artifact
   // never reached would send `restore_member` to the wrong place.
   const persisted = await updateRoster(table, leadSessionId, (current) => {
     const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
     const next = tombstoneOf(existing, {})
     next.archived = archived
     if (moved) {
-      next.trashPath = plan.trashPath
+      next.trashDir = plan.dirName
+      next.trashRelPath = plan.trashRelPath
       next.trashKind = plan.kind === 'file' ? 'file' : 'directory'
       next.originalPath = plan.originalPath
       next.trashState = TRASH_STATE.done
     } else {
-      delete next.trashPath
+      delete next.trashDir
+      delete next.trashRelPath
       delete next.trashKind
       delete next.originalPath
       next.trashState = TRASH_STATE.none
@@ -1790,7 +1799,10 @@ export async function retireMember({
   if (pruned > 0) {
     value.message += ` Retention removed ${pruned} older ${pruned === 1 ? 'artifact' : 'artifacts'} from this Lead's trash: it keeps at most ${trashLimit}, oldest first, because the platform offers no Session deletion of its own (ADR 0011, ADR 0012).`
   }
-  if (typeof record?.trashPath === 'string') value.trash_path = record.trashPath
+  // The result still reports one absolute path: where the artifact went is what a reader acts on, and
+  // for a record written from this release that path is computed here rather than stored.
+  const trashPath = recordedTrashPath({ record, leadSessionId, dataDir })
+  if (trashPath !== undefined) value.trash_path = trashPath
   return value
 }
 
@@ -1819,11 +1831,19 @@ export async function retireMember({
  * `already-active`. A tombstone from a version that did not record `archived` is treated as the
  * archive fallback, which is the only branch that version could have taken without a trash path.
  *
+ * Where the artifact is comes from `trashPathCandidates` in `trash.js`: the data directory in effect
+ * first, then the absolute path an older record carries, then the frozen default. The first leg that
+ * holds the artifact wins, so a tombstone written before the location change restores with no
+ * migration, and one written after it keeps working when the root moves. The result reports the path it
+ * actually moved back to, never a path it only intended to use.
+ *
  * @param {{ctx: object, table: object, leadSessionId: string, target: string,
- *   hooks: {filter: {invalidate: Function}, slots: {refresh: Function}}}} request
+ *   hooks: {filter: {invalidate: Function}, slots: {refresh: Function}}, dataDir?: string}} request -
+ *   `dataDir` is the data directory in effect; it defaults to the one this process resolves, which is
+ *   what the plugin installs.
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
-export async function restoreMember({ ctx, table, leadSessionId, target, hooks }) {
+export async function restoreMember({ ctx, table, leadSessionId, target, hooks, dataDir = resolveDataDir() }) {
   const roster = readRoster(table, leadSessionId)
   const member = findAnyTarget(roster, target)
   if (member === undefined) {
@@ -1852,21 +1872,22 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
   }
   if (member.trashState === TRASH_STATE.pruned) {
     // The retention cap removed the artifact, so there is nothing to move back — and the workspace
-    // must not be asked to unhide a session it never hid. The tombstone keeps its `trashPath`, which
-    // is why this check comes before the trash-path branch below (ADR 0011).
+    // must not be asked to unhide a session it never hid. The tombstone still says where the artifact
+    // went, which is why this check comes before the trash-path branch below (ADR 0011).
     const { fields, notice } = retargetNotice(roster, target)
+    const where = recordedTrashPath({ record: member, leadSessionId, dataDir }) ?? 'its recorded trash path'
     return {
       target: targetOf(member),
       restored: false,
       reason: 'pruned',
-      message: `"${target}" was pruned by the trash retention cap: the artifact at ${String(member.trashPath)} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue.${notice}`,
+      message: `"${target}" was pruned by the trash retention cap: the artifact at ${where} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue.${notice}`,
       ...fields,
     }
   }
 
   let restoredPath
   let branch
-  if (typeof member.trashPath === 'string') {
+  if (recordedTrashDir(member) !== undefined) {
     let originalPath = typeof member.originalPath === 'string' ? member.originalPath : undefined
     if (originalPath === undefined) {
       // A tombstone written before the original path was recorded. Derive the sessions root from a
@@ -1885,11 +1906,16 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
       }
       originalPath = join(sessionsRoot, member.childId)
     }
-    const outcome = await restoreSessionArtifact({
-      trashPath: member.trashPath,
-      originalPath,
-      kind: member.trashKind === 'file' ? 'file' : 'directory',
-    })
+    // Which leg of the chain holds the artifact is decided here and nowhere else; a tombstone whose
+    // bytes are gone on every leg yields the same `trash-missing` refusal a single missing path did.
+    const located = await locateTrashedArtifact({ record: member, leadSessionId, dataDir })
+    const outcome = located === undefined
+      ? { restored: false, reason: 'trash-missing' }
+      : await restoreSessionArtifact({
+        trashPath: located.path,
+        originalPath,
+        kind: member.trashKind === 'file' ? 'file' : 'directory',
+      })
     if (outcome.restored) {
       branch = 'moved-back'
       restoredPath = outcome.path
@@ -1940,6 +1966,8 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks }
     const revived = { ...existing, phase: PHASE.active }
     delete revived.retiredAt
     delete revived.retireReason
+    delete revived.trashDir
+    delete revived.trashRelPath
     delete revived.trashPath
     delete revived.trashKind
     delete revived.originalPath

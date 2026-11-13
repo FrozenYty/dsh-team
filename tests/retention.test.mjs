@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import { test } from 'node:test'
 
 import { retireMember, restoreMember } from '../actions.js'
@@ -368,4 +368,81 @@ test('a pruned tombstone is a legal stored record and an unknown trash state is 
   assert.equal(parse(stored), stored)
   stored.members[0].trashState = 'gone'
   assert.throws(() => parse(stored), /trashState "gone" is unknown/)
+})
+
+test('a retirement records the trash directory and a root-relative path, never an absolute one', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  const artifact = join(root, 'sessions', 'fresh-child')
+  await mkdir(artifact, { recursive: true })
+  await writeFile(join(artifact, 'session.jsonl'), 'log')
+  await updateRoster(table, 'lead-1', () => ({
+    leadSessionId: 'lead-1',
+    members: [record({ memberId: 'fresh', name: 'fresh', childId: 'fresh-child' })],
+  }))
+
+  const ctx = retirementCtx({ artifactOf: (id) => (id === 'fresh-child' ? artifact : undefined) })
+  const retired = await retireMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: lead,
+    dataDir: root,
+    hooks: hooks(),
+    target: 'fresh',
+  })
+  assert.equal(retired.trashed, true)
+
+  const tombstone = readRoster(table, 'lead-1').members[0]
+  // The recorded-absolute-path shape is gone: what is stored is the directory name and where it sits
+  // under the data root. `originalPath` stays absolute on purpose — the sessions directory does not
+  // move, so there is nothing to recompute it from.
+  assert.equal(tombstone.trashPath, undefined, 'the record no longer carries an absolute trash path')
+  assert.match(tombstone.trashDir, /^fresh-child-\d+$/, 'the record carries the directory name')
+  assert.equal(tombstone.trashRelPath, join('trash', 'lead-1', tombstone.trashDir), 'and a path relative to the data root')
+  assert.equal(isAbsolute(tombstone.trashRelPath), false)
+
+  // The absolute path is computed at read time from the data directory in effect, which is what makes
+  // the root movable without rewriting a record.
+  const computed = join(root, tombstone.trashRelPath)
+  assert.equal(existsSync(computed), true, 'the computed absolute path is where the artifact actually is')
+  assert.equal(retired.trash_path, computed, 'the result still reports one absolute path')
+  assert.equal(tombstone.originalPath, artifact, 'the original path is a fact about the move, not a root')
+
+  // Acceptance for the relative record on the read side: restore moves the artifact back from it.
+  const restored = await restoreMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    target: 'fresh',
+    hooks: hooks(),
+    dataDir: root,
+  })
+  assert.equal(restored.restored, true)
+  assert.equal(restored.reason, 'moved-back')
+  assert.equal(existsSync(computed), false)
+  assert.equal(existsSync(artifact), true, 'the session is back where it came from')
+})
+
+test('the cap prunes entries that a root-relative tombstone accounts for', async () => {
+  const root = await scratch()
+  const entries = []
+  for (const stamp of [1000, 2000, 3000]) {
+    entries.push(await seedEntry(root, { memberId: `member-${stamp}`, stamp }))
+  }
+  // Two shapes a record written from this release can carry: the directory name, and the root-relative path
+  // (whose last segment is the same name). Both must be matched to the directory on disk, because the
+  // record no longer names an absolute path to compare against.
+  const rows = entries.map((entry) => {
+    const name = basename(entry.trashPath)
+    return entry.memberId === 'member-1000'
+      ? { memberId: entry.memberId, trashRelPath: join('trash', 'lead-1', name), trashState: TRASH_STATE.done }
+      : { memberId: entry.memberId, trashDir: name, trashState: TRASH_STATE.done }
+  })
+
+  const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), limit: 1, members: rows })
+
+  assert.equal(outcome.pruned, 2)
+  assert.deepEqual(outcome.removed.map((entry) => entry.memberId), ['member-1000', 'member-2000'])
+  assert.deepEqual(await namesInTrash(root), ['member-3000-3000'])
 })
