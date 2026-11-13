@@ -203,10 +203,13 @@ Five things this bundle does not do, each decided rather than forgotten.
 
 The plugin keeps its data under `.agents/team/` in the Lead's workspace — `roster.json`, and a `trash/`
 holding retired sessions. A profile that sets `DSH_TEAM_DATA_DIR` (or the pre-rename
-`DSH_TEAM_ROSTER_DATA_DIR`) uses that directory instead, and the frozen `~/.dsh/team-roster` is still the
-last place an artifact written by an earlier release is looked for. A Session with no resolvable
-workspace keeps being served from the storage domain, which is the import source and the rollback path
-rather than a second home (ADR 0014, ADR 0027, ADR 0028).
+`DSH_TEAM_ROSTER_DATA_DIR`) uses that directory instead, and the frozen `~/.dsh/team-roster` is what a
+Session with no workspace of its own falls back to, so every Session has somewhere to write and no write
+falls through to the storage domain. A new root with no roster file reads its records once from the file
+`DSH_TEAM_SEED` names — this plugin's own shape or a storage-domain dump — and a seed that is configured
+and unusable is reported rather than quietly ignored. The storage domain answers no read; it is opened
+once more, for one release, only to migrate a profile that has never bound a workspace (ADR 0014,
+ADR 0027, ADR 0031).
 
 One Lead's trash keeps at most **20** retired sessions. The cap is the `trashLimit` field of the bundle's
 patch row, so a profile changes it in its own `cordis.patch.yml` by id:

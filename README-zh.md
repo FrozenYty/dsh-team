@@ -110,7 +110,7 @@ You review changes. Report only findings that change behaviour, with the file an
 
 ## 配置
 
-插件把数据放在该 Lead 工作区下的 `.agents/team/`——包括 `roster.json`，以及存放退役会话的 `trash/`。profile 若设置 `DSH_TEAM_DATA_DIR`（或改名前的 `DSH_TEAM_ROSTER_DATA_DIR`），则改用那个目录；而冻结的 `~/.dsh/team-roster` 仍然是查找更早版本写下的产物的最后一条腿。解析不出工作区的会话继续由存储域提供服务，它是导入来源与回滚路径，而不是第二个家（ADR 0014、ADR 0027、ADR 0028）。
+插件把数据放在该 Lead 工作区下的 `.agents/team/`——包括 `roster.json`，以及存放退役会话的 `trash/`。profile 若设置 `DSH_TEAM_DATA_DIR`（或改名前的 `DSH_TEAM_ROSTER_DATA_DIR`），则改用那个目录；而冻结的 `~/.dsh/team-roster` 是没有自己工作区的会话的落点，因此每个会话都有一处可写，也不会有任何写入落到存储域上。一个没有花名册文件的新根会从 `DSH_TEAM_SEED` 命名的文件里读一次记录——本插件自己的形状或存储域导出——配置了却不可用的 seed 会被报出来，而不是被默默忽略。存储域不回答任何读取；它只为迁移一个从未绑定过工作区的 profile 再被打开一个版本（ADR 0014、ADR 0027、ADR 0031）。
 
 每个 Lead 的回收站最多保留 **20** 份退役会话。这个上限是 bundle 补丁行上的 `trashLimit` 字段，所以改它是改 profile 自己的 `cordis.patch.yml`，按 id 匹配：
 
