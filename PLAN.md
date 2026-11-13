@@ -489,8 +489,8 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 Phase entry: every box in P4 is ticked and `Gate P2` stands. This phase is the work that followed the
 document split: the plugin's durable state moved out of the host's storage domain and into files it owns,
 the records it writes grew portable for a roster that travels, and each move was recorded as a decision
-before the documents were corrected to match. **Every task below is delivered except the last**, which is in
-flight; `Gate P5` is the only open box.
+before the documents were corrected to match. **Every task below is delivered and `Gate P5` is met** (v0.36.0), so
+the phase is closed.
 
 - [x] **P5-01** The architecture pair's §2.5 points at the document that holds the routes statement (v0.25.6).
   Done when the sentence names `docs/routes-{en,zh}.md` rather than the README, the README no longer states
@@ -624,13 +624,19 @@ flight; `Gate P5` is the only open box.
   Delivered: the test, `relativeSegments`, `isMigrated`, and the testing paragraph; v0.35.1 is the separator paragraph and
   ADR 0034's pointer, not a second task.
 
-- [ ] **P5-19** The archive can be read on request, and the hot path still never touches it (v0.36.0).
+- [x] **P5-19** The archive can be read on request, and the hot path still never touches it (v0.36.0).
   Done when a Lead can ask `list_members` for the archived tombstones and see them, the archive is read only
   on that request, and ADR 0030's rule that the hot path never opens it is unchanged.
-  In flight: the acceptance above is the shape, and its measured numbers land with the PR.
+  Delivered: `readArchivedRecords` behind `archived: true`, with the seam `readArchive` replaced by one that
+  throws in the test that proves a plain read never opens the file — the shape measures a call that did not
+  happen, where comparing two answers would not. A bounded answer: the newest **50** as `archived_returned`
+  with the real `archived_total` beside it, `archived_unreadable` for a crashed line, dedupe by member id
+  because the append-before-replace window leaves duplicates by design. ADR 0035 supersedes nothing, and the
+  suite is **302 tests, 302 passing**. The cap is fixed rather than configurable, and the flagged shape has
+  not been through the Host's validator because `schema-check.mjs` calls the tool without the flag.
 
-- [ ] **Gate P5** — the archive is readable on request, or the next phase starts knowing it is not.
-  Not a hard stop for the storage move, which is delivered: it is the stop for treating this plugin's history
-  as write-only, and it is the one box P4's successors would otherwise inherit unticked.
+- [x] **Gate P5** — the archive is readable on request, or the next phase starts knowing it is not.
+  Met (v0.36.0): the condition was "the stop for treating this plugin's history as write-only", and a flagged
+  read is that stop being removed — P5-19 is the release that ended it.
 
 
