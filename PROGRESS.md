@@ -2927,3 +2927,46 @@
   themselves and no tool reads it yet. Both are recorded as accepted shapes of the current design, not as
   work someone forgot.
 - **Version.** `0.33.1`: two ADRs, four document pairs, one clause in `AGENTS.md`, and no code.
+
+## 2026-11-13 — an artifact's origin is stored relative to the sessions root, and the flaky test hid a real tie (v0.34.0)
+
+- **This stopped being a size optimisation and became a requirement the moment the seed existed.** A roster
+  can now be carried to another machine, so a record holding an absolute path is wrong there — and `restore_member` 
+  would have moved an artifact into a path that does not exist. The field is written as
+  `<slug>/<leaf>` with forward slashes, the absolute form stays as a **read-only legacy leg**, and the order
+  is: the relative form resolved against the sessions root in effect, then the stored absolute, then — for a
+  tombstone that never recorded either — the member's own id under the root. **Nothing but a relative
+  form is ever written**; when the artifact is not in a directory named after the member there is nothing
+  to relativise, and **the record says nothing rather than guessing**.
+- **The measured saving, and my estimate was wrong by a factor of two and a half.** 687 bytes on this
+  profile's roster (36 records, 20 carrying the field — 37,752 → 37,065) and **3,354 bytes** on the
+  pre-flush shape the earlier estimate was based on (94 records, 105,338 → 101,984): **39.0 bytes per
+  record**, not the ~90 an 8.5 KB figure implied. Both forms carry the child id; only the sessions root and
+  its escaping are saved. The number came from re-serialising the whole file with the plugin's own writer,
+  not from multiplying an estimate — and the honest conclusion is that **the reason for this change is
+  portability, and the bytes are a footnote**.
+- **The CI flake was found, and it was a real nondeterminism rather than infrastructure.** One test failed
+  on Linux with `'done' !== 'pruned'`: `pruneLeadTrash` orders its candidates by millisecond stamp, and the
+  suite runs fast enough on that runner that two retirements can collide on the same stamp, at which point
+  the tie-break picks a different record than the test named. The test's claim was never about *which*
+  record the cap chose — it is that a tombstone whose bytes are gone still answers both directions — so it
+  now asks **every** pruned record. **Two artifacts stamped in the same millisecond are equally old, so the
+  cap deleting either is not wrong; what is wrong is any test that asserts which.** That is the notebook's
+  own `tied-timestamps-make-ordering-tests-flip`, paid in code instead of in a lesson.
+- **And it explains every CI failure of the day, including two I explained badly.** I first called the
+  failure infrastructure, then — on a 2×2 bisect — blamed the content of a `PROGRESS.md` entry, and a
+  byte-identical control run is what disproved that. Three failures, one cause, and the cause was findable:
+  the lesson is that **"unreproducible locally" is not "not real"**, and forty local runs passing proved
+  only that this machine's clock is slow enough to hide it.
+- **Two limits it names rather than hides.** A Lead with exactly one member, whose artifact has already
+  moved and whose session the host no longer reports, has no leg but the stored absolute — which this
+  release stops writing; a restore then refuses and names the portable path it does hold. Keeping the
+  absolute as a second field would zero the saving, so that is a decision to take if it ever happens, not a
+  default. And **`trashRelPath` still uses platform separators** while the new field uses forward slashes:
+  the same portability gap in the adjacent field, out of scope here, recorded for the ADR and as a
+  follow-up.
+- **Verification.** 292 tests, seven new, one per acceptance line; four probes were shown to fail by name,
+  and the most useful failure message was one of them — the legacy derivation losing the workspace slug and
+  a foreign roster losing *its own* slug are exactly the two bugs this design exists to prevent.
+- **Version.** `0.34.0`: one stored field changes shape, one legacy field becomes read-only, and one test
+  stops asserting what the clock decided.

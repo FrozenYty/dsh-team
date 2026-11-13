@@ -1,6 +1,6 @@
 {
   "name": "dsh-team",
-  "version": "0.33.1",
+  "version": "0.34.0",
   "private": true,
   "type": "module",
   "description": "Agent-team roster with retirement, replacement, session trash, on-disk member definitions, team-scope handoff template and a member-scoped task read for DeepSeek Harness.",
