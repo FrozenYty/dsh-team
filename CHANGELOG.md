@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.27.0] - 2026-11-13
+
+- The roster is this plugin's own file under the workspace, and the storage domain becomes the import and the rollback.
+
 ## [0.26.1] - 2026-11-13
 
 - The lifecycle-gap statement becomes a pair, and the pair rule loses its last exception.

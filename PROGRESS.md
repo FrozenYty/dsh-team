@@ -2133,3 +2133,61 @@
   this file is append-only, an entry that cited a path before it moved is correct as of the commit that
   wrote it, and the citation check deliberately does not scan this file or `CHANGELOG.md` for that reason.
 - **Version.** `0.26.1`: a document was paired and an exception retired. No behaviour, no shipped file.
+
+## 2026-11-13 — the roster is this plugin's own file under the workspace, and the storage domain becomes the import and the rollback (v0.27.0)
+
+- **What this changes, and what it deliberately does not.** The durable record moves out of the host's
+  storage domain and into a file this plugin owns: `roster.json` under `.agents/team/` in the Lead's
+  workspace, beside the memory notebook, with the trash under the same root. The domain is demoted to
+  **one-time import source and rollback path**: never written once the file exists, never deleted, and
+  deleting `roster.json` puts the plugin back on it. **This release moves no data.** The import happens the
+  first time a Lead binds, so the real roster arrives in the workspace on the next tool call rather than
+  during this merge — and the trash migration is still T3.
+- **The binding is in memory, and the reasoning matters more than the code.** A session's working directory
+  can change while it runs, so resolving the root per call would move the data out from under a running
+  Lead. The first resolution binds, keyed by Lead Session id, and nothing a `working_directory` call does can
+  reach it. It is **deliberately not persisted**: a file recording the binding would itself live somewhere
+  the current directory decides, so it could not settle the question it was written to answer, and after a
+  restart the host's own `session.header.cwd` is a better starting point than a stale absolute path. What is
+  durable is the roster file at the bound root, and that is what a later process reads. A session whose
+  workspace cannot be known answers `undefined` and **keeps using the storage domain rather than inventing a
+  location**, which is also why a profile without a workspace behaves exactly as it did before.
+- **The single-writer rule is documented and detected, with no lock file.** Two Leads in one workspace share
+  the file by design; a lock would add a stale-lock failure mode nothing cleans up. Every write re-reads
+  first, so a concurrent change is merged rather than clobbered, and a serial this process did not write is
+  reported as `foreign_write_at`. Detection follows this process's next read or write, not the instant the
+  other writer writes — an honest limit, stated in the document rather than implied.
+- **The import was tested against the real thing.** `tests/fixtures/team_roster.json` is a byte-for-byte copy
+  of `~/.dsh/storages/team_roster.json`, so the test asserts the shapes that actually exist: two Leads, 100
+  records on one (95 retired), 94 carrying a trash path, 3 tasks. It reloads from a **empty** domain and still
+  reads 100 members, which can only hold if the records came from the file. It is 1,922 lines and carries 188
+  absolute Windows paths — kept rather than sanitised, because those paths *are* the legacy shape T1 taught
+  the readers to accept and T3 will rewrite, and a hand-trimmed fixture would stop testing the real scale.
+- **Nine tests, and the 220 that were already there are the regression.** Every `apply` fake in the existing
+  suite has an empty `session.header`, so all 220 still take the storage-domain path — unchanged behaviour
+  for a profile without a workspace, proved by the tests that were written before this existed and were not
+  edited. The three probes that were meant to fail did: a non-atomic replace fails the crash test, re-resolving
+  on every bind fails the binding test, and dropping per-record validation fails the fallback test.
+- **This crossed from the code lane into the documents, and that was accepted.** The single-writer decision
+  was owed to a document in this phase, and `docs/roster-storage-*` is the document that records the storage
+  shape — the shape this release changes. §4 was added to both sides in the same commit, and the Chinese side
+  carries every point rather than a summary of them.
+- **The domain file was written again between the plan's baseline and this work, and the difference is now
+  explained rather than mysterious.** A copy taken at 10:07 was 104,721 bytes and one taken at 11:05 was
+  105,338. The line diff shows only the Lead's own `message_member` traffic: five standing members' recorded
+  assignments gained a `Currently: …` sentence, `messageCount` and `assignmentCount` incremented, and
+  `updatedAt` moved. No record was added, removed or reshaped; the counts are identical. **The consequence for
+  T3 is that the 10:07 backup is stale**: the live plugin keeps writing that file as the team is used, so the
+  migration must take its own backup immediately before it runs and must re-measure rather than reuse these
+  numbers.
+- **What is not proved.** The two new wires in `list_members` live in `index.js`, which no unit test loads:
+  that it reports `storage.source: "file"` and the workspace path, and that a real session's
+  `session.header.cwd` actually carries a value. One live call after this merges settles both, and it is worth
+  making because if the header has no cwd the symptom is `storage.source` staying at `storage-domain` —
+  visible, never silent, but only visible to someone who looks.
+- **No new configuration field, deliberately.** The root is overridden by the two environment variables that
+  already exist, and otherwise follows the workspace. A `workspaceDir` knob of the kind `dsh-memory` has was
+  not added: it would need a patch row and two documents, and nobody has asked to set it.
+- **Version.** `0.27.0`: where durable state lives changed. Nothing a user does behaves differently, the old
+  domain keeps loading, and the change is reversible by deleting one file — but a new file appears on disk and
+  `list_members` gained a field, which is not a patch.
