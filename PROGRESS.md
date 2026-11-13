@@ -3455,3 +3455,49 @@
   a file that is not there.
 - **Version.** `0.38.1`: one ADR, two pairs touched, and a defect found in a file the author was not allowed
   to edit.
+
+## 2026-11-14 — a limit is stated before the row that would have raised the question (v0.38.2)
+
+- **The clause says residency is the same omission rule rather than a second one**, because ADR 0037 counts
+  "no live Agent" among the same cases: a non-resident member has nothing for the plugin to read, so its spend
+  is not measurable either, and the field appears only on mounted members.
+- **Where it sits is the whole point of the release.** It goes inside the `spend_tokens` paragraph, directly
+  after the sentence that already explains an unreadable projection — so a reader meets it while learning what
+  a row carries, which is **before** any row's absence can confuse it. **A limit stated after the confusion is
+  documentation; stated before it, it is a description** — and this is the second time today that the fix was
+  a matter of position rather than of content.
+- **The sentence is pinned by the same test that pins the non-monotonicity**, so both properties of one number
+  now fail loudly when someone edits them away. **The failure message quotes the description back**, so it
+  says what is missing rather than that a pattern did not match somewhere.
+- **What it deliberately does not do**: it does not say which members are mounted — that is state, and the
+  `resident` boolean on every row answers it — and it does not compute a spend for a member that is not
+  running. **That second decision is reversed in the next release**, and this clause is written so its
+  replacement is a rewrite of one sentence rather than a patch beside it.
+- **Version.** `0.38.2`: one clause, three assertions, and a reader who is told before it asks.
+
+## 2026-11-14 — the spend field's three sources are decided, and the one sentence they replace is named (v0.38.3)
+
+- **Changing a decision now has a shape, and this is the second use of it.** ADR 0038 replaces **one sentence**
+  of ADR 0037 — the resident-only limit, quoted verbatim so a reader can see exactly what moved — leaves the
+  rest standing and names it as standing, and ADR 0037 gets a pointer line rather than a rewrite. **A
+  supersession that says which clause died is worth more than one that replaces a document**, because the
+  decisions that did *not* change are the ones a later reader would otherwise re-litigate.
+- **The field now has two meanings and the ADR says which is which**: on a live or unloaded row it is what the
+  session has processed so far, which can still grow **and can still fall**; on a tombstone it is what the
+  member had processed when it was retired — frozen, and never changing again. **A number with two meanings
+  must name them, or a reader compares two values that are not the same kind of thing.**
+- **The third source exists because of a moment, not a method.** The number is captured **before the artifact
+  moves**, because the move is what drops the artifact out of the session-query index — which the plugin's own
+  comment in `trash.js` already said — and afterwards the cache row's identity no longer matches anything in
+  the listing while the tombstone stores no `createdAt`. **The plugin's last chance to know is the instant it
+  performs the retirement.**
+- **The fallback is placed where its cost is paid once.** The projection cache rejects a row whose
+  `stateVersion` no longer matches the live unit, so a token-meter bump silently blanks every cold read; at
+  retirement — one member, once, with the data unrecoverable a moment later — folding the durable log is
+  affordable. On a row it never is, because an exact read replays the whole log.
+- **The field starts existing at retirement, not before**: tombstones written earlier carry no number and none
+  can be recovered, and **inventing one is the failure this field exists to avoid**.
+- **The ADR states plainly that v0.38.1 implements only the mounted source** — the premise was checked against
+  the code before writing, so a reader of the document is not misled about the plugin. The implementation of
+  the other two is in flight, which is the honest state of a decision recorded ahead of its code.
+- **Version.** `0.38.3`: one ADR, one pointer line, and a decision that names the sentence it replaces.

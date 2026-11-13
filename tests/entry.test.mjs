@@ -663,6 +663,14 @@ test('the list_members row declares spend_tokens, and the description warns that
   assert.match(list.description, /cumulative rather than a rate/)
   assert.match(list.description, /not monotone|can show a smaller number/)
   assert.match(list.description, /absent when the projection cannot be read/)
+  // And the reason a row can be missing the field without anything being broken: a non-resident member has
+  // no Agent to read. Without this sentence the model reads "spend_tokens is absent when unreadable", meets
+  // an unloaded row, and has nothing to tell it why — an absence with no stated reason, which is the defect
+  // this clause answers. It sits in the same sentence as the omission rule, before any row exists, because
+  // the reader has to meet it while learning what a row carries rather than after one confuses them.
+  assert.match(list.description, /residency is the same omission rule rather than a second one/)
+  assert.match(list.description, /a non-resident member has no Agent/)
+  assert.match(list.description, /appears only on mounted members/)
 })
 
 test('list_members declares the archive flag and reads the Lead own root when asked for it', async () => {
