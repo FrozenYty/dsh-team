@@ -3562,3 +3562,31 @@
   capture's position is load-bearing. The two new services are reached through the same optional accessor the
   bundle already uses, so a profile without them still loads.
 - **Version.** `0.39.0`: one field, three sources, and a number that is never invented.
+
+## 2026-11-14 — a decision text that overstated its mechanism is corrected (v0.39.1)
+
+- **The ADR said "affordable"; the code says "affordable and not always sufficient"** — and only reading both
+  shows the gap. `readSession` hands back a header with its events, not a Session, while the registry folds a
+  mounted session, so at retirement the fallback can legitimately produce **nothing**. The clause now says so
+  where the fallback is decided, and states the consequence: **the tombstone omits the number rather than
+  storing a wrong one, and that omission is the decision working.** The field's rule from 0037 and 0038 is
+  unchanged — nothing measured is not nothing spent.
+- **The person implementing it is the only one who could have found this.** A decision text overstating a
+  mechanism is a defect **of the document**, and it surfaces at exactly one moment: when someone tries to build
+  what it describes. **Reading a decision for what it promises is the implementer's job, and reporting the
+  mismatch is the part that keeps the record honest.**
+- **Check 10 now reads one plain call with three kinds of member**, all three expected to carry the number:
+  mounted from its own projection, unloaded from the Host cache (the case the check exists for, because it used
+  to be absent), and retired — frozen at its retirement and **identical on every later read**. The two mismatch
+  meanings that matter are named: a retired row with no number on a tombstone from v0.39.0 or later means the
+  capture did not happen and the value is unrecoverable; a retired row whose number **changes** means the field
+  is being recomputed instead of answered from the tombstone.
+- **The version floor lives inside the check**, with its consequence stated: a profile whose retirements all
+  predate v0.39.0 cannot exercise the third source at all. **A precondition written in the surrounding prose is
+  a precondition nobody applies** — the same reason checks 5 and 9 carry theirs.
+- **Three checks are pending and nothing is marked run**, because no live round has happened since v0.36.5.
+- **A brief's number is a claim about a tree, and the tree wins**: the member reported that its branch ran
+  **314** tests where the brief named **322**, because it branched before the previous release merged — and it
+  read the real function instead of writing from the brief's description of it. **A discrepancy reported is
+  worth more than one silently reconciled**, because the second kind cannot be distinguished from a mistake.
+- **Version.** `0.39.1`: one clause, one check rewritten, and a document corrected by the person it misled.
