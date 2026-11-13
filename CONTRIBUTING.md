@@ -67,6 +67,14 @@ It does not check entry syntax — `node --check` does that, as the table above 
 prove the plugin activates. That requires installing the bundle into a profile, which is a manual step
 with a real side effect — see the README.
 
+**An ordering assertion needs to know what "equally old" means.** Two artifacts stamped in the **same
+millisecond** are equally old, so the retention cap deleting either of them is not wrong — what is wrong is
+a test that asserts **which** one went. Assert the set, the count, or the state, and never the identity of
+one record among ties. This is not hypothetical: `pruneLeadTrash` orders candidates by millisecond stamp, a
+CI runner is fast enough to produce two retirements in one millisecond, and a test that named one of the two
+was green locally and red in CI. The same class has cost this repository three times today, so it is a rule
+here rather than a comment in the test that survived.
+
 ## 5. Files
 
 - **Filenames are English**, lowercase, hyphen-separated.
@@ -128,3 +136,5 @@ folder names. Write commands relative to the repository root.
 - [ ] The task box in `PLAN.md` is ticked in the same PR that delivers the task — nobody ticks it for
       someone else
 - [ ] `docs/INDEX-en.md` and `INDEX-zh.md` updated if a document was added, renamed or removed
+- [ ] Any test that asserts an **ordering or an identity among equals** respects §4's same-millisecond
+      rule: assert the set or the count, never which one of two equally old records went
