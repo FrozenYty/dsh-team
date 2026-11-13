@@ -335,8 +335,11 @@ export async function planMemberTrash(ctx, request) {
     planned: true,
     trashPath: join(trashRoot, dirName),
     // What the tombstone stores: the directory this retirement gave the artifact, and where it sits
-    // under the data root. Both are stable when the root moves; an absolute path is not.
-    trashRelPath: join('trash', leadSessionId, dirName),
+    // under the data root. Both are stable when the root moves; an absolute path is not. The relative path
+    // is written with forward slashes, like every other path this plugin puts in a record: a roster carried
+    // to another machine may be read by a platform that does not treat `\` as a separator, and a stored
+    // separator that only means "directory" on the machine that wrote it is not a relative path there.
+    trashRelPath: ['trash', leadSessionId, dirName].join('/'),
     // Where the artifact came from, as the sessions root plus these two segments. The absolute is computed
     // at read time from the sessions root in effect *there*, which is what makes the record portable.
     ...(originalRelPath === undefined ? {} : { originalRelPath }),
@@ -412,6 +415,24 @@ function lastSegment(path) {
 }
 
 /**
+ * The segments of a recorded **root-relative** path, split on either separator.
+ *
+ * `trashRelPath` is written with forward slashes, and records written before that was true carry the
+ * platform separator the machine used — which on POSIX is a literal character inside a single segment, so
+ * reading such a record with `resolve` or `join` once put the artifact under `<root>/trash\lead\dir`. The
+ * write side is strict and the read side is tolerant, which is the same asymmetry the rest of the path
+ * chain follows: a record is a file that travels, and the machine reading it may not be the machine that
+ * wrote it. No legal segment of this field contains a backslash — both the Lead and the child Session id
+ * are encoded identities — so splitting on both is safe.
+ * @param {unknown} path - a recorded relative path.
+ * @returns {string[]} its segments, empty when there are none.
+ */
+export function relativeSegments(path) {
+  if (typeof path !== 'string') return []
+  return path.split(/[\\/]+/).filter((segment) => segment !== '')
+}
+
+/**
  * The trash directory name a tombstone records, from either stored shape.
  *
  * A record written from this release carries `trashDir` — the name retirement gave the directory — and
@@ -425,8 +446,8 @@ function lastSegment(path) {
 export function recordedTrashDir(record) {
   const named = record?.trashDir
   if (typeof named === 'string' && named !== '') return named
-  const relative = lastSegment(record?.trashRelPath)
-  if (relative !== undefined) return relative
+  const relative = relativeSegments(record?.trashRelPath)
+  if (relative.length > 0) return relative[relative.length - 1]
   return lastSegment(record?.trashPath)
 }
 
@@ -453,8 +474,8 @@ export function trashPathCandidates({ record, leadSessionId, dataDir, home = hom
     candidates.push({ path: absolute, leg })
   }
   const usableRoot = typeof dataDir === 'string' && dataDir !== ''
-  const relative = record?.trashRelPath
-  if (usableRoot && typeof relative === 'string' && relative !== '') add(resolve(dataDir, relative), 'root')
+  const relative = relativeSegments(record?.trashRelPath)
+  if (usableRoot && relative.length > 0) add(join(dataDir, ...relative), 'root')
   const named = recordedTrashDir(record)
   if (usableRoot && named !== undefined) add(join(dataDir, 'trash', leadSessionId, named), 'root')
   add(record?.trashPath, 'legacy')
