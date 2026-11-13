@@ -129,7 +129,7 @@ Session 级路由白名单属于官方工具（`@deepseek-ai/dsh-tool-subagent/l
 60 份会话日志里有 18 份在切到中转站之后仍停在 `deepseek-official/deepseek-flash`，其中数份是成员——正是
 本节要回答的问题。
 
-bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行按会话自己的路由做摘要（`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`，§2.1）。实测到的例外在本插件之外，是网页搜索：基础 bundle 的补丁选中 `searchProvider: deepseek-official`（`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`），而 `dsh-web-search-deepseek` 钉死了自己的端点与模型（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`、`:319-320`），并要求回答里有 `web_search_tool_result`（`:61-62`）。任何会话路由都到不了它；profile 要么禁用那一行，要么把它指向真正执行原生搜索的端点。面向用户的说法在 README 双语版里。
+bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行按会话自己的路由做摘要（`@deepseek-ai/dsh-compaction-basic/lib/index.js:292-303`，§2.1）。实测到的例外在本插件之外，是网页搜索：基础 bundle 的补丁选中 `searchProvider: deepseek-official`（`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`），而 `dsh-web-search-deepseek` 钉死了自己的端点与模型（`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`、`:319-320`），并要求回答里有 `web_search_tool_result`（`:61-62`）。任何会话路由都到不了它；profile 要么禁用那一行，要么把它指向真正执行原生搜索的端点。面向用户的说法在 `docs/routes-zh.md` 里。
 
 ## 3. 为什么不扩展官方花名册
 

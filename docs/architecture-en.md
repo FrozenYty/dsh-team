@@ -259,7 +259,7 @@ outside this plugin: the base bundle's patch selects `searchProvider: deepseek-o
 (`@deepseek-ai/dsh-base/cordis.patch.yml:467-471`), and `dsh-web-search-deepseek` pins its endpoint and model
 (`@deepseek-ai/dsh-web-search-deepseek/lib/index.js:20-22`, `:319-320`) and requires a
 `web_search_tool_result` answer (`:61-62`). No session route reaches it; a profile either disables that row or
-points it at an endpoint that executes native search. The user-facing statement is in the README pair.
+points it at an endpoint that executes native search. The user-facing statement is in `docs/routes-en.md`.
 
 ## 3. Why the shipped roster is not extended
 
