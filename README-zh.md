@@ -137,10 +137,10 @@ node scripts/check.mjs
 | `index.js` | Host 插件入口：工具定义、参数校验、Lead 专属权限检查 |
 | `actions.js` | 模型侧工具背后的花名册操作 |
 | `roster.js`、`trash.js` | 持久花名册（相态、代次命名、收养、迁移），以及带恢复与保留上限的会话回收站 |
-| `definitions.js` | `team/` 层：扁平 frontmatter 解析器、成员定义扫描及其上限、团队文件的交接书模板，以及两者解析所用的工作目录 |
+| `definitions.js` | 定义层：扁平 frontmatter 解析器、沿定义查找链的扫描及其上限、团队文件的交接书模板，以及以上解析所用的工作目录 |
 | `host-hooks.js` | 投影过滤（剔除已退役 id，并把本插件的活成员追加进团队面板）、官方花名册读取过滤、名额补偿，以及这三者的延迟安装 |
 | `tests/`、`scripts/check.mjs` | 单元测试，以及 CI 会跑的仓库检查 |
-| `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`.github/` | bundle 本体、CI workflow 与模板 |
+| `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`templates/`、`.github/` | bundle 本体、随包提供的五个角色模板、CI workflow 与模板 |
 | `PLAN.md`、`PROGRESS.md`、`docs/` | 待办任务、只追加的变更日志，以及双语的设计文档与 ADR |
 
 ## 其余内容在哪里
