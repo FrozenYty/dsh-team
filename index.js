@@ -1092,7 +1092,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir: dataDirFor(caller),
+          dataDir: dataDirFor(),
           hooks,
           name: args.name,
           label: args.label,
@@ -1136,7 +1136,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir: dataDirFor(caller),
+          dataDir: dataDirFor(),
           hooks,
           trashLimit,
           archived: args.archived === true,
@@ -1213,7 +1213,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir: dataDirFor(caller),
+          dataDir: dataDirFor(),
           hooks,
           target: args.target,
           reason: args.reason,
@@ -1254,7 +1254,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           hooks,
           // The data directory in effect, so a tombstone written from this release resolves without an
           // absolute path and an older one still finds its artifact.
-          dataDir: dataDirFor(caller),
+          dataDir: dataDirFor(),
         })
       },
     })))
