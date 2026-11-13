@@ -3393,3 +3393,35 @@
   beyond it. That is exactly why the live round is the only instrument for the Host's behaviour, and why the
   document says so at the top rather than in a footnote.
 - **Version.** `0.37.1`: one ADR, one checklist pair, and a stale status caught before it shipped.
+
+## 2026-11-14 — a member row says what it has spent, and omits the number rather than inventing a zero (v0.38.0)
+
+- **The plugin was reporting the wrong number for the question the owner actually asks.** `pressure_tokens` and
+  `usage_ratio` say *how full a member's context is*; nothing said *what it has cost*. A Lead running five
+  standing roles could not see which one was burning tokens, and `spend_tokens` is the other half.
+- **It is read from the projection registry, not from `tokenMeter` — and that distinction is the release's
+  most reusable fact.** `tokenMeter` owns the usage projection and **discards its handle**
+  (`dsh-token-meter/lib/index.js:806`), while `measure()` answers pressure. The registry is the reachable
+  path, provably present wherever `tokenMeter` is active because `TokenMeter` itself injects it, and
+  `ctx.get(...)` keeps the read **optional** — putting `sessionProjections` in `inject` would make a profile
+  without that registry fail to load.
+- **Omitted, never zero, and the six cases are enumerated in the code**: no registry, no `snapshot`, no
+  `tokenUsage` unit, no Agent (a retired member's Session is no longer mounted), a counter that is not
+  finite, or `snapshot` throwing. **"Nothing measured" and "nothing spent" are different claims**, and a
+  partial sum would be a plausible-looking lie rather than a gap.
+- **The non-monotonicity is asserted, not merely documented.** The description says the number is cumulative
+  rather than a rate and **not monotone** — a retry adds an attempt while a streaming sample replaced by its
+  final one subtracts — and a test pins that sentence, so it cannot be quietly deleted. A number that can
+  fall is exactly the number someone will file a bug about, and the sentence is the difference between a
+  measurement and a defect report.
+- **The Host's validator now judges a value that carries the field**: the harness mounts `sessionProjections`
+  and resolves each Session id to an Agent, and the test asserts the row's `spend_tokens` equals
+  `1200 + 300 + 4000 + 500` — the sum, rather than a value that merely looks plausible. Seventeen results,
+  no rejections.
+- **Named limits.** A **non-resident** member shows no spend, because the only handle the bundle has is
+  `ctx.agents.get(childId)` and an unloaded child has no Agent — so *"who is most expensive"* is answerable
+  only for mounted members today, and computing it from the durable log instead is a deliberate follow-up
+  rather than an oversight. The four counters are **unweighted**: the plugin has no price table, so the total
+  is honest only to a reader who knows a cache read and an output token differ by orders of magnitude. The
+  Lead's own spend is not read. And it has not been live-tested.
+- **Version.** `0.38.0`: one row field, one optional service read, and a sum that refuses to be invented.
