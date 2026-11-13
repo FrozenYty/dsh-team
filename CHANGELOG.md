@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.31.1] - 2026-11-13
+
+- The state is files only, the domain retires, and the version now checks itself.
+
 ## [0.31.0] - 2026-11-13
 
 - Every Session has a root, and the storage domain stops serving anything.
