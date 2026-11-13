@@ -3269,3 +3269,40 @@
   there would be a second copy of one rule. The numbers in both additions came from the brief and the member
   said so rather than presenting them as its own measurement.
 - **Version.** `0.36.3`: fourteen lines across two accepted ADRs, and three limits that are now decisions.
+
+## 2026-11-13 — the Host's validator sees the shape the flag produces, as the fifteenth real result (v0.36.4)
+
+- **The archive branch was the one branch of this plugin the validator never ran**, and it is now a real
+  result like any other: the script reports **fifteen** values checked where it reported fourteen, and the
+  `list_members` row reads `results ok,ok` — an ordinary read and a flagged one. The count is derived from
+  what ran rather than claimed beside it, which is the difference between a number and an assertion.
+- **The fixture is the plugin's own writer's output, and the harness had to earn that.** It boots two
+  one-shot members, builds a real session directory for each so every retirement actually moves an artifact,
+  deletes the earlier trash copy — which is what the retention cap does — and then lets the **next write**
+  bound the roster, because that code path is the only one that appends an archive line. No line of JSONL is
+  written by hand anywhere in the check, so a change to the line format cannot leave a stale fixture passing.
+- **The check runs the harness with a window of one**, and the reason is worth keeping: the archive branch
+  begins outside the window, so reaching it under the default would mean retiring twenty-one members — a
+  check nobody would read. One is a value the loader accepts, and a check's cost is part of whether it
+  survives.
+- **The acceptance had to hold where there is no asar**, so the rule "a field in the value that the declared
+  schema lacks fails by name" was extracted into `tests/schema-assert.mjs` and shared with the harness test.
+  A rule that only runs on the machine that happens to have an Electron archive is a rule half the
+  contributors cannot check.
+- **One acceptance is guarded by construction rather than by a probe, and that was disclosed rather than
+  counted.** "The fixture is the writer's output" is tested by reading the file back through
+  `readArchivedRecords` — but a hand-written fixture copying today's format would also pass that. What makes
+  the claim true is that `stageArchivedTombstone` contains **no line writer at all**: it calls tools and
+  deletes bytes. The member said so in those words instead of letting a green stand in for it, which is the
+  second time today a thin spot was named rather than covered.
+- **Three probes, each failing by name**: deleting `archived_returned` from the declared row schema
+  (`not declared in the output schema`), deleting the flagged call from the harness (the summary drops back
+  to fourteen), and making the harness refuse a tree with no archive at all.
+- **What this does not cover, said plainly**: the archive *read* now has a result shape through this tool,
+  and the two refusal paths that also touch the file share the same reader, so their values are covered by
+  construction rather than by their own shapes. The harness's window of one differs from a default profile's
+  twenty, which is fine for a schema check and worth knowing if it ever grows a behavioural assertion. And
+  the flagged value gets the Host's own judgement only on a machine with the archive; CI runs the local
+  assertion and prints which one it used.
+- **Version.** `0.36.4`: no shipped file changed, one check that now covers what it was written to cover, and
+  a shared assertion so the rule holds off this machine.
