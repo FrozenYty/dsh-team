@@ -21,9 +21,13 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.25.5] - 2026-11-13
+
+- Every in-repository citation resolves, or the check says which one does not (P4-17).
+
 ## [0.25.4] - 2026-11-13
 
-- Every in-repository citation resolves, or the check says which one does not (P4-16).
+- The README is a first-use document, and the routes subject moves out of it.
 
 ## [0.25.3] - 2026-11-13
 

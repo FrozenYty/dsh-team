@@ -455,7 +455,19 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   their file, and `scripts/check.mjs` hashed
   `A98F2B9F2BAE655F2E92DAC2AB442698A0F95436ECD4F9B05913FE90FB6FA4BB` before and after the probe session.
 
-- [x] **P4-16** Every in-repository citation resolves, or the check says which one does not (v0.25.4).
+- [x] **P4-16** The README is a first-use document, and the routes subject has a pair of its own (v0.25.4).
+  Done when a reader learns how to install on the second screen, every section the README drops is still
+  reachable from its pointer table, both sides carry the same headings, and the pair check passes.
+  Delivered: the README pair went from 651 lines (559 non-blank) across 23 sections to 253 (209) across 13,
+  and `Install and verify` is the second section instead of the eighteenth. Four subjects left it for the
+  documents that already owned them — `member-lifecycle`, `task-board`, `handoff`, `roster-storage` — two got
+  a pair of its own (`docs/routes-{en,zh}.md` for the measured route and billing behaviour,
+  `docs/upgrading-{en,zh}.md` for the v0.14.0 removal table), and `Status` was cut from 66 lines to 14 with
+  the per-release evidence staying in `PROGRESS.md`. `Limits and deliberate omissions` was kept as it stood.
+  Both sides are 13 headings, both new pairs were classified by the `docs/` rule, and the reachability grep
+  for every dropped section is in the PR that delivered this.
+
+- [x] **P4-17** Every in-repository citation resolves, or the check says which one does not (v0.25.5).
   Done when a citation to a document that does not exist fails by name, a citation to a section that document
   does not have fails by name, the rule is stated in `CONTRIBUTING.md`, and neither `PROGRESS.md` nor
   `CHANGELOG.md` is forced to rewrite a historical entry.
@@ -469,5 +481,5 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   document that does not exist, were each planted in `CONTRIBUTING.md`, each failed by name, and were each
   removed. `scripts/check.mjs` hashed
   `E728A7F5E7C9565EAA1EFDA0E836B688AB14814600F8A30E22F1927035E68268` before and after the proofs, and 212
-  tests pass with no test file touched.
+  tests pass with no test file touched. Renumbered from P4-16 and 0.25.4 when the README task took both.
 
