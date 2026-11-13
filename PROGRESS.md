@@ -3455,3 +3455,22 @@
   a file that is not there.
 - **Version.** `0.38.1`: one ADR, two pairs touched, and a defect found in a file the author was not allowed
   to edit.
+
+## 2026-11-14 — a limit is stated before the row that would have raised the question (v0.38.2)
+
+- **The clause says residency is the same omission rule rather than a second one**, because ADR 0037 counts
+  "no live Agent" among the same cases: a non-resident member has nothing for the plugin to read, so its spend
+  is not measurable either, and the field appears only on mounted members.
+- **Where it sits is the whole point of the release.** It goes inside the `spend_tokens` paragraph, directly
+  after the sentence that already explains an unreadable projection — so a reader meets it while learning what
+  a row carries, which is **before** any row's absence can confuse it. **A limit stated after the confusion is
+  documentation; stated before it, it is a description** — and this is the second time today that the fix was
+  a matter of position rather than of content.
+- **The sentence is pinned by the same test that pins the non-monotonicity**, so both properties of one number
+  now fail loudly when someone edits them away. **The failure message quotes the description back**, so it
+  says what is missing rather than that a pattern did not match somewhere.
+- **What it deliberately does not do**: it does not say which members are mounted — that is state, and the
+  `resident` boolean on every row answers it — and it does not compute a spend for a member that is not
+  running. **That second decision is reversed in the next release**, and this clause is written so its
+  replacement is a rewrite of one sentence rather than a patch beside it.
+- **Version.** `0.38.2`: one clause, three assertions, and a reader who is told before it asks.
