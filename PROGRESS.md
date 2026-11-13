@@ -2803,3 +2803,50 @@
   prose and runs nowhere fails quietly**, and a version is exactly the kind of number that drifts while
   every other check stays green.
 - **Version.** `0.31.1`: documents, the records the previous merge owed, and one new check with its probe.
+
+## 2026-11-13 — a succession is recorded in both directions, and the parked spec is paid (v0.32.0)
+
+- **The last unfinished work in the repository was a branch that specified a feature and never landed it.**
+  `feat/succession-edge` had been parked with one commit, a 291-line test file and a message admitting it
+  "cites an ADR that does not exist yet". Its subject is real: the successor's record has carried
+  `predecessor` since v0.2, but the **reverse** link existed only as prose — `reason: "Replaced by X"` on
+  the tombstone — so walking a chain backwards meant parsing a sentence. **It was treated as a
+  specification, not a patch**: ten versions stale, its document hunk fights the en/zh split, and
+  re-implementing against its seven tests was cheaper and safer than a rebase. The branch is deleted; the
+  behaviour is here.
+- **The edge is written in the write that makes the record a tombstone**, not afterwards. The probe that
+  matters is the one that tells "written" from "written in the same write": moving the edge to a second
+  mutation fails on the snapshot invariant *"every state in which the predecessor is a tombstone carries
+  its successor in that same write"*. A chain that can exist for one state with one end missing is a chain
+  a reader can observe half-built.
+- **An edge names an identity, never a name.** `reviewer`, `reviewer-g2` and `reviewer-g3` are three
+  holders of one base name, so storing a target would resolve to the wrong holder; every edge carries the
+  roster's `member_id`, and the target shown beside it is resolved from the record and never used for
+  matching. `member_id` is **not** `child_id` for anything this plugin spawned — a distinction the row now
+  makes explicit, because the two coincide only for members the shipped packages created.
+- **Load-time validation checks structure and deliberately not references.** A malformed edge is refused by
+  name; a **dangling** one is not, because a predecessor whose tombstone is archived is exactly what a
+  correct record looks like (ADR 0030), and the two are indistinguishable without opening the archive. That
+  reasoning is itself a test: a record whose edge names a member it does not contain loads.
+- **The archived walk, which the parked branch could not have known about.** Walking backwards to an id the
+  roster no longer holds stops there: the edge keeps its `member_id`, drops the target, and **does not
+  claim the predecessor is archived** — claiming it would mean opening the archive, which ADR 0030 forbids
+  on the hot path, and the same read's `archived_records` and `archive_file` already say where that history
+  went. A test proves both halves of the chain are preserved in the archive, so a person reading the file
+  gets the whole chain even though no tool opens it.
+- **The file-based store makes load-time validation the only gate**, which raises its stakes rather than
+  lowering them: a seeded or hand-edited roster is exactly where a stale or foreign edge comes from. A seed
+  carrying a bad edge is refused loudly — the field named, the root left empty, no provenance written.
+- **It also repaired a check that had been rotting green since v0.31.0.** `scripts/schema-check.mjs` still
+  read its records back from the storage-domain table and gave the harness's Lead no workspace, so the
+  version that gave every Session a root orphaned it. **Nothing runs that script automatically**, which is
+  why it broke silently — the third "a check nobody runs fails quietly" of the day, after the version
+  number and the same script's own domain fake. It now reads the roster file and passes: *"the Host accepts
+  every schema this bundle declares, and every value checked."*
+- **Verification.** 285 tests pass, nine new — seven for the behaviours the parked tests named, two for the
+  interactions they predated. Four probes were shown to fail by name, including the snapshot-invariant one.
+  One report is worth keeping because it is the opposite of a probe: when restoring the second probe the
+  implementer dropped the line it was restoring, and **five tests caught it** — a restore that is verified
+  rather than assumed.
+- **Version.** `0.32.0`: two fields on the member row, one optional parameter on `retire_member`, and a
+  chain that now has two ends.

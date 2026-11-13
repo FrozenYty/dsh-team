@@ -352,12 +352,39 @@ const DEFINITION_REFUSAL = {
   },
 }
 
+/**
+ * One direction of the durable succession link, as a row reports it: the member id the link names and the
+ * target that id resolves to.
+ *
+ * The id is the identity and the target is the handle the model addresses, which is why both travel: a
+ * target can be reused by a later generation, so a link stored as a name alone would point at the wrong
+ * member (ADR 0009, ADR 0032). `predecessor` appears only on a successor a replacement started, and
+ * `successor` only on the tombstone a replacement wrote; a retirement with no successor, an adopted member
+ * and a restored member carry neither. The target is optional because a read that cannot resolve the id in
+ * the roster it holds reports the id alone rather than inventing one — that is what a walk hits when a
+ * tombstone has moved to the archive (ADR 0030) — while a stored edge always carries both, which the
+ * loader enforces so a half-written edge can never be reported.
+ */
+const SUCCESSION_EDGE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['member_id'],
+  properties: {
+    target: { type: 'string' },
+    member_id: { type: 'string' },
+  },
+}
+
 const MEMBER_ROW = {
   type: 'object',
   additionalProperties: false,
-  required: ['target', 'child_id', 'phase', 'generation', 'label', 'status', 'resident', 'lifetime'],
+  required: ['target', 'member_id', 'child_id', 'phase', 'generation', 'label', 'status', 'resident', 'lifetime'],
   properties: {
     target: { type: 'string' },
+    // The roster identity the succession links name. It equals `child_id` for an adopted member and is the
+    // member's own id for one this plugin spawned, which is why the row needs it: an edge found on one row
+    // names a `member_id`, and this is how a reader finds the row it belongs to (ADR 0032).
+    member_id: { type: 'string' },
     child_id: { type: 'string' },
     phase: { type: 'string', enum: ['provisioning', 'active', 'retired', 'failed'] },
     generation: { type: 'integer' },
@@ -394,6 +421,13 @@ const MEMBER_ROW = {
     // the one call that fixes it.
     route_stale: { type: 'boolean' },
     route_note: { type: 'string' },
+    // The durable succession link, both directions, read from this plugin's own records (ADR 0032).
+    // `predecessor` is present only on a successor a `replace` started and names the target and member id
+    // it took over from; `successor` is present only on the tombstone a replacement wrote and names the
+    // target and member id that took the position. The pair survives retirement and a pruned artifact, so
+    // "who held this position before, and who took it over" is answerable from a row.
+    predecessor: SUCCESSION_EDGE,
+    successor: SUCCESSION_EDGE,
     // Present on a result whose sweep retired finished one-shot members; absent otherwise.
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
@@ -931,7 +965,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           },
           replace: {
             type: 'string',
-            description: 'Target of an existing member to retire in the same call, such as reviewer. The successor starts first and the predecessor is retired second, so a failed start leaves the predecessor untouched; a failed retirement is reported as predecessor_retired: false. An already-retired target is accepted, and its tombstone supplies the brief.',
+            description: 'Target of an existing member to retire in the same call, such as reviewer. The successor starts first and the predecessor is retired second, so a failed start leaves the predecessor untouched; a failed retirement is reported as predecessor_retired: false. An already-retired target is accepted, and its tombstone supplies the brief. Both directions of the replacement are recorded durably: the successor row carries predecessor and the tombstone it leaves carries successor, each naming the target and the member id, so who held the position and who took it over is readable from either end (an already-retired tombstone keeps whatever its own retirement recorded).',
           },
           lifetime: {
             type: 'string',
@@ -1065,7 +1099,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at. This list is the recent members, not everyone this Lead ever had: past the trash retention window a tombstone leaves the roster for an append-only archive, and archived_records counts those while archive_file names the file, so a target missing from here may still be in the archive rather than gone.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. Every row carries member_id, the roster identity the succession links name, and where a replacement created a link the row carries it in the direction that record owns: predecessor (the target and member id this member took over from) on the successor, and successor (the target and member id that took the position) on the tombstone of the member it replaced — so the chain reads from either end, by member id, and survives retirement and a pruned session artifact. An edge whose member id is no longer in the roster (a tombstone past the retention window lives in the archive) reports the id without a target, and the archived_records and archive_file fields say where that history is. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at. This list is the recent members, not everyone this Lead ever had: past the trash retention window a tombstone leaves the roster for an append-only archive, and archived_records counts those while archive_file names the file, so a target missing from here may still be in the archive rather than gone.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1124,7 +1158,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'retire_member',
-      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A member is a division of labour, not a task: retirement answers "this role is not needed any more", never "this piece of work is finished" — a member that completed one piece of work may be needed again next round, and an idle member between rounds is not a candidate. The gate protects the person's decision to end a role, not every act of housekeeping, so it depends on what the member still carries. A standing member that carries something — a recorded assignment, an open task on this board, or evidence it was re-tasked (handed work at least twice) — is not retired by this call alone: it answers retired: false with reason "needs-confirmation", a question to put to the person, and the rows it still owns. Put that question to them, then call again with confirmed set to their answer, quoted verbatim — their sentence, not your summary and not a boolean, because the plugin has no surface of its own and the quoted words are the only consent it can check. A standing member that carries nothing is bare residue, and you may clear it yourself: pass a reason and it retires in one call, no confirmation needed, because asking a person about a probe left behind is ceremony. A call that omits the reason on such a member answers reason "needs-reason"; a confirmation does not substitute for it, because there is nobody whose words it could be. A one-shot member already had consent when you declared it one-shot, so it retires in one call; so does a successor started by spawn_member with replace, because a replacement continues the role rather than ending it; and so does a record that never became a role at all — one in failed never started, and one already retired has no life left to end. Its assignment stays on the tombstone for a later successor. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
+      description: `Retire one member: stop it, release its capacity slot, hide it from the workspace, and tombstone its record. This is the removal operation the shipped team roster does not have, and it works on any member list_members reports, including an adopted subagent. A member is a division of labour, not a task: retirement answers "this role is not needed any more", never "this piece of work is finished" — a member that completed one piece of work may be needed again next round, and an idle member between rounds is not a candidate. The gate protects the person's decision to end a role, not every act of housekeeping, so it depends on what the member still carries. A standing member that carries something — a recorded assignment, an open task on this board, or evidence it was re-tasked (handed work at least twice) — is not retired by this call alone: it answers retired: false with reason "needs-confirmation", a question to put to the person, and the rows it still owns. Put that question to them, then call again with confirmed set to their answer, quoted verbatim — their sentence, not your summary and not a boolean, because the plugin has no surface of its own and the quoted words are the only consent it can check. A standing member that carries nothing is bare residue, and you may clear it yourself: pass a reason and it retires in one call, no confirmation needed, because asking a person about a probe left behind is ceremony. A call that omits the reason on such a member answers reason "needs-reason"; a confirmation does not substitute for it, because there is nobody whose words it could be. A one-shot member already had consent when you declared it one-shot, so it retires in one call; so does a successor started by spawn_member with replace, because a replacement continues the role rather than ending it; and so does a record that never became a role at all — one in failed never started, and one already retired has no life left to end. Its assignment stays on the tombstone for a later successor, and a retirement written by a replacement also keeps the successor that took the position; a plain retirement has no successor, so it records none. The per-Lead trash keeps at most ${trashLimit} retired sessions, so a retirement that moves an artifact in removes the oldest ones and reports how many in pruned; a pruned member can no longer be restored. To retire a member and install its successor in the same call, use spawn_member with replace.`,
       parameters: {
         type: 'object',
         additionalProperties: false,
