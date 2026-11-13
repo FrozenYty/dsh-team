@@ -3501,3 +3501,32 @@
   the code before writing, so a reader of the document is not misled about the plugin. The implementation of
   the other two is in flight, which is the honest state of a decision recorded ahead of its code.
 - **Version.** `0.38.3`: one ADR, one pointer line, and a decision that names the sentence it replaces.
+
+## 2026-11-14 — the retention default is decided on a measurement, and the failure sets its direction (v0.38.4)
+
+- **Twenty was never a storage decision, and the measurement shows it.** Twenty trash directories occupy
+  **4.2 MB** on this machine — 210 KB on average, the largest 467 KB — so two hundred is about **41 MB** against
+  **616 GB free**. The cap was protecting a rounding error while **destroying something irreversible**: a pruned
+  artifact cannot be restored, and **75 of the 95 retired records here have already lost their bytes**.
+- **The decision sentence is written to outlive these numbers**: *a default belongs on the generous side when the
+  failure is irreversible and the cost is a rounding error.* That is why the default moves and why the direction
+  of the error was the thing being chosen, not the number.
+- **What expires is resumability, not history.** The artifact is the transcript — the only way back to a member's
+  session. The *record* — name, assignment, lifetime, succession edges — lives in an archive that is unbounded by
+  design at about 870 bytes a line. **So the promise "a retirement is a move, not a deletion" has an expiry, and
+  until now that expiry was stated nowhere a person would meet it before it bit**: they learned of it from a
+  `pruned` refusal or from a prune message *after* the bytes were gone.
+- **Two things follow, and both are about position rather than content**: the window gets stated where the
+  decision to retire is made, and the cost gets reported per Lead — so the number can be **chosen** instead of
+  inherited, and "why did my artifact disappear" has an answer. The walk that measures the size is bounded by
+  the cap itself, so reporting it cannot grow without limit.
+- **The escape hatch is recorded and not built**: compressing an artifact changes the trade by about an order of
+  magnitude, at the price of a decompression step in what is currently a move. It becomes worth doing only when
+  200 × the measured average stops being a rounding error.
+- **And the sentence that had to be there**: raising the default **restores nothing already pruned**. No future
+  change recovers those transcripts; the archive keeps their history, not their bytes.
+- **The merge conflict was real and was resolved by ordering rather than by preference.** Two ADRs were written
+  in parallel, each appending a row to the same ordered index, so both landed on the same insertion point —
+  **a list with one append point per version serialises parallel work, and this will happen every time**. The
+  resolution keeps both rows in numeric order; dropping either would have been the easy and wrong fix.
+- **Version.** `0.38.4`: one ADR, one pointer line into 0012, and a default that is now wrong on the safe side.

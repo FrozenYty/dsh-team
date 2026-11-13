@@ -40,6 +40,7 @@ A design subject is its own document rather than a section of `architecture-`: a
 | How is one archived record found by identity when it is past the cap? | `docs/adr/0036-archive-lookup-by-identity.md` | English |
 | Where does a member's token spend come from, and why is it omitted rather than zero? | `docs/adr/0037-member-spend.md` | English |
 | Which three sources answer a member's spend, and what does the number mean on a tombstone? | `docs/adr/0038-spend-three-sources.md` | English |
+| How many retirements back does recovery reach, and why is the default that large? | `docs/adr/0039-retention-default.md` | English |
 | Which model does a member run on, and what bills what? | `docs/routes-en.md` | pair |
 | What has to change when upgrading from an older version? | `docs/upgrading-en.md` | pair |
 | Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
