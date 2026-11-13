@@ -663,6 +663,19 @@ test('the list_members row declares spend_tokens, and the description warns that
   assert.match(list.description, /cumulative rather than a rate/)
   assert.match(list.description, /not monotone|can show a smaller number/)
   assert.match(list.description, /absent when the projection cannot be read/)
+  // The old clause said the field appears only on mounted members, which stopped being true when an unloaded
+  // member became answerable from the Host's cache and a tombstone from its own frozen number. It is replaced
+  // rather than weakened: the description now says where each kind of member is read from, what a tombstone
+  // number is (frozen at retirement, never re-measured), and that an older tombstone has none at all.
+  assert.equal(/appears only on mounted members/.test(list.description), false, 'the retired claim is gone, not softened')
+  assert.match(list.description, /Where the number comes from depends on the member/)
+  assert.match(list.description, /a mounted one is read from the live projections registry/)
+  assert.match(list.description, /an unloaded one from the persisted projection cache/)
+  assert.match(list.description, /lists the Sessions once and matches the member by id/)
+  assert.match(list.description, /the copy its tombstone froze at retirement/)
+  assert.match(list.description, /captured before the artifact moves, never re-measured/)
+  assert.match(list.description, /A tombstone written before this version carries none/)
+  assert.match(list.description, /ADR 0038/)
 })
 
 test('list_members declares the archive flag and reads the Lead own root when asked for it', async () => {
