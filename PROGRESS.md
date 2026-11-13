@@ -2403,3 +2403,50 @@
   document check can prove it — the same class of gap this file recorded for the rollback claim, where the fix
   was to name the test. There is no test to name here yet, and that is worth knowing rather than papering over.
 - **Version.** `0.28.1`: documents only. No code, no stored shape, no shipped file.
+
+## 2026-11-13 — the roster and the trash can be moved into the workspace, dry-run first (v0.28.2)
+
+- **What this adds, and what it deliberately is not.** `scripts/migrate-roster.mjs` and its tests. It is not
+  in `files`: a one-off operation is not a bundle capability, and shipping it would imply the plugin
+  migrates on its own, which it never does.
+- **`--apply` refuses until the ordering is right.** The roster file must exist, and if it does not the script
+  names the order — restart, call one roster tool so the plugin imports, then run this — rather than deciding
+  for the operator. The dry-run needs no such thing: it reads the storage domain and says so in its header,
+  which is why a full plan could be produced before the plugin had ever bound a workspace.
+- **Nothing is written before a backup exists**: byte copies of the roster file and of the storage domain in
+  `<data root>/backups/<stamp>/`, plus a `manifest.json` naming every source path, every destination path and
+  each artifact's size. The domain is read and copied, never written and never deleted — it is the rollback.
+- **The move is cross-volume on this machine, so it is a copy.** `rename` is tried first and answers `EXDEV`
+  from `C:` to `D:`, after which the artifact is copied, **verified by file count and total byte size**, and
+  only then is the source removed. A verification that fails drops the incomplete copy, keeps the source, and
+  leaves the record untouched — the failure mode is "nothing happened", not "half moved".
+- **The rewrite and the reconcile.** A moved record becomes `trashDir` + `trashRelPath` and loses
+  `trashPath`; `originalPath` stays absolute because it points into `~/.dsh/sessions`, which has no root to be
+  relative to. A record whose artifact is on none of the chain's legs is one the retention cap emptied, and is
+  flipped to `pruned` with `artifactIsMissing` — the rule v0.27.1 added for exactly this.
+- **The ordering that makes it idempotent is not obvious, and it was found rather than assumed.** The
+  destination is asked about **before** the old chain. A completed run leaves the artifact only at the
+  destination, so asking the old chain first would read "absent where it used to be" and misclassify a
+  migrated record as emptied by the cap. The probe that skips this fails on `reconcile-pruned` and on the
+  apply-twice counts, which is how the ordering is known to be load-bearing rather than tidy.
+- **The real plan, re-measured on the live data rather than copied from the audit**: 110 records, **20
+  artifacts to move, 46 to reconcile to `pruned`, 28 already `pruned`, 44 left alone by reason, 0 refused.**
+  One record carries no destination at all and is counted as left alone rather than guessed at.
+- **Verification.** `scripts/check.mjs` prints `check passed`, `node --check` is clean on the script too, and
+  the suite is **247 tests, 247 passing**, nine of them new, all on fixtures in temporary directories — no
+  test touches the real roster or the real trash. Three probes were each shown to fail on their own
+  assertion: not deleting `trashPath`, skipping the copy verification, and asking the old chain first.
+- **A probe was caught silently doing nothing, for the second time today.** The first attempt to capture the
+  dry-run's output produced no file at all, because its scratch directory did not exist and the redirection
+  failed quietly; the next command naming the missing path is what exposed it. The earlier occurrence was a
+  pairing probe in the document lane. Two independent agents, two silent no-ops, both caught by looking for
+  the artefact instead of trusting the exit code — which is the argument for that habit, not for the exit
+  code.
+- **What is left, and it is mine.** `--apply` has not run against real data and will not until the owner reads
+  the plan and says go. **A second restart is required afterwards** — the plugin keeps the roster in memory
+  and re-reads it only on a load or a write, so it serves pre-migration records until it restarts; the script
+  prints that in every report, not only in its own documentation.
+- **One consequence worth stating for the operator.** Records that arrive from the running process *after*
+  `--apply` will be imported by the plugin in the old layout, so `records rewritten` may be less than 20 on a
+  later run. Re-running the migration is safe by design, which is the point of making it idempotent.
+- **Version.** `0.28.2`: a script and its tests. No bundle file, no stored shape, no behaviour of the plugin.
