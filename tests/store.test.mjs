@@ -15,6 +15,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import {
+  ARCHIVE_FILE_NAME,
+  ARCHIVE_REASON,
   PHASE,
   PROVENANCE_FILE_NAME,
   ROSTER_FILE_NAME,
@@ -102,29 +104,40 @@ test('the real domain imports once, and the marker records what came across', as
   const workspace = join(root, 'workspace')
   const home = join(root, 'home')
   const domain = await realDomain()
-  const source = createRosterSource({ domainTable: domain, binder: workspaceBinder(home) })
+  // `home` is passed so the artifact chain's frozen leg reads this fixture, not the machine's real trash
+  // directory: the fixture's records carry absolute paths from the live machine.
+  const source = createRosterSource({ domainTable: domain, binder: workspaceBinder(home), home })
   source.bind(REAL_LEAD, workspace)
   await source.readyFor(REAL_LEAD)
 
   const imported = readRoster(source.table, REAL_LEAD)
-  assert.equal(imported.members.length, 100, 'every record came across')
-  assert.equal(imported.members.filter((entry) => entry.phase === PHASE.retired).length, 95)
+  // The import is a write, so it is bounded like any other: the window keeps the newest 20 tombstones and
+  // the 5 live members, and the one tombstone that names no trash destination cannot be archived at all.
+  assert.equal(imported.members.length, 26, 'the import is bounded, not the whole backlog')
+  assert.equal(imported.members.filter((entry) => entry.phase === PHASE.retired).length, 21)
   assert.equal(imported.tasks.length, 3)
+  assert.equal(imported.retiredChildIds.length, 95, 'every retired id is kept, archived or not')
   assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'the domain is the source, never the destination')
+
+  const archived = (await readFile(join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME), 'utf8')).trim().split('\n')
+  assert.equal(archived.length, 74, 'the 74 tombstones past the window are in the archive')
+  assert.equal(JSON.parse(archived[0]).reason, ARCHIVE_REASON)
+  assert.equal(JSON.parse(archived[0]).leadSessionId, REAL_LEAD)
+  assert.equal(JSON.parse(archived[0]).member.phase, PHASE.retired, 'each line is the full tombstone')
 
   const marker = JSON.parse(await readFile(join(workspace, TEAM_DIR, PROVENANCE_FILE_NAME), 'utf8'))
   assert.equal(marker.source, 'team_roster', 'the marker names the domain it came from')
-  assert.equal(marker.leads[REAL_LEAD].members, 100)
+  assert.equal(marker.leads[REAL_LEAD].members, 100, 'and records what came across, not what the window kept')
   assert.equal(marker.leads[REAL_LEAD].tasks, 3)
   assert.equal(typeof marker.leads[REAL_LEAD].importedAt, 'string', 'and when it was imported')
   assert.equal(source.report(REAL_LEAD).imported_at, marker.leads[REAL_LEAD].importedAt)
 
   // The import is one-time because the file is now the record: a second load with an empty domain still
   // serves the Lead, which is only possible if the records came from the file.
-  const second = createRosterSource({ domainTable: domainTable(), binder: workspaceBinder(home) })
+  const second = createRosterSource({ domainTable: domainTable(), binder: workspaceBinder(home), home })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
-  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 100, 'read from the file, with no domain at all')
+  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'read from the file, with no domain at all')
 })
 
 test('with the roster file deleted the domain is the source again, and the plugin keeps working', async () => {
@@ -132,17 +145,17 @@ test('with the roster file deleted the domain is the source again, and the plugi
   const workspace = join(root, 'workspace')
   const home = join(root, 'home')
   const file = join(workspace, TEAM_DIR, ROSTER_FILE_NAME)
-  const first = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home) })
+  const first = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
   first.bind(REAL_LEAD, workspace)
   await first.readyFor(REAL_LEAD)
   assert.equal(existsSync(file), true)
 
   // Rollback is one deletion: the domain is never written and never deleted, so it is still the source.
   await rm(file)
-  const second = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home) })
+  const second = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
-  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 100, 'served from the domain again')
+  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'served from the domain again, bounded again')
 
   await updateRoster(second.table, REAL_LEAD, (roster) => ({ ...roster, handoffTemplate: '{successor} {predecessor} {label} {assignment} {task_board}' }))
   assert.equal(readRoster(second.table, REAL_LEAD).handoffTemplate, '{successor} {predecessor} {label} {assignment} {task_board}')
@@ -157,10 +170,10 @@ test('a roster file that cannot be used falls back to the domain instead of thro
   const truncated = join(root, 'truncated', TEAM_DIR)
   await mkdir(truncated, { recursive: true })
   await writeFile(join(truncated, ROSTER_FILE_NAME), '{"version":1,"serial":4,"rosters":{"lead-1":')
-  const source = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home) })
+  const source = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
   source.bind(REAL_LEAD, join(root, 'truncated'))
   await source.readyFor(REAL_LEAD)
-  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 100, 'the domain answers instead')
+  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 26, 'the domain answers instead, and the import is bounded')
   assert.match(source.report(REAL_LEAD).read_problem, /not valid JSON/)
   assert.deepEqual(
     Object.keys(JSON.parse(await readFile(join(truncated, ROSTER_FILE_NAME), 'utf8')).rosters),
@@ -177,10 +190,10 @@ test('a roster file that cannot be used falls back to the domain instead of thro
     serial: 2,
     rosters: { 'lead-9': { leadSessionId: 'lead-9', members: 'not an array' } },
   }))
-  const other = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home) })
+  const other = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
   other.bind(REAL_LEAD, join(root, 'invalid'))
   await other.readyFor(REAL_LEAD)
-  assert.equal(readRoster(other.table, REAL_LEAD).members.length, 100)
+  assert.equal(readRoster(other.table, REAL_LEAD).members.length, 26, 'and that import is bounded like any other')
   assert.match(other.report(REAL_LEAD).read_problem, /record "lead-9" is invalid/)
 })
 

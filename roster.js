@@ -17,8 +17,11 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+
+import { DEFAULT_TRASH_LIMIT, locateTrashedArtifact, recordedTrashDir } from './trash.js'
 
 /**
  * Domain name: /^[a-z][a-z0-9_]*$/ per the storage facility.
@@ -500,6 +503,18 @@ function parseRoster(value) {
       taskIds.add(task.id)
     }
   }
+  // The v0.28.6 field: every retired child Session id this Lead has ever had, including the ones whose
+  // records moved to the archive. Optional, so a record written before it loads unchanged, and only its
+  // shape is checked here: a record that lost the list still serves, because the hooks fall back to
+  // scanning the tombstones that remain (ADR 0017's rule about never hiding a roster over one field).
+  if (value.retiredChildIds !== undefined) {
+    if (!Array.isArray(value.retiredChildIds)) throw new Error('roster.retiredChildIds must be an array')
+    for (const id of value.retiredChildIds) {
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new Error('roster.retiredChildIds must hold non-empty strings')
+      }
+    }
+  }
   const targets = new Set()
   for (const member of value.members) {
     if (typeof member?.memberId !== 'string') throw new Error('roster member needs a memberId')
@@ -613,14 +628,16 @@ async function migrateLegacyRoster(ctx, table) {
  * plus this plugin's own file at each Lead's bound root.
  * @param ctx - plugin context, with `storageDomain` injected.
  * @param binder - the root binder from `trash.js`; `undefined` leaves every Lead on the domain.
+ * @param {{trashLimit?: number}} options - `trashLimit` is the effective retention cap the tombstone window
+ *   is derived from, so the window cannot drift out of step with the cap that empties the trash.
  * @returns the roster source: `{ table, bind, ready, readyFor, report }`.
  */
-export async function openRosterStore(ctx, binder) {
+export async function openRosterStore(ctx, binder, { trashLimit } = {}) {
   const domain = await ctx.storageDomain.open(ROSTER_SPEC)
   ctx.effect(() => () => domain.close(), 'team-roster.domainClose()')
   const domainTable = domain.table('rosters')
   await migrateLegacyRoster(ctx, domainTable)
-  return createRosterSource({ domainTable, binder })
+  return createRosterSource({ domainTable, binder, trashLimit })
 }
 
 /** The one file a workspace's rosters live in, under the bound root. */
@@ -628,6 +645,20 @@ export const ROSTER_FILE_NAME = 'roster.json'
 
 /** The record of the one-time import from the storage domain: which Lead came across, and when. */
 export const PROVENANCE_FILE_NAME = 'provenance.json'
+
+/**
+ * Where this plugin keeps the tombstones that are past the trash retention window: append-only, one JSON
+ * object per line, each the full tombstone with when and why it left the roster.
+ *
+ * A tombstone belongs in `roster.json` exactly while its artifact could still exist — beyond the newest
+ * `trashLimit` retirements the retention cap has already removed the bytes, so the record can only answer
+ * `pruned`. Archiving it is therefore lossless for functionality, and the file keeps what the roster
+ * cannot afford to: every one of them, forever, in a form a human can read without a tool.
+ *
+ * It is never read on the hot path — not at load, not by `list_members`, not by the host hooks. The two
+ * reads are a refusal (`restore_member` naming where the record went) and `restore_member`'s own lookup.
+ */
+export const ARCHIVE_FILE_NAME = 'archive.jsonl'
 
 /** The content of a roster file that has never been written. */
 const emptyRosterFile = () => ({ version: 1, serial: 0, rosters: {} })
@@ -713,6 +744,54 @@ async function replaceFileAtomic(file, text, renameFn) {
   }
 }
 
+/** Why a tombstone left the roster, as the archive records it on the line it writes. */
+export const ARCHIVE_REASON = 'beyond-trash-window'
+
+/**
+ * When one tombstone left the roster: its retirement time, falling back to the stamp its trash directory
+ * carries, then to zero. The order decides which tombstones are the newest `trashLimit`, so it is stable
+ * for records written by any release — a record that recorded no retirement time still sorts by the
+ * millisecond stamp in the name of the artifact it moved.
+ * @param {object} member - one roster member record.
+ * @returns {number} milliseconds, or 0 when the record carries no time at all.
+ */
+function retireStamp(member) {
+  const at = Date.parse(member?.retiredAt ?? '')
+  if (Number.isFinite(at)) return at
+  const stamp = /-(\d+)$/.exec(recordedTrashDir(member) ?? '')
+  return stamp === null ? 0 : Number(stamp[1])
+}
+
+/**
+ * Read one archived tombstone by target, out of `<dataDir>/archive.jsonl`.
+ *
+ * Called only where a lookup has already failed — a `restore_member` refusal, or a `replace` whose
+ * predecessor is not in the roster — so the hot path never opens the file. The archive is history, and a
+ * missing or half-written line is skipped rather than raised: it cannot make anything worse than the
+ * refusal the caller is already composing.
+ * @param {string} dataDir - the data directory in effect (the bound root).
+ * @param {string} target - the model-facing target as the caller wrote it.
+ * @returns {Promise<{path: string, member: object, archivedAt: string|undefined}|undefined>}
+ */
+export async function findArchived(dataDir, target) {
+  const path = join(dataDir, ARCHIVE_FILE_NAME)
+  const text = await readFile(path, 'utf8').catch(() => undefined)
+  if (text === undefined) return undefined
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const member = row?.member
+    if (member === null || typeof member !== 'object' || Array.isArray(member)) continue
+    if (targetOf(member) === target) return { path, member, archivedAt: row.archivedAt }
+  }
+  return undefined
+}
+
 /**
  * The rosters this process serves, and the one place that decides where their bytes go.
  *
@@ -732,12 +811,22 @@ async function replaceFileAtomic(file, text, renameFn) {
  *     file is absent and has just been imported from the domain. The domain is never written to once a
  *     root exists, and it is never deleted, so deleting `roster.json` puts a workspace back on it.
  *
- * @param {{domainTable?: object, binder?: object, renameFn?: Function, now?: () => string}} options -
+ * @param {{domainTable?: object, binder?: object, renameFn?: Function, now?: () => string,
+ *   trashLimit?: number, home?: string}} options -
  *   `domainTable` is the storage domain's roster table (import source and fallback), `binder` answers
- *   which root a Lead is bound to, and `renameFn` is the atomic-replacement seam.
+ *   which root a Lead is bound to, `renameFn` is the atomic-replacement seam, `trashLimit` is the
+ *   effective retention cap the tombstone window is derived from, and `home` is the account directory the
+ *   artifact chain's frozen leg resolves under.
  * @returns {{table: object, bind: Function, ready: Function, readyFor: Function, report: Function}}
  */
-export function createRosterSource({ domainTable, binder, renameFn = rename, now = () => new Date().toISOString() } = {}) {
+export function createRosterSource({
+  domainTable,
+  binder,
+  renameFn = rename,
+  now = () => new Date().toISOString(),
+  trashLimit = DEFAULT_TRASH_LIMIT,
+  home = homedir(),
+} = {}) {
   /** One state per root this process has touched. */
   const states = new Map()
 
@@ -748,6 +837,7 @@ export function createRosterSource({ domainTable, binder, renameFn = rename, now
         root,
         file: join(root, ROSTER_FILE_NAME),
         marker: join(root, PROVENANCE_FILE_NAME),
+        archive: join(root, ARCHIVE_FILE_NAME),
         content: emptyRosterFile(),
         loaded: false,
         loading: undefined,
@@ -856,6 +946,13 @@ export function createRosterSource({ domainTable, binder, renameFn = rename, now
       }
       state.importedAt = now()
       try {
+        // The import is a write, so it is bounded like any other: the backlog that accumulated before this
+        // release is flushed the first time a Lead's tools load, not whenever somebody happens to write
+        // next. The provenance still records what came across, not what the window kept.
+        state.content = {
+          ...state.content,
+          rosters: { ...state.content.rosters, [leadSessionId]: await bound(state, leadSessionId, undefined, record) },
+        }
         await persist(state, state.content)
         await writeMarker(state, leadSessionId, record)
       } catch (error) {
@@ -870,11 +967,68 @@ export function createRosterSource({ domainTable, binder, renameFn = rename, now
     await importLead(state, leadSessionId)
   }
 
-  /** One write, on this root's chain: re-read, change, replace. */
+  /**
+   * Bound one Lead's tombstones: keep the newest `trashLimit`, append the rest to the archive.
+   *
+   * This is the invariant, and it is enforced on the file rather than on one operation — any write of any
+   * kind bounds the record, so the tombstones that accumulated before this release are flushed by the next
+   * write instead of needing a one-off migration.
+   *
+   * A tombstone may leave the roster only when removing it cannot lose anything a reader could still act
+   * on, and each condition is a fact rather than an intention:
+   *
+   *   - it is past the newest `trashLimit` tombstones, which is where the retention cap has already been
+   *     removing artifacts — the window is derived from that cap so the two cannot drift apart;
+   *   - it names a trash destination (a record that moved nothing, or that the workspace archive hid,
+   *     keeps its state and stays: its artifact is somewhere a restore could still reach);
+   *   - its move is not `pending` (a move in flight may or may not have landed);
+   *   - and **its artifact is on no leg of the chain `restore_member` searches**. The window decides when
+   *     to look; the filesystem decides. A record whose bytes are still there stays, whatever its age.
+   *
+   * What is archived keeps its id: `retiredChildIds` is every retired child Session id this Lead has ever
+   * had, archived ones included, because the host hooks strip the shipped panels by id and a tombstone that
+   * left the roster must not let its member reappear there. The list is rewritten on every write so a
+   * restored member leaves it — a live member the panel stripped would be worse than a stale record.
+   */
+  const bound = async (state, leadSessionId, previous, produced) => {
+    const ids = new Set(previous?.retiredChildIds ?? [])
+    for (const member of produced.members) {
+      if (typeof member?.childId !== 'string' || member.childId === '') continue
+      if (member.phase === PHASE.retired) ids.add(member.childId)
+      else ids.delete(member.childId)
+    }
+    const tombstones = produced.members.filter((member) => member?.phase === PHASE.retired)
+    const ordered = [...tombstones].sort((left, right) => retireStamp(right) - retireStamp(left)
+      || (targetOf(left) < targetOf(right) ? -1 : 1))
+    const archived = []
+    for (const member of ordered.slice(trashLimit)) {
+      if (recordedTrashDir(member) === undefined) continue
+      if (member.trashState === TRASH_STATE.pending) continue
+      if (await locateTrashedArtifact({ record: member, leadSessionId, dataDir: state.root, home }) !== undefined) continue
+      archived.push(member)
+    }
+    if (archived.length === 0) return { ...produced, retiredChildIds: [...ids].sort() }
+    // The root may not exist yet — an import into a fresh workspace is the first write there — and an
+    // append does not create its own directory the way the atomic replacement does.
+    await mkdir(state.root, { recursive: true })
+    // Appended before the roster is replaced: a crash between the two leaves a duplicate line in an
+    // append-only history, which a reader can ignore, where the other order would lose the record.
+    await appendFile(state.archive, archived
+      .map((member) => `${JSON.stringify({ archivedAt: now(), reason: ARCHIVE_REASON, leadSessionId, member })}\n`)
+      .join(''), 'utf8')
+    const gone = new Set(archived.map((member) => member.memberId))
+    return {
+      ...produced,
+      members: produced.members.filter((member) => !gone.has(member?.memberId)),
+      retiredChildIds: [...ids].sort(),
+    }
+  }
+
+  /** One write, on this root's chain: re-read, change, bound, replace. */
   const write = (state, leadSessionId, produce) => enqueue(state, async () => {
     const fresh = await freshest(state)
     const current = fresh.rosters[leadSessionId]
-    const stored = produce(current)
+    const stored = await bound(state, leadSessionId, current, produce(current))
     const next = await persist(state, { ...fresh, rosters: { ...fresh.rosters, [leadSessionId]: stored } })
     return next.rosters[leadSessionId]
   })
@@ -984,6 +1138,24 @@ export function createRosterSource({ domainTable, binder, renameFn = rename, now
 /** Read one Lead's roster, or an empty roster when none exists yet. */
 export function readRoster(table, leadSessionId) {
   return table.get(leadSessionId) ?? { leadSessionId, members: [] }
+}
+
+/**
+ * How many of one Lead's tombstones are in the archive rather than in this record.
+ *
+ * `retiredChildIds` is every retired id this Lead has ever had, so the ones a remaining tombstone still
+ * holds are exactly the ones that are not archived. A record written before the field exists keeps no
+ * archive and answers 0, which is also true of the storage-domain mode: nothing is bounded without a root
+ * to archive beside.
+ * @param {object} roster - one Lead's record.
+ * @returns {number} the archived tombstone count.
+ */
+export function archivedCount(roster) {
+  if (!Array.isArray(roster?.retiredChildIds)) return 0
+  const here = new Set((roster.members ?? [])
+    .filter((member) => member?.phase === PHASE.retired)
+    .map((member) => member.childId))
+  return roster.retiredChildIds.filter((id) => !here.has(id)).length
 }
 
 /** Stamp a roster as the record for one Lead, validating what is about to be stored. */
