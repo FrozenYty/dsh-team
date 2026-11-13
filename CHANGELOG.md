@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.39.1] - 2026-11-14
+
+- A decision text that overstated its mechanism is corrected, and the check names what a changed number means.
+
 ## [0.39.0] - 2026-11-14
 
 - A member's spend is answered from three sources, and captured one byte before it becomes unrecoverable.

@@ -40,11 +40,16 @@ itself.
    tombstone. This is the only moment the session is still held (see Context), which is why the capture
    happens there and nowhere else.
 
-**The capture is worth a fallback, and nothing else is.** The projection cache rejects a row whose
-`stateVersion` no longer matches the live unit, so a token-meter bump silently blanks every cold read. At
-**retirement** — one member, once, and the data unrecoverable a moment later — folding the durable log through
-`readSession` is affordable. **Never on a row**: an exact read replays the whole log, and the query service's
-own README says a large history pays full inspection per call.
+**The capture is worth a best-effort fallback, and nothing else is.** The projection cache rejects a row
+whose `stateVersion` no longer matches the live unit, so a token-meter bump silently blanks every cold read.
+At **retirement** — one member, once, and the data unrecoverable a moment later — folding the durable log
+through `readSession` is affordable, and it is **best effort rather than sufficient**: `readSession` hands
+back a header with its events, not a Session, while the registry's `snapshot` folds a *mounted* session, so
+the fold can legitimately produce **nothing**. When it does, the tombstone **omits** the number instead of
+storing a wrong one — **an omitted field there is this decision working, not a gap.** The field's rule is
+ADR 0037's, unchanged: nothing measured is not nothing spent, and a value that cannot be computed must not be
+invented. **Never on a row**: an exact read replays the whole log, and the query service's own README says a
+large history pays full inspection per call.
 
 **The field starts existing at retirement, not before.** A tombstone written before this version carries no
 number, and none can be recovered: its artifact is in the trash, its cache row cannot be matched, and
