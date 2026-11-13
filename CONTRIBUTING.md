@@ -91,6 +91,13 @@ failing check has reached the remote as a red commit that had to be amended away
 it (`&&`, or an explicit test of `$LASTEXITCODE`). A contributor who thinks of the check as a step *inside*
 the publish will keep publishing red.
 
+**The guard only works inside one process**, because an exit code does not travel between shell calls: a
+step in the *next* call cannot be gated on this one's result, so the gate runs in the same call as the step
+it guards, or it is re-run in the new one. A guard that reads a variable this process never set is the
+failure to watch for, and it has two shapes — read as false it **blocks silently**, which is the safe
+direction and what happened the first time this rule was applied; written as a truthiness test it can
+**pass vacuously**, which is the dangerous one, because the step runs and nothing checked it.
+
 ## 5. Files
 
 - **Filenames are English**, lowercase, hyphen-separated.
