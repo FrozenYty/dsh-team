@@ -297,7 +297,9 @@ for (const document of documents) {
 // Which document a section reference points at is decided in this order, and the order is the rule:
 //   1. the document the same citation names. "`docs/architecture-en.md` §4.5" and "§4.5 of
 //      `docs/architecture-en.md`" both say it, and so does a continuation on the same line — "§4.5 and
-//      §4.5.2", "§4.2/§4.3/§4.4".
+//      §4.5.2", "§4.2/§4.3/§4.4". A markdown link counts too, which is the form the README pair uses:
+//      "[docs/architecture-en.md](docs/architecture-en.md) §5" names its document as plainly as the
+//      backticked form does, and the document-reference pass above already reads a link.
 //   2. for a bare §, the document it appears in, when that document has the heading. A document citing its
 //      own section is the common case and the strongest reading available; it is not a guess.
 //   3. otherwise the one English document at the top level of docs/ that has the heading, when exactly one
@@ -344,6 +346,11 @@ const sectionThenQualified = new RegExp(`§\\s*(${SECTION})\\s*(?:of|in)\\s+${DO
 // It counts only when docs/<stem>-en.md exists, so ordinary prose ("the external review's §3", "see §4")
 // stays a bare reference instead of being read as a document nobody named.
 const shortThenSection = new RegExp(`(?<![\\w/-])([a-z][a-z0-9-]*)\\s+§\\s*(${SECTION})`, 'g')
+// The markdown-link form, which is how the README pair names a document before a section: the target is read
+// from the link destination, the authoritative half of the pair. Without it this citation is reported
+// ambiguous — two documents have a §5 — and the only repair would be contorting correct prose to suit the
+// checker, which is the opposite of what this section is for.
+const linkThenSection = new RegExp(`\\[[^\\]]*\\]\\(([^)\\s]+\\.md)\\)\\s*[,;:]?\\s*§\\s*(${SECTION})`, 'g')
 const anySection = new RegExp(`§\\s*(${SECTION})`, 'g')
 const CONTINUES = /^[\s,;、/]*(?:and|or|与|和|及|或)?[\s,;、/]*$/
 const resolveTarget = (token) => {
@@ -373,6 +380,9 @@ for (const file of referenceSources) {
       const stem = match[1]
       if (!existsSync(join(root, 'docs', `${stem}-en.md`))) continue
       qualified.push({ start: match.index, end: match.index + match[0].length, section: match[2], target: `docs/${stem}-en.md` })
+    }
+    for (const match of line.matchAll(linkThenSection)) {
+      qualified.push({ start: match.index, end: match.index + match[0].length, section: match[2], target: resolveTarget(match[1]) })
     }
     for (const mark of qualified) checkSection(file, mark.target, mark.section)
     for (const match of line.matchAll(anySection)) {
