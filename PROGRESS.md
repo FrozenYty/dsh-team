@@ -2970,3 +2970,39 @@
   a foreign roster losing *its own* slug are exactly the two bugs this design exists to prevent.
 - **Version.** `0.34.0`: one stored field changes shape, one legacy field becomes read-only, and one test
   stops asserting what the clock decided.
+
+## 2026-11-13 — the origin is portable by decision, and a tie in a millisecond makes two artifacts equally old (v0.34.1)
+
+- **The tie-break rule went where the person who needs it actually stands.** It now lives in
+  `CONTRIBUTING.md` §4, *what CI checks*, with one cross-reference line in §7's definition-of-done
+  checklist — because the reader is **in the middle of writing an ordering assertion** and §4 is what they
+  read to learn what the suite is and how it runs, whereas an ADR's Consequences section is read by someone
+  studying a decision, which is precisely not that moment. **ADR 0034 records only that the rule came from
+  this change**, so the two documents cannot drift into two versions of one rule — a placement decision
+  worth keeping, because it is the difference between a rule that gets read and a rule that gets archived.
+- **The rule as written**: two artifacts stamped in the same millisecond are equally old, so the retention
+  cap deleting either is not wrong — **what is wrong is a test that asserts which**; assert the set, the
+  count or the state, never the identity of one record among ties. It carries its evidence: the cap orders
+  by millisecond stamp, a CI runner produces two retirements in one millisecond, and the test was green
+  locally and red in CI.
+- **ADR 0034 supersedes nothing and says why**: it is the sequel to ADR 0028 for the other half of the same
+  record — 0028 made the *destination* portable, this makes the *origin* portable — and **the seed is what
+  made it necessary**. It records what is written, the full read order with the note that only the relative
+  leg is an answer while the other two are fallbacks, the sibling-anchored sessions root, and the load-time
+  refusals by name with the same reasoning as the succession edge.
+- **The measured saving carries its own correction, deliberately.** 39.0 bytes per record, against an 8.5 KB
+  estimate that implied about 90 and was wrong by a factor of two and a half. The ADR says portability is
+  the reason and the bytes are a footnote **so that nobody reverts the field the day a longer path costs
+  more** — a number recorded with its own refutation is harder to misuse than a number recorded alone.
+- **One disclosure, recorded rather than smoothed over.** The `CONTRIBUTING.md` change was first committed
+  inside the lifecycle commit — `git add -A` staged it — whose message named only the lifecycle pair; it was
+  split with `git reset --soft` and re-pushed with `--force-with-lease`. That is **the only force-push of
+  the day**, on its own branch, pushed once, with `main` untouched: the substance of the rule held, and the
+  member said so instead of letting the history look clean. A rule kept only by nobody breaking it is weaker
+  than a rule whose one violation was disclosed and judged.
+- **Left undone, named.** The single-member hole (an artifact moved, its session no longer reported, and
+  nothing but the absolute this release stops writing); `trashRelPath`'s separators; and **the rule is
+  documentation rather than a check** — nothing fails if a future test asserts an identity among equals,
+  because a lint would have to know which assertions are about ordering. That last one is an honest limit
+  rather than an oversight: the rule has three pieces of evidence and no enforcement.
+- **Version.** `0.34.1`: one ADR, three document pairs, and a rule in the place its reader stands.

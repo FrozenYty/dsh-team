@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.34.1] - 2026-11-13
+
+- The origin is portable by decision, and a tie in a millisecond makes two artifacts equally old.
+
 ## [0.34.0] - 2026-11-13
 
 - An artifact's origin is stored relative to the sessions root, and the flaky test that hid a real tie.

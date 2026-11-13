@@ -70,6 +70,7 @@ A design subject is its own document rather than a section of `architecture-`: a
 | Why is the plugin's state files only, and why does the storage domain no longer answer a read? | `docs/adr/0031-files-only-state.md` | English |
 | Why does a replacement write both records, and why does a link name a member id rather than a name? | `docs/adr/0032-bilateral-succession.md` | English |
 | Why is the host storage domain gone, and why does a path under a file count as no file? | `docs/adr/0033-domain-removed.md` | English |
+| Why is an artifact's origin stored relative to the sessions root, and what does a carried roster resolve against? | `docs/adr/0034-relative-artifact-origin.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap-en.md` | pair |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
