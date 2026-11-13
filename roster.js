@@ -675,7 +675,13 @@ async function readJsonFile(file) {
   try {
     text = await readFile(file, 'utf8')
   } catch (error) {
-    if (error?.code === 'ENOENT') return { exists: false }
+    // `ENOENT` and `ENOTDIR` are both "there is no such file": the first is a missing component, the
+    // second a component that is not a directory — a data root whose parent is a file. Linux reports the
+    // two cases differently from Windows for the same input (a path under a file is ENOTDIR there and
+    // ENOENT here), and the caller must not get two different answers about whether a roster file exists:
+    // it decides from this whether a new root is seeded, so a platform difference here would mean a
+    // different roster. A path that is *there* and unreadable is still `exists: true`.
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false }
     return { exists: true, problem: `unreadable (${describeError(error)})` }
   }
   let value
