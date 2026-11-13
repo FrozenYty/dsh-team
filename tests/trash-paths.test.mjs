@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import { restoreMember } from '../actions.js'
 import { PHASE, TRASH_STATE, planMember, readRoster, updateRoster } from '../roster.js'
 import {
+  artifactIsMissing,
   frozenDataDir,
   locateTrashedArtifact,
   recordedTrashDir,
@@ -38,6 +39,70 @@ test('the trash directory name is read from either stored shape', () => {
   // A tombstone from the archive branch names no destination at all.
   assert.equal(recordedTrashDir({ archived: true }), undefined)
   assert.equal(recordedTrashDir({}), undefined)
+})
+
+test('a recorded path with no last segment names no destination', async () => {
+  // `basename('/')` is the empty string, not undefined, so a corrupt record used to answer '' and be
+  // treated as a real directory name: restore resolved the root itself — the Lead's trash directory, or
+  // the filesystem root — and failed to move it.
+  assert.equal(recordedTrashDir({ trashPath: '/' }), undefined)
+  assert.equal(recordedTrashDir({ trashRelPath: join('/') }), undefined)
+  assert.equal(recordedTrashDir({ trashDir: '' }), undefined)
+  // A path whose last segment is real still names it.
+  assert.equal(recordedTrashDir({ trashPath: join('/', 'trash') }), 'trash')
+
+  // End to end: a record whose only recorded path is a bare root is not sent into the trash branch at
+  // all. It was retired through the archive fallback, so reactivating it is the whole recovery; with the
+  // empty segment it tried to move the filesystem root and answered `restore-failed: EBUSY`.
+  const root = await scratch()
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({
+    leadSessionId: 'lead-1',
+    members: [
+      tombstone({
+        trashState: TRASH_STATE.done,
+        trashPath: join('/'),
+        originalPath: join(root, 'sessions', 'member-1'),
+      }),
+    ],
+  }))
+  const restored = await restoreMember({
+    ctx: { get: () => undefined },
+    table,
+    leadSessionId: 'lead-1',
+    target: 'reviewer',
+    hooks: hooks(),
+    dataDir: root,
+  })
+  assert.equal(restored.restored, true)
+  assert.equal(restored.reason, 'not-archived', 'a record naming no destination never enters the trash branch')
+})
+
+test('a tombstone that claims a landed move with no artifact behind it is the one a migration flips', async () => {
+  const root = await scratch()
+  const home = join(root, 'home')
+  const present = join(root, 'trash', 'lead-1', 'member-1-1')
+  await mkdir(present, { recursive: true })
+  const ask = (record) => artifactIsMissing({ record, leadSessionId: 'lead-1', dataDir: root, home })
+  const destination = join('trash', 'lead-1', 'member-1-1')
+
+  assert.equal(
+    await ask({ trashState: TRASH_STATE.done, trashDir: 'member-1-1', trashRelPath: destination }),
+    false,
+    'the bytes are where the record says they are',
+  )
+  assert.equal(
+    await ask({ trashState: TRASH_STATE.done, trashDir: 'member-2-2', trashRelPath: join('trash', 'lead-1', 'member-2-2') }),
+    true,
+    'a landed move with nothing on any leg of the chain is what the cap left behind',
+  )
+  assert.equal(
+    await ask({ trashState: TRASH_STATE.pending, trashDir: 'member-2-2', trashRelPath: join('trash', 'lead-1', 'member-2-2') }),
+    false,
+    'a move in flight may not have landed, so it is not called lost',
+  )
+  assert.equal(await ask({ trashState: TRASH_STATE.pruned, trashDir: 'member-1-1' }), false, 'a pruned record is not asked again')
+  assert.equal(await ask({ trashState: TRASH_STATE.none }), false, 'a record that names no destination moved nothing')
 })
 
 test('the chain is the root in effect, then the recorded absolute path, then the frozen default', () => {
