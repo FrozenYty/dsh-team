@@ -83,18 +83,20 @@ test('the real domain dump seeds a new root through the escape hatch, and the ma
   await source.readyFor(REAL_LEAD)
 
   const imported = readRoster(source.table, REAL_LEAD)
-  // The import is a write, so it is bounded like any other: the window keeps the newest 20 tombstones and
-  // the 5 live members, and the one tombstone that names no trash destination cannot be archived at all.
-  assert.equal(imported.members.length, 26, 'the import is bounded, not the whole backlog')
-  assert.equal(imported.members.filter((entry) => entry.phase === PHASE.retired).length, 21)
+  // The import is a write, so it is bounded like any other — by the cap in force, which is generous by
+  // default since ADR 0039, so this fixture fits inside it and nothing is pruned. A fixture that tests the
+  // pruning itself passes an explicit trashLimit; this one tests that the import is a normal write.
+  assert.equal(imported.members.length, 100, 'the import is bounded by the cap, not the whole backlog')
+  assert.equal(imported.members.filter((entry) => entry.phase === PHASE.retired).length, 95, 'and with the generous default nothing is pruned, so every tombstone of this fixture survives')
   assert.equal(imported.tasks.length, 3)
   assert.equal(imported.retiredChildIds.length, 95, 'every retired id is kept, archived or not')
 
-  const archived = (await readFile(join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME), 'utf8')).trim().split('\n')
-  assert.equal(archived.length, 74, 'the 74 tombstones past the window are in the archive')
-  assert.equal(JSON.parse(archived[0]).reason, ARCHIVE_REASON)
-  assert.equal(JSON.parse(archived[0]).leadSessionId, REAL_LEAD)
-  assert.equal(JSON.parse(archived[0]).member.phase, PHASE.retired, 'each line is the full tombstone')
+  // ADR 0039 raised the default cap to 200, and this fixture's tombstones fit inside it, so the import
+  // pruned nothing and wrote no archive line at all. The bound itself is pinned where it belongs: a fixture
+  // that exercises pruning passes an explicit trashLimit (tests/retention.test.mjs), and the archive's own
+  // shape is covered by tests/archive-read.test.mjs.
+  const archived = (await readFile(join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME), 'utf8').catch(() => '')).trim().split('\n').filter((line) => line.length > 0)
+  assert.equal(archived.length, 0, 'nothing past the window at this cap, so nothing archived')
 
   const marker = JSON.parse(await readFile(join(workspace, TEAM_DIR, PROVENANCE_FILE_NAME), 'utf8'))
   assert.equal(marker.source, PROVENANCE_SOURCE.seed, 'the marker names the seed it came from')
@@ -109,7 +111,7 @@ test('the real domain dump seeds a new root through the escape hatch, and the ma
   const second = createRosterSource({ binder: workspaceBinder(home), home })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
-  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'read from the file, with no seed and no domain')
+  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 100, 'read from the file, with no seed and no domain')
 })
 
 test('with the roster file deleted the seed refills a new root, and the plugin keeps working', async () => {
@@ -128,7 +130,7 @@ test('with the roster file deleted the seed refills a new root, and the plugin k
   const second = createRosterSource({ binder: workspaceBinder(home), home, seed })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
-  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'seeded again, bounded again')
+  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 100, 'seeded again, bounded again by the cap in force')
 
   await updateRoster(second.table, REAL_LEAD, (roster) => ({ ...roster, handoffTemplate: '{successor} {predecessor} {label} {assignment} {task_board}' }))
   assert.equal(readRoster(second.table, REAL_LEAD).handoffTemplate, '{successor} {predecessor} {label} {assignment} {task_board}')

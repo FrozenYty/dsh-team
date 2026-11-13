@@ -94,17 +94,23 @@ test('a tombstone written before the cap existed is still eligible', async () =>
 })
 
 test('a profile that configures nothing keeps the documented default cap, and a smaller trash is untouched', async () => {
+  // Asserted where the default is *used*, not where it is declared: a constant nobody reads proves nothing.
+  // ADR 0039 raised it to 200 because the failure the cap causes is irreversible and the measured cost is a
+  // rounding error, so the generous side is the correct side.
   assert.equal(resolveTrashLimit(undefined), DEFAULT_TRASH_LIMIT)
   assert.equal(resolveTrashLimit({}), DEFAULT_TRASH_LIMIT)
-  assert.equal(DEFAULT_TRASH_LIMIT, 20, 'the documented default is 20; the config, not the constant, is the authority')
+  assert.equal(DEFAULT_TRASH_LIMIT, 200, 'the documented default; the config, not the constant, is the authority')
+  // Two hundred entries would be a slow fixture, so the cap behaviour is exercised at a smaller *explicit*
+  // cap: this test is about the cap' semantics, and the default is pinned by the two assertions above.
   const root = await scratch()
+  const limit = 25
   const entries = []
-  for (let stamp = 1; stamp <= DEFAULT_TRASH_LIMIT; stamp += 1) {
+  for (let stamp = 1; stamp <= limit; stamp += 1) {
     entries.push(await seedEntry(root, { memberId: `member-${stamp}`, stamp }))
   }
-  const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), members: memberRows(entries) })
+  const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), limit, members: memberRows(entries) })
   assert.deepEqual(outcome, { pruned: 0, removed: [] })
-  assert.equal((await namesInTrash(root)).length, DEFAULT_TRASH_LIMIT, 'a trash at the cap keeps every artifact')
+  assert.equal((await namesInTrash(root)).length, limit, 'a trash at the cap keeps every artifact')
 })
 
 test('the cap comes from the config, and a value outside the range is refused rather than clamped', () => {

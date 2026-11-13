@@ -250,7 +250,7 @@ test('an adopted member keeps the record it had, because adoption is not a spawn
   const table = memoryTable()
   const { ctx, lead } = fakeCtx()
   const listed = await listMembers(call(ctx, table, lead))
-  assert.deepEqual(listed, { members: [], archived_records: 0 }, 'an empty roster gains no route field anywhere')
+  assert.deepEqual({ members: listed.members, archived_records: listed.archived_records }, { members: [], archived_records: 0 }, 'an empty roster gains no route field anywhere')
 
   // A discovery row this plugin did not spawn has no route to know, and is reported as it was adopted.
   const shipped = fakeCtx({

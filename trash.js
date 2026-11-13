@@ -13,7 +13,7 @@
  * No `@deepseek-ai/*` import: a profile-linked bundle cannot resolve those packages (ADR 0002).
  */
 
-import { cp, lstat, mkdir, readdir, rename, rm, rmdir } from 'node:fs/promises'
+import { cp, lstat, mkdir, readdir, rename, rm, rmdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 
@@ -35,13 +35,18 @@ const LEGACY_DATA_DIR_ENV = 'DSH_TEAM_ROSTER_DATA_DIR'
 /**
  * How many retired sessions one Lead's trash keeps when the plugin config sets no cap.
  *
+ * **The reason, not the number** (ADR 0039): the measurement on a real profile is twenty trash directories
+ * for 4.2 MB — 210 KB on average, 467 KB for the largest — so two hundred is about 41 MB against 616 GB free,
+ * and what the cap destroys is **irreversible**: a pruned artifact cannot be restored, because the archive
+ * keeps only the record and never the bytes. **A default belongs on the generous side when the failure is
+ * irreversible and the cost is a rounding error.**
+ *
  * This is a documented default, not the authority: the effective cap is the `trashLimit` config field
  * resolved from the bundle's patch row by `resolveTrashLimit` below (ADR 0012, superseding point 1 of
- * ADR 0011). The unit is one Lead's trash directory and the content is whole Session artifacts, so 20
- * keeps a long recent history recoverable while bounding the growth; every retirement past the cap
- * removes exactly one older artifact, oldest first.
+ * ADR 0011). Raising it restores nothing already pruned — the 75 retired records on this machine that have
+ * no bytes left stay that way.
  */
-export const DEFAULT_TRASH_LIMIT = 20
+export const DEFAULT_TRASH_LIMIT = 200
 
 /** The plugin config field that carries the cap. */
 export const TRASH_LIMIT_FIELD = 'trashLimit'
@@ -703,6 +708,68 @@ export function parseTrashDirName(name) {
  *   - only a `trashState: 'done'` record may be removed. A `pending` move may or may not have landed,
  *     so its entry is counted against the cap but never deleted.
  *
+/** One entry's bytes, recursively: a trash entry is a whole Session artifact, not a single file. */
+async function artifactBytes(path) {
+  let info
+  try {
+    info = await lstat(path)
+  } catch (error) {
+    return 0
+  }
+  if (!info.isDirectory()) return info.size
+  let total = 0
+  let names
+  try {
+    names = await readdir(path)
+  } catch (error) {
+    return 0
+  }
+  for (const name of names) total += await artifactBytes(join(path, name))
+  return total
+}
+
+/**
+ * How much one Lead's trash holds — the count and the bytes — so the cap can be **chosen** rather than
+ * inherited, and "why did my artifact disappear" has an answer (ADR 0039).
+ *
+ * **The walk is bounded by the cap itself**: at most `limit` entries are inspected, which is how many the
+ * trash is allowed to hold, so this cannot grow without limit and is affordable on a read. A trash that does
+ * not exist yet is a measurement of zero rather than an absence: unlike a spend, a zero here is a fact.
+ * @param {object} request
+ * @param {string} request.trashRoot - this Lead's trash directory.
+ * @param {number} [request.limit] - the effective cap, which bounds the walk.
+ * @returns {Promise<{count: number, bytes: number}>} what the trash holds.
+ */
+export async function measureLeadTrash({ trashRoot, limit = DEFAULT_TRASH_LIMIT }) {
+  let names
+  try {
+    names = await readdir(trashRoot)
+  } catch (error) {
+    // No trash yet is a zero, and so is a trash this process may not list: a read must not fail over it.
+    return { count: 0, bytes: 0 }
+  }
+  // Only names this plugin wrote are its trash: anything else in the directory is not ours to count.
+  const entries = names
+    .map((name) => ({ name, parsed: parseTrashDirName(name) }))
+    .filter((entry) => entry.parsed !== undefined)
+    .sort((left, right) => right.parsed.stamp - left.parsed.stamp)
+    .slice(0, limit)
+  let bytes = 0
+  for (const entry of entries) bytes += await artifactBytes(join(trashRoot, entry.name))
+  return { count: entries.length, bytes }
+}
+
+/**
+ * What the cap means, said where the decision is made. It is the undo horizon — how far back a restore
+ * reaches — and past it the artifact is gone for good (ADR 0039).
+ * @param {number} limit - the effective cap.
+ * @returns {string} one sentence a reader can act on.
+ */
+export function trashHorizon(limit) {
+  return `The trash keeps at most ${limit} retired ${limit === 1 ? 'artifact' : 'artifacts'} for this Lead, oldest pruned first: that is how far back a restore can reach, and past it an artifact is gone for good. Raising the limit later restores nothing already pruned (ADR 0039).`
+}
+
+/**
  * The caller has already confirmed the move and holds the roster, so nothing here writes a record: it
  * answers which entries it removed and the caller flips those tombstones to `trashState: 'pruned'`.
  *
