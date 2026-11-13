@@ -60,7 +60,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么插件要转发 Lead 的模型路由，为什么从不转发它的 effort，以及为什么掉队的成员会被标出来？ | `docs/adr/0024-forward-the-lead-route.md` | 英文 |
 | 为什么宿主钩子要在服务存在时才安装，以及为什么 `list_members` 会报告装没装上？ | `docs/adr/0025-host-hook-install.md` | 英文 |
 | 为什么生存期在调用上声明、为什么一条未完成任务能否决清扫，以及为什么退役 standing 成员必须凭本人的原话？ | `docs/adr/0026-declared-member-lifetime.md` | 英文 |
-| 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap.md` | 英文 |
+| 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap-zh.md` | 双语 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
 

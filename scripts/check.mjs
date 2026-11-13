@@ -187,11 +187,9 @@ if (patchText !== undefined) {
  * somebody meant it, and dropping a suffix would be a way to pass the check without deciding anything.
  */
 const SINGLE_LANGUAGE_DOCS = new Map([
-  [
-    'upstream-lifecycle-gap.md',
-    'the issue-ready statement of the gap dsh-team fills, addressed to the English-language upstream '
-    + 'tracker; a Chinese copy would be a second document to keep in step, not a translation of this one',
-  ],
+  // Empty on purpose: the last entry, `upstream-lifecycle-gap.md`, is a real pair now. The mechanism stays
+  // because CONTRIBUTING.md still documents `docs/name.md` as a legal shape, and a declared exception that
+  // carries its reason is what makes the next one visible in review.
 ])
 
 // 5. Bilingual pairs — a rule over docs/, not a list of pairs.
