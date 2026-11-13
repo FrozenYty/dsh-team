@@ -27,9 +27,13 @@ not a facility whose format the plugin does not define.
 **One `roster.json` per workspace root, at `<workspace>/.agents/team/roster.json`, read and written by the
 plugin with `node:fs`.** The file is the store of record; every read and every write goes there.
 
-1. **The file is created by importing the storage domain, once.** The first time a root is served, its
-   roster is imported from the domain and a marker beside the file records that this happened, so the
-   import is not repeated and a later empty file is not re-populated from a stale domain.
+1. **The file is created by importing the storage domain, once per Lead record.** A load imports when the
+   content it serves holds no record for that Lead, and for no other reason. A marker beside the file
+   records that the import happened — when, and how many members and tasks came across — so a reader can
+   tell an imported roster from one this plugin built.
+   **The marker records the import; it does not guard it.** The guard is the file's own content: an
+   existing record is the truth, and a file that is absent or holds no record for that Lead is imported
+   again on the next load. That is deliberate — see the rollback consequence below.
 2. **The domain is demoted to import source and rollback path.** It is never written once the file
    exists, and it is never deleted. Deleting `roster.json` puts that workspace back on the domain, which
    is the documented way to roll back.
@@ -83,15 +87,20 @@ Session that has no workspace to own bytes in.
   resolved from the Lead's working directory at call time. They answer different questions — where durable
   state lives versus which files the Lead is looking at — and merging them would make a definition
   disappear on a `working_directory` call.
-- **An import is a one-way door for that root.** Once the marker exists, an empty `roster.json` is empty,
-  not a cue to re-import. A person who wants the domain's copy back deletes the file *and* its marker.
+- **The marker is a record for a reader, not a lock.** Deleting `roster.json` is the whole rollback: the
+  next load finds no record for that Lead and imports the domain's copy again, and that is the behaviour
+  the rollback depends on. If the marker gated the import, deleting the file would leave the workspace
+  serving an empty roster while the domain still held the records — a documented rollback that rolled
+  nothing back. An existing record in the file is the truth; an empty file stays empty only until
+  something imports into it, and the marker never decides which.
 
 ## Migration
 
 Greenfield: nothing is moved on upgrade. The first read of a root imports the domain's record and writes
-the marker; the domain is left exactly as it was. Rolling back is deleting `roster.json` and the marker,
-after which the domain serves that workspace again. A session that never resolves a root never migrates,
-because it never left.
+both the file and the marker; the domain is left exactly as it was. Rolling back is deleting
+`roster.json` — the next load finds no record for that Lead and imports the domain's copy again. The
+marker needs no handling, because it records the import rather than switching it, and a session that
+never resolves a root never migrates, because it never left.
 
 ## Revisit when
 
