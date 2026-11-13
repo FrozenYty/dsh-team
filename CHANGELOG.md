@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.33.0] - 2026-11-13
+
+- The host storage domain is out of the bundle, and a missing file is a missing file on every platform.
+
 ## [0.32.0] - 2026-11-13
 
 - A succession is recorded in both directions, in the write that makes the tombstone.

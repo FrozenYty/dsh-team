@@ -2850,3 +2850,47 @@
   rather than assumed.
 - **Version.** `0.32.0`: two fields on the member row, one optional parameter on `retire_member`, and a
   chain that now has two ends.
+
+## 2026-11-13 — the host storage domain is out of the bundle, and a missing file is a missing file on every platform (v0.33.0)
+
+- **The debt ADR 0031 named with a deadline is paid, and the reason it could be paid now is the same
+  argument the ADR used to justify waiting.** The legacy import leg existed so a profile whose records lived
+  only in a domain file could reach them at first load; every Session having a root (v0.31.0) finished that
+  job for anyone who loaded it, and for a version-skipping upgrade the **seed reads a storage-domain dump**,
+  which is what makes a left-behind domain file a seed rather than orphaned data. `openRosterStore` no
+  longer takes a context, `migrateLegacyRoster` and `LEGACY_DOMAIN_NAME` are gone, `importLead`'s last leg
+  is gone — the source order is **seed → nothing** — the store's fall-through is gone, and
+  `storageDomain` is out of the bundle's `inject`. `ROSTER_SPEC` went with it, because it **was** the
+  domain's `valueSchema`; the loader's validator is exported as `parseRoster` instead.
+- **The strongest acceptance available was that the fakes disappeared.** Seven test files no longer pass a
+  domain table or mount a `storageDomain` service and the suite is green — a fake that can be deleted is a
+  dependency that is gone. One of them changed shape rather than shrinking, and that is the more useful
+  artifact: **a real domain export is now poured into a new root through the seed**, which is the strongest
+  statement of the claim that a domain file is not stranded.
+- **What was deliberately kept is a value, not a capability.** `PROVENANCE_SOURCE.domain = 'team_roster'`
+  names what an earlier version wrote into `provenance.json`, and no code path writes it or branches on it;
+  the key was renamed to `domain` so the last surviving identifier describes the value rather than a
+  service that no longer exists. `scripts/migrate-roster.mjs` is untouched on purpose: it reads the domain
+  file by path, never imported `ROSTER_SPEC`, has already run, and its `--domain` flag is exactly how a
+  person produces the seed this release needs.
+- **CI found a real defect that Windows could not, and it was the worst kind: a silent platform split.**
+  One test failed on Linux only — `a frozen directory that cannot be created is a reported problem` — with
+  `ENOTDIR` where the code expected a write failure. **A path whose ancestor is a file is `ENOTDIR` on
+  Linux and `ENOENT` on Windows**, and `readJsonFile` treated only `ENOENT` as "there is no file", so the
+  same broken data root counted as an **existing** root on one platform and a **new** root on the other —
+  and that boolean is precisely what decides whether a new root is seeded. **Two platforms, two different
+  rosters from the same input, with nothing said.** The repair treats both codes as "there is no such
+  file", which is also the true answer: there is no file there, and a write still fails and reports it.
+- **The reason `scripts/schema-check.mjs` could rot is now stated rather than implied: nothing runs it.**
+  CI runs six `node --check`s, the unit tests and `check.mjs`; that script appears in `check.mjs` only in a
+  sentence. It cannot go into CI as it stands, because it extracts the validator from the installed asar
+  and no runner has one — but the drift that broke it, a fake context disagreeing with what the bundle
+  actually reads, needs no asar to reproduce. **The cheap repair is named for a later release**: export the
+  harness half and drive it from a unit test that fails when the two disagree. Four checks today rotted or
+  nearly rotted green because nothing ran them; this is the one still outstanding.
+- **Verification.** 285 tests pass after the domain's disappearance, four probes were shown to fail by name,
+  and `scripts/schema-check.mjs` reaches its verdict — *"the Host accepts every schema this bundle declares,
+  and every value checked"* — on a tree with no domain table left to fall back to, which is what makes that
+  verdict mean something now.
+- **Version.** `0.33.0`: one service out of `inject`, one module specification deleted, and a platform
+  difference that used to be a silent behaviour difference.
