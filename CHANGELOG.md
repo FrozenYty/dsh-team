@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.28.1] - 2026-11-13
+
+- The definition chain is recorded, and the team file's path is documented as a decision rather than an unfinished move.
+
 ## [0.28.0] - 2026-11-13
 
 - Five role templates ship with the plugin, and a definition is read from a chain of directories.

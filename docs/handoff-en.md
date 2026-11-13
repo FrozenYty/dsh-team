@@ -62,7 +62,9 @@ The member scope moved onto disk in v0.16.0; the team scope wanted the same thin
 setting that shapes a handover. A brief template was the only team setting with no diff, no review,
 and no sharing between two Leads working in the same project, so it is now a file committed with the
 project: `<Lead working directory>/team/team.md`, resolved through the same `workingDirectory`
-service and the same `team/` directory the member definitions use (`docs/architecture-en.md` §6).
+service the member definitions use (`docs/architecture-en.md` §6). It is deliberately **not** part of the
+definition chain: a definition is read from `.agents/team/definitions`, then `team/`, then the shipped
+templates, while the team file has one home and no bundled counterpart (ADR 0021, ADR 0029).
 The file's body is the handoff template, validated by the same `handoffTemplateProblem` rules a
 stored template passes.
 

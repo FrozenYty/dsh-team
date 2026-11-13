@@ -10,7 +10,7 @@
 
 ## 状态
 
-- 当前版本：v0.28.0。
+- 当前版本：v0.28.1。
 - **在真实 profile 上跑过**：退役、恢复、发消息、停止；一次替换，其继任者完成了前任的工作；回收站上限以及越界值在加载时被拒绝；交接书模板；spawn 选项与转发的路由；任务板及其交接；三个宿主侧钩子；以及一次性成员清扫与同意门槛——2026-11-13 验收，逐字段结果记在 `PROGRESS.md` 当天那一条里。`PROGRESS.md` 为每个版本保留一条记录，每条都写明那一版在真机上验证了什么。
 - **只有单元测试覆盖、真机 profile 没跑过**：写入时的各条上限；spawn 尚在进行时发起退役；两个花名册操作重叠；路由的兜底路径；成员定义层与团队文件层；成员作用域的那次读取；生存期清扫与同意门槛。具体有哪些，看 `tests/`。
 - **在这里根本无法证明的部分**：`scripts/check.mjs` 从不加载 Harness，所以本仓库里的任何东西都不能证明插件真的激活了。只有安装能，而安装有真实副作用，因此每次都由所有者决定。
@@ -137,10 +137,10 @@ node scripts/check.mjs
 | `index.js` | Host 插件入口：工具定义、参数校验、Lead 专属权限检查 |
 | `actions.js` | 模型侧工具背后的花名册操作 |
 | `roster.js`、`trash.js` | 持久花名册（相态、代次命名、收养、迁移），以及带恢复与保留上限的会话回收站 |
-| `definitions.js` | `team/` 层：扁平 frontmatter 解析器、成员定义扫描及其上限、团队文件的交接书模板，以及两者解析所用的工作目录 |
+| `definitions.js` | 定义层：扁平 frontmatter 解析器、沿定义查找链的扫描及其上限、团队文件的交接书模板，以及以上解析所用的工作目录 |
 | `host-hooks.js` | 投影过滤（剔除已退役 id，并把本插件的活成员追加进团队面板）、官方花名册读取过滤、名额补偿，以及这三者的延迟安装 |
 | `tests/`、`scripts/check.mjs` | 单元测试，以及 CI 会跑的仓库检查 |
-| `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`.github/` | bundle 本体、CI workflow 与模板 |
+| `package.json`、`cordis.patch.yml`、`locale/`、`icon.svg`、`templates/`、`.github/` | bundle 本体、随包提供的五个角色模板、CI workflow 与模板 |
 | `PLAN.md`、`PROGRESS.md`、`docs/` | 待办任务、只追加的变更日志，以及双语的设计文档与 ADR |
 
 ## 其余内容在哪里

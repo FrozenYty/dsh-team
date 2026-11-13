@@ -424,15 +424,22 @@ while the answer stays as narrow as the roster row that names it.
 A member used to exist only as a tool call: its prompt, label and assignment lived in that call and in the
 Lead's roster record, so a team could not be reviewed, versioned or shared, and the same "reviewer" was
 retyped every session. A definition moves the member out of the call and onto disk — one markdown file per
-member under `team/` in the Lead's working directory, committed with the project — while the roster stays
-runtime state (ADR 0018).
+member, read from the workspace's `.agents/team/definitions/` or its `team/` directory, or from the five
+templates this bundle ships — while the roster stays runtime state (ADR 0018, ADR 0029).
 
-**The path.** `<Lead working directory>/team/*.md`, resolved through the `workingDirectory` service:
-`ctx.get('workingDirectory').ensure(leadAgent, signal)` (§7). That is the same service and method the
-installed spawn seam uses for a relative `request.cwd`, so a definition is read from exactly the directory
-`spawn_options.cwd` resolves against. The service is optional and read with `ctx.get`, like `compaction`; a
-profile that mounts none, or whose `ensure` rejects, is a typed refusal
-(`reason: "working-directory-unavailable"`) rather than a guess at a directory.
+**The path.** A definition is read from a chain of three directories, most specific first:
+`<Lead working directory>/.agents/team/definitions`, then `<Lead working directory>/team`, then the five
+templates in `templates/definitions` inside the bundle. The first declaration of a name wins, a name
+declared twice in **one** directory is still refused naming both files, and a malformed file blocks only
+the name it claims (ADR 0029). Both workspace directories are resolved through the `workingDirectory`
+service: `ctx.get('workingDirectory').ensure(leadAgent, signal)` (§7). That is the same service and method
+the installed spawn seam uses for a relative `request.cwd`, so a definition is read from exactly the
+directory `spawn_options.cwd` resolves against. The service is optional and read with `ctx.get`, like
+`compaction`; a profile that mounts none, or whose `ensure` rejects, is a typed refusal
+(`reason: "working-directory-unavailable"`) rather than a guess at a directory. **The team file is not
+part of that chain:** it stays at `<Lead working directory>/team/team.md` (ADR 0021), because it is not a
+member definition and has no shipped counterpart — `.agents/team/` holds the roster file and the
+definitions the plugin owns, `team/` holds the project's own team file (ADR 0029).
 
 **The file.** `---` on line 1, a flat frontmatter block, `---`, then the markdown body, which is the
 member's prompt. The accepted fields are exactly the inputs `spawn_member` already has that describe
@@ -549,7 +556,7 @@ What the table depends on:
 | notice that a child stopped | `subagent/end` (published when a run settles) and the `idle` edge of `agent/status`; neither is durable, so the one-shot sweep still carries its own evidence (`docs/member-lifecycle-en.md` §2, ADR 0013, ADR 0026) |
 | wait on a member's live status | `ctx.on('agent/status', ({ agent, status }))` from the plugin's own context, filtered by the child ids this roster holds; the dispatch is scope-filtered and an unscoped listener is admitted to it (§5) |
 | durable plugin state | `ctx.storageDomain`, not session events (ADR 0003) |
-| resolve the Lead's working directory, and the `team/` a member definition or the team file is read from | `ctx.get('workingDirectory').ensure(agent, signal)` — the same service and method the spawn seam uses to resolve a relative `cwd`; optional, so a profile without it refuses a definition spawn and cannot see a team file, instead of guessing a directory (§6, `docs/handoff-en.md` §2, ADR 0018, ADR 0021) |
+| resolve the Lead's working directory, the `team/` the team file is read from, and the chain a member definition is read from | `ctx.get('workingDirectory').ensure(agent, signal)` — the same service and method the spawn seam uses to resolve a relative `cwd`; optional, so a profile without it refuses a definition spawn and cannot see a team file, instead of guessing a directory (§6, `docs/handoff-en.md` §2, ADR 0018, ADR 0021, ADR 0029) |
 | hide a Session whose artifact could not be moved | `ctx.workspaceRegistry.archiveSession` / `unarchiveSession` (reversible, deletes nothing; the fallback branch of retirement and restore) |
 | make clients drop a retired member | wrap `sessionController` list/projection/stream exits (ADR 0004) |
 | make the shipped team panel list this plugin's live members | the same exits: append the four-field member row to the outgoing `agentTeam` value (ADR 0023) |
@@ -599,12 +606,14 @@ What the table depends on:
   record and from this plugin's own task rows (`docs/task-board-en.md` §2). A member whose assignment was never recorded, and
   whose board holds no open task, hands over a label and a pointer, not a summary.
 - **A member definition and the team file are files this plugin only reads.** It cannot tell whether they
-  are current, whether a prompt matches the work the Lead has in mind, or whether a `team/` directory is
-  shared by two Leads in one working directory; that is the project's version control, not this plugin's
+  are current, whether a prompt matches the work the Lead has in mind, or whether a `team/` directory or
+  a `.agents/team/definitions/` one is shared by two Leads in one working directory; that is the project's
+  version control, not this plugin's
   job. What it guarantees is narrower and checkable: the definitions a caller can use are exactly the
-  readable `.md` files under `team/` at the moment of the call, the team file is exactly `team.md`, and a
-  file it cannot read is refused by path and line rather than half-applied (§6, `docs/handoff-en.md` §2, ADR 0018,
-  ADR 0021).
+  readable `.md` files in the chain it searched that moment — the workspace's two directories and the
+  shipped templates — the team file is exactly `team/team.md` under `<Lead working directory>/team/`, and
+  a file it cannot read is refused by path and line rather than half-applied (§6, `docs/handoff-en.md` §2,
+  ADR 0018, ADR 0021, ADR 0029).
 - **Compaction is profile-wide.** Enabling the backend changes behaviour for every session in the
   profile. It is a shipped feature turned on, not custom code, but it is not scoped to this plugin's
   members.

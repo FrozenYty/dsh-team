@@ -62,6 +62,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么生存期在调用上声明、为什么一条未完成任务能否决清扫，以及为什么退役 standing 成员必须凭本人的原话？ | `docs/adr/0026-declared-member-lifetime.md` | 英文 |
 | 为什么花名册住在工作区里的一个文件，以及存储域现在还用来做什么？ | `docs/adr/0027-roster-file-under-the-workspace.md` | 英文 |
 | 为什么墓碑记录的是目录名，以及保留上限如何与它匹配？ | `docs/adr/0028-trash-directory-name-not-path.md` | 英文 |
+| 为什么成员定义从一条链上读取，以及为什么随包模板会输给工作区里的文件？ | `docs/adr/0029-definition-chain.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap-zh.md` | 双语 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |
@@ -91,7 +92,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 成员的生存期、什么可以否决清扫，或一次退役必须带回什么 | `docs/member-lifecycle-zh.md` §2、`roster.js`、`actions.js`、`index.js` 里的工具 schema、`README.md` + `README-zh.md`、ADR 0026 |
 | 交接规则——替换、退役或恢复时成员的未完成任务怎么处理 | `docs/task-board-zh.md` §2 的交接矩阵、`actions.js`、`README.md` + `README-zh.md`、ADR 0017 |
 | 任务行的 `body`，或工作板写入如何基于已存记录构建 | `roster.js`、`actions.js`、`index.js` 里的工具 schema、`docs/task-board-zh.md` §1 与 §3、`README.md` + `README-zh.md`、ADR 0020 |
-| 成员定义的格式、接受的 frontmatter 子集或 `team/` 路径 | `definitions.js`、`docs/architecture-zh.md` §6、`README.md` + `README-zh.md`、ADR 0018 |
+| 成员定义的格式、接受的 frontmatter 子集或定义的查找链 | `definitions.js`、`docs/architecture-zh.md` §6、`README.md` + `README-zh.md`、ADR 0018、ADR 0029 |
 | 团队文件的格式、保留名 `team.md`、模板的三个来源或写入拒绝 | `definitions.js`、`actions.js`、`index.js`、`docs/handoff-zh.md` §1 与 §2、`README.md` + `README-zh.md`、ADR 0021 |
 | 定义字段在 replace 时由哪个来源胜出，或文件可以就成员的生存期声明什么 | `docs/architecture-zh.md` §6.1 的定义矩阵、`actions.js`、`index.js`、ADR 0019、ADR 0026 |
 | bundle 配置键或补丁行 | `README.md` + `README-zh.md`、`docs/architecture-zh.md` §1 |
