@@ -2894,3 +2894,36 @@
   verdict mean something now.
 - **Version.** `0.33.0`: one service out of `inject`, one module specification deleted, and a platform
   difference that used to be a silent behaviour difference.
+
+## 2026-11-13 — a bilateral succession, and the storage domain removed, recorded as the two decisions they are (v0.33.1)
+
+- **ADR 0032 stands alone, and the reason is a distinction worth keeping**: ADR 0009 decided *when* the two
+  halves of a replacement run — successor first, predecessor second, one call — and 0032 decides *what they
+  write*, adding a half 0009 never named. **No accepted ADR had ever decided what a replacement records on
+  the predecessor**, so there is nothing to supersede, and saying so explicitly is better than a supersede
+  line that would have looked tidy and been false.
+- **ADR 0033 satisfies a revisit condition and supersedes nothing**, quoted rather than paraphrased: ADR
+  0031's *"The legacy import leg is removed — one release after this one, together with the domain open,
+  once every supported upgrade path has bound a workspace."* 0031 decided the removal **and dated it**;
+  0033 pays it. A dated commitment that gets paid is a different thing from a decision that got reversed,
+  and the header says which this is.
+- **The platform defect became a named consequence rather than a third ADR**, and the argument is the right
+  one: `ENOTDIR` versus `ENOENT` is **one boolean in the seed path** — "does this root already have a
+  roster" — whose value decides seeding, not a separate architectural choice. It also would have taken the
+  number the portable-record decision needs. The content is complete in 0033 decision 4: the two codes mean
+  "no such file" because the platforms disagree, one input otherwise produced two different rosters,
+  Windows could not see it, and CI on Linux did.
+- **The lifecycle matrix gained the succession cell**, which is not optional here: §8 of `AGENTS.md` says a
+  lifecycle change is written into `docs/member-lifecycle-en.md` and not into a comment. A replacement now
+  writes both ends, and a walk that reaches an archived tombstone stops at the id — both are states a
+  reader of that matrix has to be able to find.
+- **`AGENTS.md`'s frozen-name clause now says what actually is**: `team_roster` is frozen as a **value**
+  only — records have lived in files since ADR 0027, and the plugin no longer opens the domain at all since
+  ADR 0033. One clause, not three, and it replaces a sentence that had already been amended twice today.
+- **The README pair was left untouched on purpose**: nothing it claims became false. Its Configuration
+  paragraph already says the domain answers no read, and a version number is the Lead's to move.
+- **What is still unmatched, said rather than implied.** `'none'` as a `storage.source` value has no
+  production witness; the archived walk stops at the id **by design**, so a person reads `archive.jsonl`
+  themselves and no tool reads it yet. Both are recorded as accepted shapes of the current design, not as
+  work someone forgot.
+- **Version.** `0.33.1`: two ADRs, four document pairs, one clause in `AGENTS.md`, and no code.
