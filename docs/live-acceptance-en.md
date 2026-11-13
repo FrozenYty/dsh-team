@@ -136,24 +136,30 @@ not that record's identity (a partial name is not a match, by design) or the sca
 which is the defect this check exists for. `archived_scanned` missing on a miss, or equal to the returned
 count: the answer is not reporting its cost, so a miss can no longer be told from a failed read. A hit on
 prose such as `"Replaced by reviewer-g2"`: text matching came back, and identity stopped being identity.
-## 10. A mounted member reports what it has spent
+## 10. Every member reports what it has spent, from one of three sources
 
 **Status: not yet run.**
-**Precondition, and it is sharper than the others:** a member that is **mounted** — the plugin holds its live
-Agent — **with committed requests behind it**. A member that never ran is mounted with nothing to sum, and a
-member that is not mounted has no Agent at all, so its row can never carry the field however much it spent.
-**Call** `list_members` while that member is running.
-**Correct looks like** `spend_tokens` on its row as the sum of the four counters in its durable log, a
-number larger than zero that does **not** change shape between two reads in the same turn, and — the part
-that has to be read rather than trusted — the row of a **non-resident** member carrying **no** `spend_tokens`
-at all rather than `0`. A total that falls between two reads is not a failure: a retry adds an attempt while
-a streaming sample replaced by its final one subtracts.
-**If it does not match** — the field on a row whose member is not mounted: the number is not this plugin's
-(only `ctx.agents.get(childId)` gives a handle, and an unloaded child has no Agent). `0` where nothing could
-be measured: the field is being used as a stand-in, which is the one thing it must never be. The same total
-on every row: the read is returning one projection for all members, so check which Session it was asked
-about. A number that never moves across a turn that clearly spent tokens: the unit was not asked for, and
-`['tokenUsage']` is what makes the read cheap enough to run per row.
+**Precondition, and it is the whole point:** one member of each kind — **mounted** with committed requests,
+**unloaded but not retired**, and **retired on or after v0.39.0**. The retired case is the one with a
+version floor: a tombstone written before v0.39.0 carries no number and never will, so a missing field there
+is the correct answer rather than a failure. A checklist run on a profile whose retirements all predate that
+version cannot exercise the third source at all.
+**Call** `list_members` once, with no flags.
+**Correct looks like** all three rows carrying `spend_tokens`: the mounted member's read from its own
+projection; the **unloaded** member's read from the Host's cache, which is the case this check exists for
+because it used to be absent; and the **retired** member's **frozen at its retirement** — the same number on
+every later read, never growing again. On a live or unloaded row the number may grow, and it may fall between
+two reads: a retry adds an attempt while a streaming sample replaced by its final one subtracts. Where the
+number cannot be computed at all — including a retirement whose fold produced nothing — the field is
+**omitted**, never `0`.
+**If it does not match** — a number on an unloaded row that ignores everything attempted since it was last
+loaded: the cache read returned a stale entry, so check whether the interval was really quiet. A retired row
+with no number on a tombstone that **is** from this version or later: the capture at retirement did not
+happen, and the value is unrecoverable — that is the one failure here with no second chance. A retired row
+whose number **changes** between reads: the field is being recomputed from a live source instead of answered
+from the tombstone. `0` anywhere nothing could be measured: the field used as a stand-in, the one thing it
+must never be. A number on a row whose member is not mounted and not retired that never moves while its work
+clearly spends: the listing leg did not match the header, so the identity witness is what to inspect.
 ## Recording a round
 
 Write the Host version, the date, each check's observed values, and any check that could not be run and
