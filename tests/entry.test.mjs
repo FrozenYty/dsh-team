@@ -8,7 +8,7 @@ import { test } from 'node:test'
 
 import { apply } from '../index.js'
 import { WAIT_TIMEOUT_MAX } from '../actions.js'
-import { ROSTER_FILE_NAME } from '../roster.js'
+import { ARCHIVE_FILE_NAME, ARCHIVE_READ_LIMIT, ROSTER_FILE_NAME } from '../roster.js'
 import { TEAM_DIR } from '../trash.js'
 
 /**
@@ -134,13 +134,13 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
     // A refused load must be observable together with what it did (or did not) register.
     try {
       apply(ctx, config)
-      return { tools, childTools, table, lead, child, requests, error: undefined }
+      return { tools, childTools, table, lead, child, requests, workspace, error: undefined }
     } catch (error) {
-      return { tools, childTools, table, lead, child, requests, error }
+      return { tools, childTools, table, lead, child, requests, workspace, error }
     }
   }
   apply(ctx, config)
-  return { tools, childTools, table, lead, child, requests }
+  return { tools, childTools, table, lead, child, requests, workspace }
 }
 
 test('a Lead whose Team projection cannot be read still receives and can call the roster tools', async () => {
@@ -700,4 +700,54 @@ test('the retire_member tool asks the person before ending a standing role', asy
   assert.match(done.message, /quoted back here: "Yes — the release is signed off, retire it\."/)
   assert.deepEqual(done.unowned_tasks, [owned.task.id], 'the work it owned is named, not silently orphaned')
   assert.equal(table.get('lead-1').members.find((member) => member.name === 'keeper').phase, 'retired')
+})
+
+test('list_members declares the archive flag and reads the Lead own root when asked for it', async () => {
+  const { tools, table, lead, workspace } = harness()
+  const exec = { agent: lead }
+  const list = tools.get('list_members')
+  // Declared, not discovered: the parameter exists, and the cap is a number in the description rather than
+  // something a caller learns by counting rows (ADR 0035).
+  assert.equal(list.parameters.properties.archived.type, 'boolean')
+  assert.match(list.description, new RegExp(`newest ${ARCHIVE_READ_LIMIT} `), 'the description names the cap')
+  assert.match(list.parameters.properties.archived.description, /archive\.jsonl/, 'and the parameter names the file it reads')
+
+  // This Lead has no live members and one tombstone that left the roster, which is what the archive holds.
+  await table.put('lead-1', { leadSessionId: 'lead-1', members: [], retiredChildIds: ['child-gone'] })
+  const archived = {
+    memberId: 'member-gone',
+    childId: 'child-gone',
+    name: 'older',
+    label: 'Check the old diff',
+    generation: 1,
+    phase: 'retired',
+    retiredAt: '2026-07-01T00:00:00.000Z',
+    trashDir: 'child-gone-1001',
+    trashRelPath: 'trash/lead-1/child-gone-1001',
+    trashKind: 'directory',
+    trashState: 'done',
+  }
+  // Written beside the roster, under the Lead's bound root — not under the directory the host process
+  // happens to be running in. The answer names the file it read, so a read that resolved the wrong root
+  // fails on that assertion rather than answering an empty history.
+  await writeFile(
+    join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME),
+    `${JSON.stringify({ archivedAt: '2026-07-02T00:00:00.000Z', reason: 'beyond-trash-window', leadSessionId: 'lead-1', member: archived })}\n`,
+    'utf8',
+  )
+
+  const plain = await list.execute({}, exec)
+  assertMatchesSchema(plain, list.output.schema, 'list_members')
+  assert.deepEqual(plain.members, [], 'a plain read serves the roster and nothing else')
+  assert.equal(plain.archived_returned, undefined, 'and reports nothing about a file it did not open')
+
+  const flagged = await list.execute({ archived: true }, exec)
+  assertMatchesSchema(flagged, list.output.schema, 'list_members')
+  assert.equal(flagged.archive_file, join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME), 'the file it read is this Lead own')
+  assert.equal(flagged.archived_returned, 1)
+  assert.equal(flagged.archived_total, 1)
+  assert.equal(flagged.members.length, 1)
+  assert.equal(flagged.members[0].target, 'older')
+  assert.equal(flagged.members[0].archived, true)
+  assert.equal(flagged.members[0].archived_at, '2026-07-02T00:00:00.000Z')
 })

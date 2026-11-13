@@ -3153,3 +3153,42 @@
   first where the enforcement was refused deliberately rather than unavailable.
 - **Version.** `0.35.3`: one section of `CONTRIBUTING.md`, one cross-reference, and a false count removed
   before it shipped.
+
+## 2026-11-13 — the archive is readable on request, and the four-line "defect fix" beside it was a no-op (v0.36.0)
+
+- **The archive stops being write-only, and ADR 0030 is untouched.** `list_members { archived: true }` is the
+  caller saying "this is a file read, do it" — so a plain read still never opens it, and that is proven by a
+  **seam that throws when called** (`readArchive`, the same shape as the trash path's `renameFn`) rather than
+  by an assertion about the output. The same probe proves the other direction. A fake that can be made to
+  explode is a stronger witness than a diff of two answers.
+- **The reader sits beside the writer it reads** and carries the four rules an append-only file needs and its
+  writer cannot provide: answer one Lead only (the line records `leadSessionId`, and one file serves every
+  Lead under a data root); dedupe by member id, because the append-before-replace crash window leaves
+  duplicates and the reader is what makes that harmless; **count damaged lines instead of throwing**, since a
+  crash mid-append leaves a partial last line; and return at most the newest **50** with the real total beside
+  it — the archive is unbounded by design, and a read must not become a way to pull an unbounded file into one
+  answer. The cap is declared in the tool's description and in the parameter's own, so a bounded answer cannot
+  be mistaken for the whole history.
+- **The four-line "defect" it reported was not one, and the probe is what settled it.** The branch changed
+  four call sites to pass the caller, on the theory that they had been falling back to the process default
+  rather than the Lead's bound root. They had not: `install` receives `() => dataDirFor(agent)`, a closure
+  **already bound to the agent**, and a tool instance is installed per agent — so the argument was never read
+  by anything. **Reverting those four lines leaves the new entry test green**, which is at once the proof that
+  the change was a no-op and the reason that test proved nothing about it. Reverted at the merge, with the
+  latent distinction recorded instead of reintroduced: if a caller can ever differ from the installing agent,
+  the fix is to pass the function rather than a bound closure.
+- **The assertion is kept even though the hypothesis it was written for was false**, and that is deliberate:
+  the archive has no frozen leg, so a data directory resolved wrongly would make this feature answer "nothing
+  archived" rather than fail. A witness for a false alarm is still the witness that would catch the real
+  thing, and deleting it because it once proved nothing would be the wrong repair.
+- **The probe that passed for the wrong reason was reported rather than hidden**: removing one `Map.delete`
+  changed nothing, because a `Map` already replaces a key's value and the delete only moved the entry — so the
+  reader now keys by member id alone and the probe was rewritten to key by line, which is what actually
+  removes the deduplication. **A probe that cannot fail is a probe that is measuring something else.**
+- **What the owner should know before using it.** The cap is fixed at 50 and not configurable: a caller who
+  needs the rest has no door yet, and the honest next step if that is ever needed is another parameter rather
+  than a larger constant. The flagged output has not been seen by the Host's validator, because
+  `schema-check.mjs` calls `list_members` without the flag. An archived record's tasks travel in its line but
+  no tool shows them. And the first real use of this flag will be on this machine's 74 archived records: 50
+  returned, `archived_total` 74 — the cap's first live test at the same moment as the feature's.
+- **Version.** `0.36.0`: one opt-in parameter, one reader, and one no-op removed rather than kept for looks.
