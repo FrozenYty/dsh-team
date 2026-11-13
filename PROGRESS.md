@@ -3192,3 +3192,28 @@
   no tool shows them. And the first real use of this flag will be on this machine's 74 archived records: 50
   returned, `archived_total` 74 — the cap's first live test at the same moment as the feature's.
 - **Version.** `0.36.0`: one opt-in parameter, one reader, and one no-op removed rather than kept for looks.
+
+## 2026-11-13 — the archive's decision is recorded, and a phase whose gate is met is closed (v0.36.1)
+
+- **ADR 0035 supersedes nothing, and saying so is the substance**: ADR 0030's hot-path rule is untouched,
+  because a plain `list_members` still never opens the file. What the ADR records is the caller saying *"this
+  is a file read, do it"*, the four rules the reader carries because the writer cannot, the asymmetry that
+  makes the flag mean something, and — as importantly — the three limits: a fixed cap, a flagged shape the
+  Host's validator has never seen, and archived tasks that travel in a line no answer shows.
+- **Gate P5 is met and ticked, and the reason is its own words**: the gate was *"the stop for treating this
+  plugin's history as write-only"*, and a read that answers on request is that stop being removed. **P5-19's
+  acceptance survived contact with the numbers** — the cap, `archived_total` beside `archived_returned`,
+  `archived_unreadable`, and the suite count were filled in rather than left as prose, which is what a plan's
+  "Done when" is for: it either survives the evidence or it gets rewritten.
+- **The no-op appears in the ADR only as a closing pointer** to this file, not as a decision. An ADR that
+  recorded a non-decision would be a document about a conversation rather than about the system, and the
+  distinction is the same one that kept six release lines out of `PLAN.md`'s P5.
+- **A process slip refined the rule this file wrote two hours earlier, and the refinement is real.** The
+  member wrote `if ($LASTEXITCODE -eq 0) { …commit }` and the commit **silently did not happen**, because
+  **each shell call is a fresh process** and the variable was unset — it caught this by *looking for the
+  commit* rather than trusting the absence of an error. The gate still ran as its own step, so the check was
+  green before the commit that followed it; what failed is the belief that "gated on the exit code" travels
+  between calls. It only works **inside one process**, which is what §4's *"write the list so every later step
+  is gated on it"* already said and what a reader can still misread.
+- **Version.** `0.36.1`: one ADR, three document pairs, one phase closed by its own gate, and a rule about
+  rules made one notch more precise.

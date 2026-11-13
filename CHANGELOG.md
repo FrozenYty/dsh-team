@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.36.1] - 2026-11-13
+
+- The archive's decision is recorded, and a phase whose gate is met is closed.
+
 ## [0.36.0] - 2026-11-13
 
 - The archive is readable on request, and the four-line "defect fix" beside it was a no-op.
