@@ -103,42 +103,29 @@ export function pressureOf(ctx, agent) {
 /** The four counters one `tokenUsage` projection carries, which together are everything a Session spent. */
 const SPEND_COUNTERS = ['uncachedInputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
 
+/** The one unit a spend read asks for: `snapshot` and `cachedSnapshot` compute only the units they are named. */
+const SPEND_UNITS = ['tokenUsage']
+
 /**
- * What one member has spent, out of the projections registry.
- *
- * **Not out of `tokenMeter`, which cannot answer this.** Its `tokenUsage` handle is registered and then
- * discarded, and its `measure()` reports pressure — how full a context is — rather than spend. The registry
- * is the path, and it is present wherever `tokenMeter` is active because `TokenMeter` injects it itself
- * (ADR 0037).
- *
- * Three things about the read are deliberate:
- *
- *   - **`ctx.get` is the optional-access pattern this bundle already uses** (`host-hooks.js` asks for
- *     `sessionController` and `agentTeams` the same way), so `sessionProjections` is not added to `inject`:
- *     a profile without the registry must not stop the plugin loading, and a row without a number is a
- *     truthful row.
- *   - **the unit subset is named** — `['tokenUsage']` — because `snapshot` computes only the units it is
- *     asked for and skips the host-only ones, which makes this one cheap projection read per row instead of
- *     a full snapshot.
- *   - **nothing is invented.** No registry, no session, no `tokenUsage` unit, or a counter that is not a
- *     finite number all answer `undefined`, and the row omits the field: "nothing measured" and "nothing
- *     spent" are different claims (ADR 0037).
+ * Optional access, the pattern `host-hooks.js` uses for `sessionController` and `agentTeams`: a capability
+ * this plugin can do without must never be a load-time requirement (ADR 0037, ADR 0038).
  * @param ctx - plugin context.
- * @param {object|undefined} agent - the member's live Agent, when this process holds one.
- * @returns {number|undefined} the four counters summed, or undefined when there is nothing to read.
+ * @param {string} name - service name.
+ * @returns the service, or undefined when this profile does not mount it.
  */
-export function spendTokensOf(ctx, agent) {
-  if (agent === undefined || agent === null || agent.session === undefined) return undefined
-  const projections = typeof ctx.get === 'function' ? ctx.get('sessionProjections') : undefined
-  if (projections === undefined || projections === null || typeof projections.snapshot !== 'function') return undefined
-  let usage
-  try {
-    usage = projections.snapshot(agent.session, ['tokenUsage'])?.values?.tokenUsage
-  } catch (error) {
-    // A projection read is a read of something this plugin does not own: a Session the registry has already
-    // forgotten, or a unit it cannot compute. A row is not the place to fail over it.
-    return undefined
-  }
+function optional(ctx, name) {
+  return typeof ctx.get === 'function' ? ctx.get(name) : undefined
+}
+
+/**
+ * The four counters summed, or `undefined` when any of them is missing.
+ *
+ * A partial sum is a plausible-looking lie, so one counter that is not a finite number makes the whole
+ * answer absent — the same rule as every other source of this number (ADR 0038).
+ * @param usage - a `tokenUsage` value.
+ * @returns {number|undefined} the total.
+ */
+export function sumSpend(usage) {
   if (usage === null || typeof usage !== 'object') return undefined
   let total = 0
   for (const counter of SPEND_COUNTERS) {
@@ -146,6 +133,167 @@ export function spendTokensOf(ctx, agent) {
     total += usage[counter]
   }
   return Number.isFinite(total) ? total : undefined
+}
+
+/** The `tokenUsage` unit of one projection block, summed. */
+function spendOfBlock(block) {
+  return sumSpend(block?.values?.tokenUsage)
+}
+
+/**
+ * Mounted: what this member has spent, out of the projections registry.
+ *
+ * **Not out of `tokenMeter`, which cannot answer this.** Its `tokenUsage` handle is registered and then
+ * discarded, and its `measure()` reports pressure — how full a context is — rather than spend (ADR 0037).
+ * Three things about the read are deliberate: it is optional access (a profile without the registry must not
+ * stop the plugin loading), the unit subset is named so `snapshot` computes one unit instead of a full
+ * snapshot, and nothing is invented — no registry, no Agent, no Session or a damaged counter all answer
+ * `undefined`, and the row omits the field (ADR 0038).
+ * @param ctx - plugin context.
+ * @param {object|undefined} agent - the member's attached Agent, when this process holds one.
+ * @returns {number|undefined} the four counters summed.
+ */
+export function spendTokensOf(ctx, agent) {
+  if (agent === undefined || agent === null || agent.session === undefined) return undefined
+  const projections = optional(ctx, 'sessionProjections')
+  if (projections === undefined || projections === null || typeof projections.snapshot !== 'function') return undefined
+  try {
+    return spendOfBlock(projections.snapshot(agent.session, SPEND_UNITS))
+  } catch (error) {
+    // A projection read is a read of something this plugin does not own: a Session the registry has already
+    // forgotten, or a unit it cannot compute. A row is not the place to fail over it.
+    return undefined
+  }
+}
+
+/**
+ * The listing's own header for one Session.
+ *
+ * The header is what the cache is keyed by, so it is passed through as the Host wrote it and never rebuilt:
+ * a row whose `stateVersion` no longer matches the live unit is rejected by the cache, and a reconstructed
+ * header would defeat exactly that check (ADR 0038).
+ * @param listing - the result of one `listSessions()` call.
+ * @param {string} childId - the Session id to find.
+ * @returns the header, or undefined when the listing does not hold that Session.
+ */
+export function headerOf(listing, childId) {
+  const entries = Array.isArray(listing) ? listing : listing?.sessions
+  if (!Array.isArray(entries)) return undefined
+  const entry = entries.find((candidate) => candidate?.id === childId || candidate?.header?.id === childId)
+  return entry === undefined ? undefined : (entry.header ?? entry)
+}
+
+/**
+ * One listing per call, and only when a row actually needs it.
+ *
+ * `listSessions()` is a metadata listing, so a row may ask it once and read the Host's own cache afterwards —
+ * but a listing per row would be the quiet regression nobody notices until a history is large. The listing is
+ * therefore fetched here, lazily, and reused for every member of the call (ADR 0038).
+ * @param ctx - plugin context.
+ * @returns the listing, or undefined when the query service is absent or refuses.
+ */
+async function listSessionHeaders(ctx) {
+  const query = optional(ctx, 'sessionQuery')
+  if (query === undefined || query === null || typeof query.listSessions !== 'function') return undefined
+  try {
+    return await query.listSessions()
+  } catch (error) {
+    return undefined
+  }
+}
+
+/**
+ * Unloaded: the Host's own persisted cache row, read by header, which costs no I/O.
+ *
+ * This is the service's face for a Session that is not attached, and the Host's own session listing reads it
+ * the same way. The number may lag the live Session, which is why it is a hint for reading and never a
+ * decision about behaviour (ADR 0038).
+ * @param ctx - plugin context.
+ * @param {object|undefined} header - the header from this call's listing.
+ * @returns {number|undefined} the four counters summed.
+ */
+export function spendFromCache(ctx, header) {
+  if (header === undefined) return undefined
+  const cache = optional(ctx, 'sessionProjectionCache')
+  if (cache === undefined || cache === null || typeof cache.cachedSnapshot !== 'function') return undefined
+  try {
+    return spendOfBlock(cache.cachedSnapshot(header, SPEND_UNITS))
+  } catch (error) {
+    return undefined
+  }
+}
+
+/**
+ * The plugin's only fold, and the reason it is affordable here.
+ *
+ * `readSession` replays the complete log, and the query service's own documentation says a large history pays
+ * full inspection per call — so no row may do this. At retirement it is affordable exactly once, for one
+ * member, because the cache is about to reject the row and the artifact is about to become unreachable:
+ * this is the last moment the number exists at all (ADR 0038).
+ * @param ctx - plugin context.
+ * @param {string} childId - the Session about to be moved.
+ * @returns {number|undefined} the four counters summed.
+ */
+async function spendFromFold(ctx, childId) {
+  const query = optional(ctx, 'sessionQuery')
+  if (query === undefined || query === null || typeof query.readSession !== 'function') return undefined
+  const projections = optional(ctx, 'sessionProjections')
+  if (projections === undefined || projections === null || typeof projections.snapshot !== 'function') return undefined
+  try {
+    const folded = await query.readSession(childId)
+    // The registry folds an attached Session, and a replay-validated log is the closest stand-in the query
+    // service offers, so this is a best effort: when the registry cannot fold it, the answer is absent rather
+    // than wrong, and the tombstone simply carries no number.
+    return spendOfBlock(projections.snapshot(folded, SPEND_UNITS))
+  } catch (error) {
+    return undefined
+  }
+}
+
+/**
+ * Spend for every member of one read, resolved once per call (ADR 0038).
+ *
+ * A mounted member is read from the registry, an unloaded one from the Host's cache by the header this call's
+ * single listing named, and a retired one is skipped because its row reads the frozen number off the record
+ * instead. A member nothing can answer for is absent from the map, and the row then omits the field.
+ * @param ctx - plugin context.
+ * @param {object[]} members - the rows this call is about to build.
+ * @returns {Promise<Map<string, number>>} member id to spend, for the members that could be measured.
+ */
+export async function spendByMemberOf(ctx, members) {
+  const resolved = new Map()
+  let listing
+  for (const member of members) {
+    if (member.phase === PHASE.retired) continue
+    const mounted = spendTokensOf(ctx, ctx.agents.get(member.childId))
+    if (mounted !== undefined) {
+      resolved.set(member.memberId, mounted)
+      continue
+    }
+    if (listing === undefined) listing = await listSessionHeaders(ctx)
+    const cached = spendFromCache(ctx, headerOf(listing, member.childId))
+    if (cached !== undefined) resolved.set(member.memberId, cached)
+  }
+  return resolved
+}
+
+/**
+ * The number a tombstone keeps, captured **before the artifact moves** (ADR 0038).
+ *
+ * The order is the whole point: the mounted path, else the Host's cache, else one fold. Retirement is the
+ * only place the fold is affordable, and it happens once, for this one member, while the data still exists.
+ * When no source answers, nothing is written — "nothing measured" is not "nothing spent", and a tombstone
+ * from before this version has no number for exactly that reason.
+ * @param ctx - plugin context.
+ * @param {object} member - the record being retired.
+ * @returns {Promise<number|undefined>} the frozen number, or undefined when nothing could measure it.
+ */
+export async function captureSpendTokens(ctx, member) {
+  const mounted = spendTokensOf(ctx, ctx.agents.get(member.childId))
+  if (mounted !== undefined) return mounted
+  const cached = spendFromCache(ctx, headerOf(await listSessionHeaders(ctx), member.childId))
+  if (cached !== undefined) return cached
+  return spendFromFold(ctx, member.childId)
 }
 
 /**
@@ -214,7 +362,7 @@ function retaskAdvice(member) {
  *   one from a name.
  * @returns {object} the row the model renders.
  */
-export function memberRow(ctx, member, leadRoute, members) {
+export function memberRow(ctx, member, leadRoute, members, spendByMember) {
   const live = liveStateOf(ctx, member)
   const compactor = ctx.get('compaction') !== undefined
   const row = {
@@ -246,12 +394,20 @@ export function memberRow(ctx, member, leadRoute, members) {
       } catch (error) {
         row.note = 'Context pressure is not measurable for this member yet.'
       }
-      // What it has spent, which is a different question from how full it is (ADR 0037). Omitted — never
-      // reported as 0 — when the projection cannot be read: a retired or unloaded member's Session may no
-      // longer be attached, and "nothing measured" is not "nothing spent".
+      // What it has spent, which is a different question from how full it is (ADR 0037).
       const spend = spendTokensOf(ctx, agent)
       if (spend !== undefined) row.spend_tokens = spend
     }
+  }
+  // Spend is not a property of being mounted: an unloaded member is read from the Host's cache and a
+  // tombstone from its own record, so the number is applied to every row — from this call's resolution when
+  // it has one, and otherwise from the mounted read, which is what a successor row built outside a listing
+  // can afford. A read never re-measures a tombstone: the record is the source once it exists (ADR 0038).
+  const spend = (spendByMember === undefined ? undefined : spendByMember.get(member.memberId))
+    ?? spendTokensOf(ctx, ctx.agents.get(member.childId))
+  if (spend !== undefined) row.spend_tokens = spend
+  if (typeof member.spendTokens === 'number' && Number.isSafeInteger(member.spendTokens) && member.spendTokens >= 0) {
+    row.spend_tokens = member.spendTokens
   }
   // What the model recorded about the work, so the Lead can see it before replacing the member.
   if (typeof member.assignment === 'string') row.assignment = member.assignment
@@ -938,10 +1094,14 @@ export async function listMembers({
   // archived target is resolvable at all: with it, an edge to a member whose record left the roster reports
   // its target; without it, the bare id the roster can still name, which is ADR 0030's answer.
   const resolvable = read === undefined ? roster.members : [...roster.members, ...foundRecords.map((entry) => entry.member)]
-  const rows = roster.members.map((member) => memberRow(ctx, member, leadRoute, resolvable))
+  // Spend is resolved once for the whole call — one listing, then the Host's own cache per row, and a
+  // tombstone's own frozen number — because a listing per row is the regression nobody notices until a
+  // history is large (ADR 0038).
+  const spendByMember = await spendByMemberOf(ctx, resolvable)
+  const rows = roster.members.map((member) => memberRow(ctx, member, leadRoute, resolvable, spendByMember))
   for (const entry of foundRecords) {
     rows.push({
-      ...memberRow(ctx, entry.member, leadRoute, resolvable),
+      ...memberRow(ctx, entry.member, leadRoute, resolvable, spendByMember),
       // Marked, and marked with when: a row read from the archive is history rather than a member the
       // sweep could still act on, and the flag that produced it is not something the caller should have to
       // remember by position.
@@ -1920,6 +2080,12 @@ export async function retireMember({
   // The confirming write in step 3 rebuilds from the stored record, so it carries the field forward
   // rather than writing it again.
   const plan = await planMemberTrash(ctx, { leadSessionId, memberId: member.childId, dataDir })
+  // What it spent, captured *here*: after the plan, before the tombstone is written and before a single byte
+  // of the artifact moves. This is the last moment the number exists — the mounted registry still holds the
+  // Session, or the Host's cache still matches it, or one fold can still replay the log — and the tombstone is
+  // where it survives, because nothing will ever measure this member again (ADR 0038). When no source answers,
+  // the field is simply absent, and a tombstone written before this version has none for the same reason.
+  const spendTokens = await captureSpendTokens(ctx, member)
   await updateRoster(table, leadSessionId, (current) => {
     const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
     const fields = plan.planned
@@ -1931,6 +2097,7 @@ export async function retireMember({
         trashState: TRASH_STATE.pending,
       }
       : { trashState: TRASH_STATE.none }
+    if (spendTokens !== undefined) fields.spendTokens = spendTokens
     if (successor !== undefined) fields.successor = successor
     return withMember(current, tombstoneOf(existing, fields))
   })

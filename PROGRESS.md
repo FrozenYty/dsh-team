@@ -3530,3 +3530,35 @@
   **a list with one append point per version serialises parallel work, and this will happen every time**. The
   resolution keeps both rows in numeric order; dropping either would have been the easy and wrong fix.
 - **Version.** `0.38.4`: one ADR, one pointer line into 0012, and a default that is now wrong on the safe side.
+
+## 2026-11-14 — a member's spend from three sources, captured one byte before it becomes unrecoverable (v0.39.0)
+
+- **The third source exists because of a moment, and the moment is pinned by a test rather than a comment.**
+  The number is captured at retirement, after the plan and before the tombstone is written — **one byte before
+  the artifact moves**, which is the only window where it still exists: a mounted registry holds the Session, or
+  the cache can still match it, or one fold is affordable. The fixture answers the cache **only while the
+  artifact is still in the live store**, and moving the capture after the move makes it answer `false`. **An
+  ordering that only a comment defends is an ordering that will be reversed by someone tidying up.**
+- **The cost is placed where it is paid once.** One `listSessions()` per call — hoisted, lazy, never per row —
+  and afterwards a row reads only the Host's own cache, which costs no I/O. The whole plugin contains **one**
+  fold: at retirement, for one member, once; no row calls `readSession`, because an exact read replays the
+  entire log.
+- **The header is passed through untouched**, because rebuilding it would defeat exactly the `stateVersion`
+  check the cache uses to decide whether its row is still valid — a detail that would look like harmless
+  tidying and would quietly turn every cold read into nothing.
+- **A tombstone written before this version carries no number, and nothing invents one.** Its artifact is in
+  the trash and its cached row can no longer be matched to anything; the description says so in the field's own
+  paragraph.
+- **The change deleted the sentence it falsified, in the same commit.** The previous release's "appears only on
+  mounted members" is gone rather than weakened, and the test asserts its **absence** — so a description a
+  change makes false is removed by that change and not left to rot into a half-truth.
+- **One honesty owed to the decision text, reported by the member rather than hidden**: the fold is affordable
+  but **not always sufficient**. `readSession` hands back a header with its events, not a Session, while the
+  registry folds a mounted session — so the fallback can legitimately produce nothing, and then the tombstone
+  omits rather than guesses. **The code is right and the ADR's wording is what needs the clause**; the
+  correction is queued rather than quietly absorbed.
+- **Verification.** 322 tests, eight new; the Host's validator still accepts every declared schema and all
+  seventeen values; three probes failed by name, and the one worth reading is the reorder — it shows the
+  capture's position is load-bearing. The two new services are reached through the same optional accessor the
+  bundle already uses, so a profile without them still loads.
+- **Version.** `0.39.0`: one field, three sources, and a number that is never invented.
