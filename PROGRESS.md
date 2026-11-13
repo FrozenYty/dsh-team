@@ -3335,3 +3335,37 @@
   suite.
 - **Version.** `0.36.5`: one document pair, both index rows, and one citation in `PLAN.md` that the gate
   forced.
+
+## 2026-11-13 — one archived record can be looked up by identity, past the cap and without hiding the cost (v0.37.0)
+
+- **A bound with no door is a dead end, and this one hid the archive's own question.** `archived: true`
+  returned the newest 50 of 74 and said so — and the other 24 could not be seen by any tool, so *"what
+  happened to this member?"* was unanswerable for anything older than the newest fifty. `archived_target`
+  answers it for any member, however old.
+- **The reader is now one scan with two selections**, which is the structural reason to build the lookup
+  inside it rather than beside it: a lookup and a capped read cannot come to disagree about what the file
+  contains, because there is one place that reads the file.
+- **The cap constrains what an answer carries, not what a search may read** (ADR 0036), and the trade is
+  made **visible rather than implied**: a miss returns `archived_returned: 0` with `archived_scanned` — the
+  number of lines it read to be sure — plus `archived_total` and a message naming the target it looked for.
+  An empty answer that carries the work behind it cannot be misread as a failed read.
+- **Identity, never prose.** Matching is `targetOf(member)` — the plugin's own name-and-generation rule — or
+  the raw `member_id`; `reviewer-g2` matches generation 2 only, and a test pins that the sentence
+  `"Replaced by reviewer-g2"` on a tombstone is not an identity. The rest of the bundle follows the same
+  rule, and a lookup that matched text would be the first place it did not.
+- **Two self-corrections were reported rather than hidden, and both are the kind that matter.** A probe
+  passed for the wrong reason — it compared `label === target`, which a target merely *contained in* a label
+  can never satisfy, so the change it was testing was untested; it was rewritten as a substring search that
+  then failed as expected. And while wiring the two paths the member **broke the capped read**, so every
+  flagged read answered zero — and **an existing entry-layer test caught it before anything was committed**.
+  The defect lived in how `actions.js` composed the call, not in the reader, which is precisely the layer
+  the unit tests do not reach on their own.
+- **Named limits.** The lookup reads the whole file with no memory bound, and reports that rather than hiding
+  it; there is no prefix or fuzzy matching, because a partial name is not an identity and the answer says
+  which target it searched; it answers one Lead only, since one file serves every Lead under a data root; and
+  it has not been exercised live yet.
+- **Verification.** 309 tests, five new; the Host's validator now sees **seventeen** real results including
+  both lookup outcomes (`results ok,ok,ok,ok`), four probes failed by name, and the probe that measures the
+  point of the feature asserts a lookup reads past the cap — `ARCHIVE_READ_LIMIT + 5` lines.
+- **Version.** `0.37.0`: one parameter, two fields, and the first operation on the archive that is not a
+  view.
