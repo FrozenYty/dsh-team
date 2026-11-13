@@ -3091,3 +3091,36 @@
   and letting the third imply the rest are safe.
 - **Version.** `0.35.1`: one document pair, one pointer in a closed ADR, and a section of `CONTRIBUTING.md`
   that says what CI does not cover.
+
+## 2026-11-13 — the plan catches up with ten versions, written as tasks rather than as a third copy of the day (v0.35.2)
+
+- **The one file nobody updated was the one that owns task state.** `PLAN.md` stopped at P4-17, v0.25.5,
+  while the project reached v0.35.1: every release wrote a changelog section and a progress entry and left
+  the plan for later, so a future session reading it would read a project that stopped this afternoon. The
+  tasks it would pick up next were not there to be picked. **A file that is updated by nobody is not a file
+  that needs no updating** — it is the one whose staleness nobody notices, because the two files next to it
+  are always current.
+- **P5 is written as tasks, and that constraint is the whole difference.** 19 tasks — 18 delivered, one in
+  flight — plus a Gate P5 that is deliberately open, each with a **"Done when" a reader could check** and a
+  "Delivered" line naming the artifact or the test rather than narrating the day. `PROGRESS.md` says what
+  changed and `CHANGELOG.md` says what shipped; a plan that retells either is a third copy of a record
+  written twice already, and the third copy is the one that goes stale first.
+- **Six release lines were judged documents-only rather than tasks, and the count matters.** Told that two
+  versions were documents, the member checked the whole range against `CHANGELOG.md` and found six — each one
+  a clause of the task it follows (the ADRs for a change, a pointer, a paragraph). **Counting versions
+  instead of tasks would have inflated the phase with six entries nobody could act on**, which is the same
+  failure as a changelog that lists commits instead of changes.
+- **The one sentence I handed over twice needed no third visit, and that was reported rather than edited.**
+  `PLAN.md:156` already reads *"a tombstone is never dropped until its artifact could no longer exist"* — the
+  v0.29.1 correction — and both halves were checked against the later releases before being left alone. A
+  sentence that is already true is a sentence to leave alone, and saying so is cheaper than an edit that
+  makes the diff look busy.
+- **A process failure was named instead of smoothed over, and it is a trap this session has been in all
+  day.** The member ran the check, saw `exit=1`, and the command list went on to commit and push — because
+  **a chain of commands does not stop on a non-zero exit** — so the branch briefly carried a red commit. The
+  four things the check had caught were its own citation mistakes: section numbers that are headings
+  nowhere, and a `§9` inside a quoted probe. Repaired, amended with `--force-with-lease`, and disclosed:
+  **the second lateral force-push of the day, both on the author's own branch, with `main` never touched.**
+  The lesson is not PowerShell's: it is that **a check and the commit that follows it must not be one
+  command**, because the failure signal is read by the human rather than by the shell.
+- **Version.** `0.35.2`: one document, and a plan that now describes a project that is still running.

@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.35.2] - 2026-11-13
+
+- The plan catches up with ten versions, written as tasks rather than as a third copy of the day.
+
 ## [0.35.1] - 2026-11-13
 
 - A travelling path's rule is documented, and the ADR that named the debt says it is settled.
