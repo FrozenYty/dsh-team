@@ -294,6 +294,20 @@ test('the harness half still matches the bundle: every injection is answered, ev
   const declaration = tools.find((tool) => tool.name === 'list_members')
   assertMatchesSchema(flagged.value, declaration.output.schema, 'list_members { archived: true }')
 
+  // The lookup, in both of its outcomes: a hit carries the record and the scan's cost, a miss carries the
+  // sentence the read owes. Neither set of fields is a subset of the other, so both are walked.
+  const lookupHit = results.find((result) => result.args?.archived_target === 'archivist-a')
+  assert.ok(lookupHit !== undefined, 'the harness looked up an archived record by target')
+  assert.equal(lookupHit.error, undefined, 'and it returned a value')
+  assert.equal(lookupHit.value.archived_returned, 1, 'the staged tombstone is reachable by its target')
+  assert.ok(lookupHit.value.archived_scanned >= 1, 'and the lookup reports what the scan cost')
+  assertMatchesSchema(lookupHit.value, declaration.output.schema, 'list_members { archived: true, archived_target }')
+  const lookupMiss = results.find((result) => result.args?.archived_target === 'no-such-member-g9')
+  assert.ok(lookupMiss !== undefined, 'and once for a name no archive can hold')
+  assert.equal(lookupMiss.value.archived_returned, 0)
+  assert.equal(typeof lookupMiss.value.message, 'string', 'a miss is a sentence, not an empty list')
+  assertMatchesSchema(lookupMiss.value, declaration.output.schema, 'list_members { archived: true, archived_target } on a miss')
+
   // The number the script prints is the number of values it ran, and the flagged value is one of them.
   const counted = results.filter((result) => result.error === undefined).length
   const text = formatReport({

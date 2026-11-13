@@ -482,6 +482,17 @@ export async function collectFromBundle({ archive = true } = {}) {
   } catch (error) {
     results.push({ tool: 'list_members', args: flagged, error: error instanceof Error ? error.message : String(error) })
   }
+  // The third shape: a lookup by identity, which answers with `archived_scanned` and — on a miss — the
+  // sentence the read owes. Both outcomes are values this tool can return and neither carries the same
+  // fields, so both are asked for: a name the staging produced, and one no archive can hold.
+  for (const archived_target of ['archivist-a', 'no-such-member-g9']) {
+    const lookup = { archived: true, archived_target }
+    try {
+      results.push({ tool: 'list_members', args: lookup, value: await tools.get('list_members').execute(lookup, { agent: lead }) })
+    } catch (error) {
+      results.push({ tool: 'list_members', args: lookup, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
   const declared = [...tools.values()].map((definition) => ({ name: definition.name, parameters: definition.parameters, output: definition.output }))
   const memberDeclared = memberTool === undefined ? [] : [{ name: memberTool.name, parameters: memberTool.parameters, output: memberTool.output }]
   return { tools: [...declared, ...memberDeclared], results, services: Object.keys(services), dataDir }

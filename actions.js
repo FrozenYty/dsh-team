@@ -41,6 +41,7 @@ import {
   findByTarget,
   findAnyTarget,
   findArchived,
+  findArchivedRecord,
   findTask,
   handoffTemplateProblem,
   hasLiveTarget,
@@ -836,10 +837,10 @@ export async function sweepEphemeral({
  * nothing is opened and nothing changes, which is a test rather than an intention.
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
- *   trashLimit?: number, archived?: boolean, readArchive?: Function}} request - `readArchive` is the seam
- *   over the one archive read, in the style of the trash path's `renameFn`: a caller that passes its own
- *   function can prove the plain path never calls it, instead of inferring that from the answer. Production
- *   never passes it.
+ *   trashLimit?: number, archived?: boolean, archivedTarget?: string, readArchive?: Function,
+ *   findArchive?: Function}} request - `readArchive` and `findArchive` are the seams over the two archive
+ *   reads, in the style of the trash path's `renameFn`: a caller that passes its own function can prove the
+ *   plain path never calls it, instead of inferring that from the answer. Production never passes them.
  * @returns {Promise<{members: object[]}>} the tool's result object, unchanged.
  */
 export async function listMembers({
@@ -851,8 +852,16 @@ export async function listMembers({
   hooks,
   trashLimit = DEFAULT_TRASH_LIMIT,
   archived = false,
+  archivedTarget,
   readArchive = readArchivedRecords,
+  findArchive = findArchivedRecord,
 }) {
+  // A parameter the caller meant and this read would ignore is the failure this plugin keeps paying for, so
+  // the two belong together and saying so is the refusal (ADR 0036). It comes before any read: nothing is
+  // opened to discover that the call was wrong.
+  if (archivedTarget !== undefined && archived !== true) {
+    throw new Error(`list_members: archived_target names a record in the archive, so it belongs with archived: true (received archived_target: ${JSON.stringify(archivedTarget)} without it)`)
+  }
   const caller = requireLiveLead('list_members', leadSessionId, leadAgent)
   const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
@@ -861,14 +870,23 @@ export async function listMembers({
   // unreadable route leaves every row uncomparable, which is why it is not an error here either.
   const leadRoute = currentRouteOf(caller)
   const archivedRecords = archivedCount(roster)
-  // The one archive read in the bundle, and it happens only here, only when the caller asked (ADR 0030).
-  const read = archived ? await readArchive(dataDir, leadSessionId) : undefined
+  // The archive is opened only here, only under the flag, and only one of the two ways (ADR 0030, 0036): a
+  // lookup by identity scans the whole history for one record, a plain flagged read takes the newest window.
+  let read
+  if (archived) {
+    read = archivedTarget === undefined
+      ? { lookup: false, ...(await readArchive(dataDir, leadSessionId)) }
+      : { lookup: true, ...(await findArchive(dataDir, leadSessionId, archivedTarget)) }
+  }
+  const foundRecords = read === undefined
+    ? []
+    : (read.lookup ? (read.found === undefined ? [] : [read.found]) : read.records)
   // A row's succession edge resolves against what this read is holding, so the flag decides whether an
   // archived target is resolvable at all: with it, an edge to a member whose record left the roster reports
   // its target; without it, the bare id the roster can still name, which is ADR 0030's answer.
-  const resolvable = read === undefined ? roster.members : [...roster.members, ...read.records.map((entry) => entry.member)]
+  const resolvable = read === undefined ? roster.members : [...roster.members, ...foundRecords.map((entry) => entry.member)]
   const rows = roster.members.map((member) => memberRow(ctx, member, leadRoute, resolvable))
-  for (const entry of read?.records ?? []) {
+  for (const entry of foundRecords) {
     rows.push({
       ...memberRow(ctx, entry.member, leadRoute, resolvable),
       // Marked, and marked with when: a row read from the archive is history rather than a member the
@@ -881,6 +899,10 @@ export async function listMembers({
   const archiveFile = read === undefined
     ? (archivedRecords > 0 ? join(dataDir, ARCHIVE_FILE_NAME) : undefined)
     : read.path
+  // A lookup that found nothing is an answer, and it has to look like one: a caller handed an empty list
+  // cannot tell "this member was never archived" from "the read failed", so the sentence names what was
+  // searched for and how much of the file was read to say so (ADR 0036).
+  const miss = read !== undefined && read.lookup && read.found === undefined
   return {
     members: rows,
     ...swept,
@@ -888,12 +910,18 @@ export async function listMembers({
     // reader that was told nothing would mistake the window for the whole team.
     archived_records: archivedRecords,
     ...(archiveFile === undefined ? {} : { archive_file: archiveFile }),
+    ...(miss ? {
+      message: `Nothing in ${read.path ?? 'the archive'} matches "${archivedTarget}" as a target or a member id: ${read.scanned} line(s) scanned, ${read.total} archived record(s) for this Lead, none of them that member.`,
+    } : {}),
     // With the flag, what the file itself holds: how many of this Lead's archived tombstones came back and
     // how many exist, so the newest-of-a-bounded-read never looks like the whole history (ADR 0035). The
-    // two are read from the file and the record respectively, which is why they are two numbers.
+    // two are read from the file and the record respectively, which is why they are two numbers. A lookup
+    // adds the scan's own cost, because reading a whole file to answer with one row is what the lookup
+    // spends and `archived_scanned` is where it says so (ADR 0036).
     ...(read === undefined ? {} : {
-      archived_returned: read.records.length,
+      archived_returned: foundRecords.length,
       archived_total: read.total,
+      ...(read.lookup ? { archived_scanned: read.scanned } : {}),
       ...(read.unreadable > 0 ? { archived_unreadable: read.unreadable } : {}),
     }),
   }

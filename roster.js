@@ -817,55 +817,46 @@ export async function findArchived(dataDir, target) {
 }
 
 /**
- * How many archived tombstones one read returns. ADR 0035 fixes the number and this is where it lives.
- *
- * The archive is append-only and unbounded by design — ADR 0030: an archive that deletes is not an archive
- * — so a read that returned all of it would make `list_members` a way to load an unbounded file into one
- * response. The newest `ARCHIVE_READ_LIMIT` come back, the real total comes back beside them, and the
- * tool's description declares the number: a cap the caller cannot read is a cap it will discover by
- * counting.
- */
-export const ARCHIVE_READ_LIMIT = 50
-
-/**
- * Read one Lead's archived tombstones out of `<dataDir>/archive.jsonl`.
+ * Read and decode `<dataDir>/archive.jsonl` for one Lead, once.
  *
  * **This is not the hot path, by construction.** ADR 0030 forbids reading the archive behind an ordinary
  * read, and nothing calls this function unless the caller asked for it — `list_members { archived: true }`
- * is the caller saying "I know this is a file read, do it" (ADR 0035). A plain `list_members` never opens
- * the file, which is a property of the call site rather than of this function, and a test holds a spy
- * there so the property fails loudly if a later read grows the habit.
+ * is the caller saying "I know this is a file read, do it" (ADR 0035, ADR 0036). A plain `list_members`
+ * never opens the file, which is a property of the call site rather than of this function, and a test holds
+ * a spy there so the property fails loudly if a later read grows the habit.
  *
  * The file is one append-only history for every Lead in the data root, so three things are this reader's
  * job and none of them is the writer's:
  *
  *   - **one Lead's records only** — the line records the `leadSessionId` it was written for, and another
  *     Lead's tombstones must never appear in this answer;
- *   - **one row per member id** — a line is appended *before* the roster is replaced, so a crash between
- *     the two leaves the same record twice (a duplicate an append-only history can live with). The reader
- *     keys by member id, so the second line replaces the first instead of adding a row, and the surviving
+ *   - **one entry per member id** — a line is appended *before* the roster is replaced, so a crash between
+ *     the two leaves the same record twice (a duplicate an append-only history can live with). The map is
+ *     keyed by member id, so the second line replaces the first instead of adding a row, and the surviving
  *     entry carries the newest line that named that member;
  *   - **a damaged line is counted, not raised** — a crash mid-append leaves a partial last line, and a
  *     truncated line must not fail the whole read. It is skipped and counted, and the caller reports the
  *     count.
  *
- * The order of the returned records is the file's own order: an append-only file's tail is what happened
- * last, which does not depend on any clock agreeing with another.
+ * Both readers below are this scan plus a selection, so a lookup and a capped read cannot disagree about
+ * what the file says.
  * @param {string} dataDir - the data directory in effect (the bound root).
  * @param {string} leadSessionId - the Lead this read answers for.
- * @param {{limit?: number}} [options] - the cap; defaults to `ARCHIVE_READ_LIMIT`.
- * @returns {Promise<{path: string|undefined, records: Array<{archivedAt: string|undefined, member: object}>,
- *   total: number, unreadable: number}>} the newest records, how many exist, and how many lines were skipped.
+ * @returns {Promise<{path: string|undefined, byMember: Map<string, {archivedAt: string|undefined,
+ *   member: object}>, scanned: number, unreadable: number}>} the decoded history, how many lines were
+ *   examined, and how many of them were damaged.
  */
-export async function readArchivedRecords(dataDir, leadSessionId, { limit = ARCHIVE_READ_LIMIT } = {}) {
+async function scanArchive(dataDir, leadSessionId) {
   const path = join(dataDir, ARCHIVE_FILE_NAME)
   const text = await readFile(path, 'utf8').catch(() => undefined)
   // A missing archive is not an error: the flag asks for something that may never have been written.
-  if (text === undefined) return { path: undefined, records: [], total: 0, unreadable: 0 }
+  if (text === undefined) return { path: undefined, byMember: new Map(), scanned: 0, unreadable: 0 }
   const byMember = new Map()
+  let scanned = 0
   let unreadable = 0
   for (const line of text.split('\n')) {
     if (line.trim() === '') continue
+    scanned += 1
     let row
     try {
       row = JSON.parse(line)
@@ -885,11 +876,36 @@ export async function readArchivedRecords(dataDir, leadSessionId, { limit = ARCH
       unreadable += 1
       continue
     }
-    // Keyed by member id: a repeated line replaces the entry rather than adding a row, which is what makes
-    // the crash window harmless. A `Map` keeps the first position and takes the newest value, so the
-    // surviving entry carries the latest line that named this member.
     byMember.set(member.memberId, { archivedAt: typeof row.archivedAt === 'string' ? row.archivedAt : undefined, member })
   }
+  return { path, byMember, scanned, unreadable }
+}
+
+/**
+ * How many archived tombstones one read returns. ADR 0035 fixes the number and this is where it lives.
+ *
+ * The archive is append-only and unbounded by design — ADR 0030: an archive that deletes is not an archive
+ * — so a read that returned all of it would make `list_members` a way to load an unbounded file into one
+ * response. The newest `ARCHIVE_READ_LIMIT` come back, the real total comes back beside them, and the
+ * tool's description declares the number: a cap the caller cannot read is a cap it will discover by
+ * counting.
+ *
+ * A **lookup is not bounded by this**, and that is the deliberate difference (ADR 0036): it scans the whole
+ * file and returns one row, because the alternative is that the twenty-four records past the newest fifty
+ * are unreachable by any tool. The cap bounds what an *answer* carries, not what a search may read.
+ */
+export const ARCHIVE_READ_LIMIT = 50
+
+/**
+ * The newest archived tombstones of one Lead, bounded.
+ * @param {string} dataDir - the data directory in effect (the bound root).
+ * @param {string} leadSessionId - the Lead this read answers for.
+ * @param {{limit?: number}} [options] - the cap; defaults to `ARCHIVE_READ_LIMIT`.
+ * @returns {Promise<{path: string|undefined, records: Array<{archivedAt: string|undefined, member: object}>,
+ *   total: number, unreadable: number}>} the newest records, how many exist, and how many lines were skipped.
+ */
+export async function readArchivedRecords(dataDir, leadSessionId, { limit = ARCHIVE_READ_LIMIT } = {}) {
+  const { path, byMember, unreadable } = await scanArchive(dataDir, leadSessionId)
   const ordered = [...byMember.values()]
   return {
     path,
@@ -897,6 +913,36 @@ export async function readArchivedRecords(dataDir, leadSessionId, { limit = ARCH
     total: ordered.length,
     unreadable,
   }
+}
+
+/**
+ * One archived tombstone, found by identity rather than by recency (ADR 0036).
+ *
+ * This is the door the cap left out: `readArchivedRecords` answers with the newest fifty, and the archive's
+ * own question — "what happened to this member?" — has to be answerable for the rest, so this scan is
+ * **unbounded on purpose**. The trade is stated rather than hidden: reading an append-only file once to
+ * return one row is the cost of the question being answerable at all, and `scanned` reports what it cost.
+ *
+ * **Identity, never prose.** The caller may hold the model-facing target (`reviewer-g2`, from an edge's
+ * `successor.target` or from memory) or the raw `member_id` (from the edge itself), and both are matched:
+ * the target through `targetOf`, which is the plugin's own name+generation rule, and the id by equality. A
+ * `label`, an `assignment` or a sentence such as `"Replaced by reviewer-g2"` is never consulted, because a
+ * target that appears inside a sentence is not the same claim as a record that *is* that member.
+ * @param {string} dataDir - the data directory in effect (the bound root).
+ * @param {string} leadSessionId - the Lead this read answers for.
+ * @param {string} target - the model-facing target or the member id to find.
+ * @returns {Promise<{path: string|undefined, found: {archivedAt: string|undefined, member: object}|undefined,
+ *   total: number, scanned: number, unreadable: number}>} the record, or undefined with the cost of saying so.
+ */
+export async function findArchivedRecord(dataDir, leadSessionId, target) {
+  const { path, byMember, scanned, unreadable } = await scanArchive(dataDir, leadSessionId)
+  let found
+  for (const entry of byMember.values()) {
+    if (entry.member.memberId === target || targetOf(entry.member) === target) found = entry
+  }
+  // The last match wins, so a record that appears twice — the crash window — is answered by its newest line,
+  // exactly as the capped read answers it.
+  return { path, found, total: byMember.size, scanned, unreadable }
 }
 
 /**
