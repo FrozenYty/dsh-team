@@ -25,7 +25,8 @@ retireReason  模型给出的退役原因（如果给了）
 trashDir      退役给这个回收站目录起的名字，在墓碑上；也是数据根移动后仍然成立的那一部分
 trashRelPath  该目录相对数据根的位置，在墓碑上；绝对路径在读取时才算出
 trashPath     某次移动用过的绝对路径，仅出现在 v0.26.0 之前写下的墓碑上
-originalPath  该产物原来的位置，使恢复是移动而不是猜测
+originalRelPath  该产物来自哪里，相对会话根：`<slug>/<leaf>`，用正斜杠；当产物不在以该成员命名的目录里时缺省（ADR 0034）
+originalPath  在 **v0.34.0 之前**写下的记录携带的绝对来源；作为遗留腿读取，不再被写入，使恢复是移动而不是猜测
 trashKind     移动的是什么：会话目录为 `directory`，单个产物文件为 `file`
 trashState    移动在途时为 `pending`，落地后为 `done`，压根没有可移动之物时为 `none`，
               移动已落地但产物后来被保留上限剪除时为 `pruned`（member-lifecycle §4）
@@ -64,7 +65,7 @@ tasks         在花名册记录上、不在成员上：这个 Lead 的工作板
 有一个字段属于花名册而不是成员：`retiredChildIds` 列出这个 Lead 曾经有过的全部已退役子会话 id，**包括已归档的那些**，并且每次写入都会重写它，因此被恢复的成员会从中离开。官方宿主钩子是**按子会话 id** 摘除面板行的，所以让已退役成员不出现在那里的，是这份 id 列表而不是墓碑本身（ADR 0030）。
 
 `trashState` 与 `phase` 一样会在加载时校验：未知值会被拒绝，而不是被猜测。`pruned` 保留
-`trashDir`、`trashKind` 与 `originalPath`——墓碑仍记录哪个目录被剪除了、产物原本从哪里来，而 v0.26.0 之前
+`trashDir`、`trashKind` 与它记录下来的来源——`originalRelPath`，或 v0.34.0 之前记录里的绝对 `originalPath`——墓碑仍记录哪个目录被剪除了、产物原本从哪里来，而 v0.26.0 之前
 写下的记录保留的是它的绝对 `trashPath`——并且是唯一会让
 `restore_member` 在不做任何移动的情况下直接给出带类型拒绝的取值（ADR 0028）。
 

@@ -31,7 +31,10 @@ retireReason  the reason the model gave for the retirement, when it gave one
 trashDir      the name retirement gave the trash directory, on a tombstone; the part that survives the root moving
 trashRelPath  where that directory sits under the data root, on a tombstone; the absolute path is read-time
 trashPath     the absolute path a move used, present only on a tombstone written before v0.26.0
-originalPath  where that artifact came from, so restore is a move and not a guess
+originalRelPath  where that artifact came from, relative to the sessions root: `<slug>/<leaf>` with forward
+              slashes, absent when the artifact was not in a directory named after the member (ADR 0034)
+originalPath  the absolute origin a record written **before** v0.34.0 carries; read as a legacy leg, never
+              written any more, so restore is a move and not a guess
 trashKind     what was moved: `directory` for the Session directory, `file` for a single artifact
 trashState    `pending` while the move is in flight, `done` once it landed, `none` when there was none,
               `pruned` when the move landed and the retention cap later removed the artifact (member-lifecycle §4)
@@ -80,7 +83,8 @@ restored member leaves it. The host hooks strip the shipped panels **by child id
 tombstone — is what keeps a retired member out of them (ADR 0030).
 
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
-`pruned` keeps `trashDir` and `trashKind` and `originalPath` — the tombstone still says which directory
+`pruned` keeps `trashDir` and `trashKind` and the origin it recorded — `originalRelPath`, or the absolute
+`originalPath` a pre-v0.34.0 record carries — so the tombstone still says which directory
 went and where the artifact came from, and a record written before v0.26.0 keeps its absolute `trashPath`
 instead — and is the only value that makes `restore_member` a typed refusal without a move (ADR 0028).
 
