@@ -312,7 +312,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
 - [x] **P4-04** File the missing lifecycle upstream with the evidence gathered here. (Was labelled
   P4-03 until v0.8.0; that ID belongs to the retention task, and two tasks sharing one ID made the
   reference ambiguous.)
-  Delivered (v0.14.0): `docs/upstream-lifecycle-gap.md` states the gap — the closed phases and the
+  Delivered (v0.14.0): `docs/upstream-lifecycle-gap-en.md` states the gap — the closed phases and the
   permanent projection failure, the absent Session-deletion API, the frozen stored names — with every
   claim cited by file and line to this repository's own evidence, plus one short section of suggestions.
   It is registered in both indexes. The document is the paste-ready issue text; opening the issue against
@@ -446,9 +446,9 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   proven to hold both languages rather than merely named so, root documents are handled explicitly rather
   than falling through the scan, and the rule is stated in `CONTRIBUTING.md`.
   Delivered (the external review's §3): `scripts/check.mjs` classifies every top-level `docs/*.md` and fails
-  the ones it cannot, with `SINGLE_LANGUAGE_DOCS` as the only escape — one entry today,
-  `upstream-lifecycle-gap.md`, because that document is the issue-ready statement of the gap addressed to the
-  English-language upstream tracker. The allow-list was chosen over a naming convention because it carries
+  the ones it cannot, with `SINGLE_LANGUAGE_DOCS` as the only escape — empty since the document that needed
+  it, `docs/upstream-lifecycle-gap-en.md`, became a real pair with a `-zh.md` beside it. The allow-list was
+  chosen over a naming convention because it carries
   the reason, fails closed, and detects a stale entry. Only `scripts/check.mjs` and `CONTRIBUTING.md`
   changed; no `docs/` file was touched, which leaves the parallel split of `docs/` to be classified by the
   new rule when it lands. All four branches were proved able to fail by temporary probes that each named
