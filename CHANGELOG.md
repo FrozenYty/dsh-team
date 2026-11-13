@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.28.4] - 2026-11-13
+
+- The Host's own validator accepts every schema, and the one keyword outside its subset is explained.
+
 ## [0.28.3] - 2026-11-13
 
 - The README presents what a reader can weigh, and the migration's run is recorded at last.

@@ -18,7 +18,7 @@ the roster and has no browser half.
 
 ## Status
 
-- Current version: v0.28.3.
+- Current version: v0.28.4.
 - **Exercised in a real profile on this machine.** Retirement, restore, message, stop, a replacement whose
   successor finished the predecessor's work, the trash cap and its refusal at load, the handoff template,
   spawn options and the forwarded route, the task board and its transfer, the three host hooks, and the
@@ -36,6 +36,14 @@ the roster and has no browser half.
   fixed**: for a record whose bytes the retention cap had deleted, `restore_member` answered
   `reason: "pruned"`, and for a spawned one it answered `trash-missing` with **no `reason` field at all**.
   Both answers are in `PROGRESS.md`, and the trash held 20 directories before and after each probe.
+- **Asked the Host's own validator, out of the installed archive.** `scripts/schema-check.mjs` extracts
+  `@deepseek-ai/dsh-tools` 0.2.2-rc.1 from the asar and runs the functions the registry itself runs:
+  `assertSupportedJsonSchema` accepted **11 of 11 output schemas**, `validateJsonSchemaValue` accepted
+  **13 real results**, and the Host rejected nothing. Three parameter schemas use `maxLength`, which is
+  outside the Host's keyword subset — and the check established *why* that survives rather than merely
+  that it does: `register()` asserts `output.schema` only and projects parameters to the model unasserted,
+  so a cap is enforced by the action when the value arrives, not at the schema boundary. It is a local
+  check and not a CI gate, because CI has no Harness.
 - **Not covered yet**: activation in anyone else's profile — `scripts/check.mjs` never loads the Harness,
   so no repository can prove that; a Harness build whose services or storage layout differ from the
   installed one; and the `rename` fast path of the trash move, which this machine never took, because its

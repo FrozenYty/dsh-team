@@ -2493,3 +2493,52 @@
   the storage move has no box to tick, and inventing one after the fact would be a task written to be
   completed rather than to be done.
 - **Version.** `0.28.3`: documents only. No code, no stored shape, no shipped file.
+
+## 2026-11-13 — the Host's own validator accepts every schema, and the keyword outside its subset is explained (v0.28.4)
+
+- **What was never asked, and is asked now.** `scripts/check.mjs` validates the manifest, the published
+  files, locale parity, the patch rows and that every `execute(` declares `(args, exec)` — and it has
+  always carried a hand-copied list of forbidden JSON-Schema keywords. It never asked **the Host** whether
+  the schemas were acceptable, and the Host is the thing that decides whether a tool exists at all: a
+  keyword outside its subset does not fail one tool, it fails the plugin's activation. `scripts/check.mjs`
+  cannot close that gap because it never loads the Harness; the validator, however, is a pure function
+  inside the archive, which makes this the one Host-side check a repository *can* carry.
+- **How it reaches the Host's code without packing or unpacking 213 MB.** `scripts/schema-check.mjs` reads
+  the archive by its own header, extracts the validator and its module closure into a temporary directory
+  that preserves the package boundaries, and imports the package entry the Host itself imports
+  (`@deepseek-ai/dsh-tools/lib/index.js`) — so the code instance is the same one, not a copy of it.
+- **The verdict: nothing was rejected.** `assertSupportedJsonSchema` accepted **11 of 11 output schemas**,
+  `validateJsonSchemaValue` accepted **13 real results** produced through the tools' own wrappers, and the
+  Host rejected nothing. The validator names itself from the archive: `@deepseek-ai/dsh-tools 0.2.2-rc.1`,
+  `assertSupportedJsonSchema` / `assertObjectJsonSchema` / `validateJsonSchemaValue`, `JsonSchemaError`
+  (code `UNSUPPORTED_SCHEMA`).
+- **Three assumptions came out of the notes as facts.** (1) Three parameter schemas use `maxLength` —
+  `spawn_member.assignment`, `message_member.assignment`, `handoff_template.template` — which is outside the
+  subset, and the check explains *why* it survives rather than merely that it does: `register()` asserts
+  `output.schema` only and projects a parameter schema to the model unasserted, so the cap is enforced by
+  the action when the value arrives, not at the schema boundary. **Decision: the keyword stays** — the model
+  gets a machine-readable range, the action enforces it, and the Host does not object; the comment in
+  `check.mjs` that used to say "the host tolerates it" now states the mechanism and cites the check that
+  established it. (2) `spawn_member`'s output schema is not object-rooted — its root is a `oneOf` over the
+  started and refused answers — and the registry accepts it, because the assertion it runs is the subset
+  assertion and not the object-root one; a note, not a defect, and only a problem if that schema were handed
+  to a path that demands an object root. (3) Everything else is within the subset.
+- **Verification.** 254 tests pass, seven of them new, and the new ones need **no archive at all**: a
+  synthetic archive with the same layout exercises the header read and the per-file byte ranges, the
+  specifier scan covers `import … from`, bare `import`, re-exports and dynamic `import()` while skipping
+  comments, resolution walks `node_modules` and relative paths, and a stand-in validator drives the verdict
+  logic. Three probes were each shown to fail by name — a wrong header field, a suppressed output-schema
+  rejection, and a parameter note counted as a failure. The first of those is the implementer's own bug
+  reproduced as a test: it hit it twice while writing the script, which is why the test builds an archive
+  instead of mocking the reader.
+- **What this cannot do, stated so nobody leans on it.** It is a **local** check and deliberately not a CI
+  gate, because CI has no Harness; a Host upgrade can change the verdict and nothing will announce it. The
+  real results come from a minimal fixture context, so a live profile's shapes — `list_members` against a
+  real roster, `wait_members` against a real child session — are outside it. And it proves nothing about
+  activation: a schema the Host accepts still waits for a profile to show a tool exists.
+- **The README pair carries the conclusion**, because a check nobody can see is a check nobody trusts: both
+  sides of the Status gained the bullet, in the same commit and in parity. That edit is the Lead's at merge
+  rather than the document lane's, because the evidence is this release's own output and the lane would have
+  had to re-derive it from a PR.
+- **Version.** `0.28.4`: a local script, its tests, and one bullet in each README. No bundle file, no stored
+  shape, no behaviour of the plugin.
