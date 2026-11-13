@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.38.4] - 2026-11-14
+
+- The retention default is decided on a measurement, and it is the failure that sets its direction.
+
 ## [0.38.3] - 2026-11-14
 
 - The spend field's three sources are decided, and the one sentence they replace is named.

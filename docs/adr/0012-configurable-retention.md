@@ -1,6 +1,8 @@
 # 0012 — The trash cap is a config field, not a constant
 
-- **Status:** Accepted
+- **Status:** Accepted. **Its default value is replaced by
+  [0039](0039-retention-default.md)** (`DEFAULT_TRASH_LIMIT` becomes 200); the mechanism this ADR decided —
+  the field, the minimum, the refusal — is untouched.
 - **Date:** 2026-11-11
 - **Supersedes [0011](0011-trash-retention.md) for point 1 only** — *"A fixed per-Lead cap: `TRASH_LIMIT = 20` … the constant is fixed on purpose."* Points 2–7 of 0011 stand unchanged: enforcement happens only inside a retirement that moved an artifact in, oldest first, conservatively about what it touches, never a move in flight, the tombstone stays truthful, and the result is reported.
 
