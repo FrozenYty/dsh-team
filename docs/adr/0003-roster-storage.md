@@ -6,6 +6,10 @@
 - **Superseded by [0010](0010-roster-layout-and-retention.md)** for the record layout only. This ADR's
   "one record per member plus a per-Lead index" was never implemented; the store, the hand-written spec
   and the single-file warning below all still stand.
+- **Superseded by [0027](0027-roster-file-under-the-workspace.md) for the store clause only** — the roster
+  is now this plugin's own `roster.json` under the workspace, and `ctx.storageDomain` is the one-time
+  import source and the rollback path. The hand-written spec, the single-file warning below and ADR 0001's
+  ownership decision still stand; only "the roster lives in `ctx.storageDomain`" no longer holds.
 
 ## Context
 

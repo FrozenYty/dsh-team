@@ -240,10 +240,11 @@ half-finished. What `retire_member` does, in the order the code does it:
    record and an artifact that is either unmoved or already trashed; `pending` says which is unknown and
    restore looks in the trash first, so both cases are recoverable.
 4. **Move the artifact, then confirm.** The persisted Session moves into the plugin's trash directory and
-   the record is confirmed with `trashState: 'done'`, its `trashPath`, `originalPath` and `trashKind`.
+   the record is confirmed with `trashState: 'done'`, its `trashDir`, `trashRelPath`, `originalPath` and
+   `trashKind`.
    When no artifact can be moved, the workspace archive hides the Session instead, the intended trash
    fields are dropped, and the record and the result say that this is what happened (`archived: true`,
-   `trashState: 'none'`). `archived` and `trashPath` are mutually exclusive: the archive branch runs only
+   `trashState: 'none'`). `archived` and `trashDir` are mutually exclusive: the archive branch runs only
    when no move happened.
 
 5. **Bound the trash, only here.** A retirement that moved an artifact in enforces this Lead's
@@ -289,10 +290,13 @@ is `docs/handoff-en.md` `docs/architecture-en.md` §1.
 
 ## 4. A retirement moves the artifact
 
-`retire_member` tombstones the record *before* it touches the filesystem, carrying the trash path the
+`retire_member` tombstones the record *before* it touches the filesystem, carrying the trash directory the
 move is about to use and a `trashState: 'pending'` marker, then moves the persisted Session into
-`~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/` and confirms the record with
-`trashState: 'done'`; §3 owns those steps. The order is deliberate: a crash between the two leaves a
+`<data root>/trash/<leadSessionId>/<childId>-<ms>/` and confirms the record with
+`trashState: 'done'`; §3 owns those steps. The name carries the **child Session id**, which is not the
+record's `memberId`, and the record stores it as `trashDir` with its `trashRelPath` instead of an absolute
+path, so the artifact is still found after the data root moves (ADR 0028). The order is deliberate: a
+crash between the two leaves a
 `retired` row beside an artifact that is either still in place or already in the trash — recoverable in
 both cases, because `pending` says the move may or may not have happened and restore looks in the trash
 first. The reverse order would leave a trashed session behind an `active` record, which no later read

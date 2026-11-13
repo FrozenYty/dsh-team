@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** —
+- **Superseded by [0028](0028-trash-directory-name-not-path.md) for the `trashPath` comparison only** — a
+  tombstone fact is a trash directory name and its root-relative path now, not an absolute path, so
+  "exactly like `trashPath`" reads "exactly like the trash directory name". Everything else this ADR
+  decides stands.
 
 ## Context
 
