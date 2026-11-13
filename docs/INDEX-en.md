@@ -37,6 +37,7 @@ A design subject is its own document rather than a section of `architecture-`: a
 | How is a successor briefed, and which template wins? | `docs/handoff-en.md` | pair |
 | What is stored, and how is the trash bounded? | `docs/roster-storage-en.md` | pair |
 | What proves the Host still behaves as this plugin expects, and how is a round run? | `docs/live-acceptance-en.md` | pair |
+| How is one archived record found by identity when it is past the cap? | `docs/adr/0036-archive-lookup-by-identity.md` | English |
 | Which model does a member run on, and what bills what? | `docs/routes-en.md` | pair |
 | What has to change when upgrading from an older version? | `docs/upgrading-en.md` | pair |
 | Why is the roster ours instead of the shipped one? | `docs/adr/0001-own-roster-on-subagents.md` | English |
