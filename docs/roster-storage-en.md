@@ -140,17 +140,23 @@ overwriting it (`docs/member-lifecycle-en.md` §1).
 
 ## 4. Where the file lives, and who may write it
 
-**One file per workspace.** The record is this plugin's own `roster.json` under `.agents/team/` in the
-Lead's workspace, beside the memory notebook, with its import marker, `provenance.json` and
-`archive.jsonl` beside it, and the trash sits under the same root; a profile that sets
-`DSH_TEAM_DATA_DIR`, or the frozen `DSH_TEAM_ROSTER_DATA_DIR`, uses that directory instead (ADR 0014). A
-Lead binds to its root the first time it uses it and the binding lives in the running process, so a
-`working_directory` call later in the same session cannot move the root and orphan what it already wrote. A
-Session whose workspace cannot be resolved keeps using the storage domain instead, and `list_members` says
-so in `storage`. The domain is never written once a file exists and is never deleted: it is the one-time
-import source, and deleting `roster.json` is the rollback. Records are replaced by a temporary file plus a
-rename, so a crash leaves either the whole previous file or the whole new one; a file that cannot be read,
-or that holds one record the loader refuses, falls back to the domain rather than throwing.
+**Every Session has a root, and the state is files only.** The root is chosen in this order: the
+`DSH_TEAM_DATA_DIR` override (or the frozen `DSH_TEAM_ROSTER_DATA_DIR`), then `.agents/team/` in the
+Lead's workspace, then the frozen `<home>/.dsh/team-roster`. A Lead binds to its root the first time it
+uses it and the binding lives in the running process, so a `working_directory` call later in the same
+session cannot move the root and orphan what it already wrote. A write with no bound root **throws naming
+that invariant**: every Session is bound, so it is a caller that never bound the Lead rather than a reason
+to fall through to the storage domain. The record is this plugin's own `roster.json` under that root, with
+its import marker, `provenance.json` and `archive.jsonl` beside it, and the trash under the same root.
+A new root with no `roster.json` reads its records **once** from `DSH_TEAM_SEED`, a file the person names,
+which accepts this plugin's own shape or a storage-domain dump and is never written; a seed that is
+configured and unusable is a **problem, not a fallback** — the root stays empty and `list_members` says why
+(ADR 0031). The storage domain **answers no read**: it is the last leg of the import order,
+`seed → domain → nothing`, it is opened once more for one release only to migrate a profile that has never
+bound a workspace, and on this machine its file has been deleted (ADR 0014, ADR 0031). Records are replaced
+by a temporary file plus a rename, so a crash leaves either the whole previous file or the whole new one.
+`storage.source` is `'file'`, or `'none'` for a Lead this process has never bound — a file that cannot be
+read is reported as `source: 'file'` with a `read_problem`, never as a fallback to the domain.
 
 **One writer per workspace.** Two Lead Sessions in one workspace share that file by design, and nothing
 serializes them — a lock file would add a stale-lock failure mode that nothing cleans up. Every write
