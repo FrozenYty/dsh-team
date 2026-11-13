@@ -2450,3 +2450,46 @@
   `--apply` will be imported by the plugin in the old layout, so `records rewritten` may be less than 20 on a
   later run. Re-running the migration is safe by design, which is the point of making it idempotent.
 - **Version.** `0.28.2`: a script and its tests. No bundle file, no stored shape, no behaviour of the plugin.
+
+## 2026-11-13 — the README presents what a reader can weigh, and the migration's run is recorded at last (v0.28.3)
+
+- **The presentation the owner asked for.** After seeing how two sibling plugins introduce themselves, the
+  README pair gained a badge row, the `English | 中文` switch, and a three-part `Status`: what was exercised
+  in a real profile, what was checked with something stronger than a reading, and what is **not** covered.
+  **Only badges the repository can prove** — ci (`.github/workflows/ci.yml` exists), MIT (`LICENSE`), no
+  dependencies, no build step. **No DSH-version badge, deliberately**: nothing here claims a Harness range,
+  `engines` names Node, and a badge asserting a fact nobody maintains is worse than no badge.
+- **Every number in the Status has a source, and one had none until this entry.** The README states 110
+  records, 20 artifacts moved, 46 reconciled to `pruned`, 44 left alone, 0 refused, and **4,913,598 bytes**.
+  All but the last trace to earlier entries; the byte total was measured two ways on disk — the sum of the
+  `move` rows in the backup manifest, and the size of the destination directory — and both read 4,913,598,
+  which is the only reason the word "verified" appears beside it. The document lane **reported the gap
+  instead of quietly leaving an unsourced figure in a merged file**, which is why this paragraph exists.
+- **The record the previous entry could not carry, because it was written before the run.** v0.28.2 says
+  `--apply` "has not run against real data and will not until the owner reads the plan and says go". It has
+  since run, with that consent: **20 artifacts moved, 20 records rewritten, 46 reconciled to `pruned`, 44
+  left alone by reason, 0 refused** — and the destination verified **byte for byte** at 4,913,598 across 20
+  files, with the old trash root left empty and two backup stamps on disk, both planning the same 20/46/44,
+  so the plan is stable across attempts.
+- **The first attempt failed, and the failure was worth more than a success would have been.** The rename
+  raised `EPERM` rather than the `EXDEV` the script anticipated: the *source* directories live outside the
+  workspace and `workspace-write` refuses a delete there — same-volume and cross-volume probes both returned
+  `EPERM`, so it was policy, not an errno quirk. **The consequence was zero**: backup written, destination 0,
+  source 20, roster untouched, `serial` unchanged. The remedy was the one the rules ask for — the same
+  command, once, with a wider sandbox and the reason named — never a workaround, and never a silent retry.
+- **Three live acceptances after the restart, and they are the point of the whole day.** `eph-alpha`, which
+  before the migration answered `trash-missing` with **no `reason` field**, now answers the typed
+  `reason: "pruned"` — the 46 reconciled tombstones are correct where the plugin can see them.
+  `restore_member bare-standing-probe` answered `restored: true, reason: "moved-back"` and the 40,748-byte
+  artifact returned to its `originalPath`, found at the **workspace** root through `trashRelPath`. Retiring
+  it again wrote `trash_path` under `<workspace>/.agents/team/trash/…` with a fresh stamp, and the record now
+  carries `trashDir` + `trashRelPath` and **no `trashPath`** — the plugin writes the new shape natively,
+  which is the one thing a migration cannot prove about its own host.
+- **74 records still carry an absolute `trashPath`, and that is correct rather than unfinished.** Their
+  artifacts are gone — 28 pruned before the migration and 46 by it — so there is nothing to rewrite relative
+  to a root; ADR 0028 says a pruned tombstone keeps what it recorded, and the retention cap matches those
+  records by directory name precisely because a name is the part that survives the root moving.
+- **No `PLAN.md` box is owed.** Its tasks predate this work and its store task (P2-01) was closed long ago;
+  the storage move has no box to tick, and inventing one after the fact would be a task written to be
+  completed rather than to be done.
+- **Version.** `0.28.3`: documents only. No code, no stored shape, no shipped file.
