@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.38.0] - 2026-11-14
+
+- A member row says what it has spent, and omits the number rather than inventing a zero.
+
 ## [0.37.1] - 2026-11-14
 
 - The lookup's decision is recorded, and a status that would have gone stale was caught.
