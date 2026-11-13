@@ -27,9 +27,9 @@ extending it is what the plugin avoids.
 
 Two layers, and they must not be confused:
 
-- **The bundle** (`package.json` and the ten files its `files` list publishes: `index.js`, `actions.js`,
-  `roster.js`, `definitions.js`, `trash.js`, `host-hooks.js`, `cordis.patch.yml`, `locale/en.json`,
-  `locale/zh.json`, `icon.svg`) is
+- **The bundle** (`package.json` and the files its `files` list publishes: `index.js`, `actions.js`,
+  `roster.js`, `definitions.js`, `trash.js`, `host-hooks.js`, `cordis.patch.yml`, `locale/*.json`,
+  `icon.svg`, `templates/`) is
   what gets installed into a profile. It is linked from this repository, so no build step exists.
   It has no browser half: every surface is a model-facing tool (ADR 0008).
 - **The Harness** is the host. Its APIs are read from the installed asar, never from this repository.
