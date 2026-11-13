@@ -2244,3 +2244,62 @@
   release, and no document was touched.
 - **Version.** `0.27.1`: a wrong answer was corrected. The tool surface, the stored shape and the location
   of the data are unchanged.
+
+## 2026-11-13 — the decisions that moved the data are now recorded, and the statements they disproved are gone (v0.27.2)
+
+- **Two ADRs, not the four the plan named.** ADR **0027** records that the roster is a file the plugin owns
+  at `<workspace>/.agents/team/roster.json` and that the storage domain is demoted to import source and
+  rollback; ADR **0028** records that a tombstone carries a directory name and a relative path, that the
+  absolute path is a read-time computation, that restore has three legs, that the cap matches by directory
+  name, and that the name carries the **child Session id** while the flip uses the record's `memberId`. The
+  four collapsed because "the cap's matching rule" and "the id naming" are one subject — a name that is the
+  matching key is *why* the ids matter. ADR 0018 and 0021 were read and produce **no** ADR: both locate
+  `team/` through the `workingDirectory` service at call time, which the roster root does not change, so
+  that coexistence is recorded as a consequence of 0027 instead. An ADR that exists to restate something
+  unchanged is a document nobody maintains.
+- **The code review that mattered more than either ADR.** ADR 0027 as first written said the marker beside
+  `roster.json` is what stops a repeated import, and that "once the marker exists, an empty `roster.json` is
+  empty, not a cue to re-import". Reading `roster.js` disproved both: `importLead` guards on whether the
+  content it serves holds a record for that Lead and on nothing else, `writeMarker`'s own comment says its
+  purpose is that "a reader can tell where the records came from", and the only read of the marker in the
+  file is inside `writeMarker` itself. **The fix went into the document, not the code**, because the code's
+  behaviour is what makes "delete `roster.json`" a complete rollback: if the marker gated the import,
+  deleting the file would leave the workspace serving an empty roster while the domain still held the
+  records — a documented rollback that rolled nothing back. The scribe then found a **third** instance of
+  the same claim on its own: the Migration paragraph said rolling back is deleting the file *and* the
+  marker, where the "and" quietly restated the thing just disproved.
+- **One claim in those ADRs is now falsifiable by a command.** ADRs cite documents; they have never been
+  able to cite behaviour, which is why no check in this repository could catch either false statement — the
+  scribe observed that `scripts/check.mjs` resolves citations and sections but never claims, and that the
+  only thing that caught all three was a person reading the code. So the rollback paragraph now names the
+  test that proves it, `with the roster file deleted the domain is the source again, and the plugin keeps
+  working` (`tests/store.test.mjs`), which deletes the file, rebinds, and expects the domain's hundred
+  records back and the file rebuilt. A reader who doubts the claim has one test run instead of a paragraph
+  to trust. It is the only claim in either ADR decorated that way, deliberately: names sprinkled for the
+  look of rigour are worse than none.
+- **Every statement the change made false, removed or corrected.** Six bilingual pairs, README included, and
+  the two PLAN lines this file's own rules let the Lead touch. The **four places that called a trash
+  directory `<memberId>-<ms>`** while a retirement has always written `<childId>-<ms>` are the pointed ones:
+  `docs/adr/0004`, `docs/adr/0011` point 3, `docs/member-lifecycle-{en,zh}.md` §4 and
+  `docs/upstream-lifecycle-gap-en.md`. The prose carried the same confusion as the code, which remains the
+  best available explanation for a defect that emptied 46 records' bytes without flipping their state and
+  survived for months. `PLAN.md:152` was corrected by the Lead at merge — the one word that survived
+  because it was outside the document lane's scope.
+- **The survivor list was reported rather than trimmed.** Strings that still read `trashPath` and are still
+  *true* were kept with their reason: the resolver and its plan/result, `actions.js` deleting a legacy field
+  on revive, `trash_path` computed through the resolver, and the new paragraph that deliberately describes
+  the pre-v0.26.0 shape. A stale-looking string that is correct is not debt.
+- **A correction to this file's own `0.27.1` entry.** That entry says the flip defect was "confirmed live"
+  at `v0.26.0`. It was not: a read of the running instance's tool registry and three write probes
+  established that the process serving the tools was **pre-0.26.0** the whole day — a merge writes the
+  linked bundle's files, and that has not been reloading host code on this machine. The conclusion stands
+  and is stronger than stated: the wrong answer was reproduced in the *shipped* code the owner has been
+  running, not in a build of that morning. The defect was pre-existing either way; what was wrong was the
+  version attributed to it.
+- **What this does not do.** `docs/adr/0018`, `docs/adr/0021`, `docs/architecture-{en,zh}.md` and
+  `README.md` still place member definitions at `<workspace>/team/`, which the template release changes to a
+  three-leg chain — reported by that release's lane and left to it. `AGENTS.md` §2 still says the `files`
+  list publishes "ten files", which stopped being true when `templates/` was added. And the team file,
+  `team/team.md`, deliberately did **not** move beside the roster: it is not a member definition and has no
+  shipped counterpart, so moving it is a separate seam and a separate decision.
+- **Version.** `0.27.2`: documents and two comments. No behaviour, no stored shape, no shipped file.

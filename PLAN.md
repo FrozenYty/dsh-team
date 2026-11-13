@@ -149,7 +149,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Session no longer exists, and running it twice leaves the same state.
   Delivered (v0.7.0, ADR 0011): the trash is bounded by a fixed per-Lead cap (`TRASH_LIMIT`, 20),
   enforced only inside a retirement that actually moved an artifact in — oldest first by the
-  `<memberId>-<ms>` stamp, skipping a `pending` move, touching only direct children whose name and
+  `<childId>-<ms>` stamp, skipping a `pending` move, touching only direct children whose name and
   tombstone both parse. A pruned tombstone keeps its `trashDir` and records `trashState: 'pruned'`,
   `restore_member` refuses with `reason: 'pruned'` and never calls the workspace, and the retirement
   reports `pruned`. Pruning twice leaves the same state. The tombstone half is a decision rather than a
