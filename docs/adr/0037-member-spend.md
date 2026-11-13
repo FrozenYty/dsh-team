@@ -2,7 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-14
-- **Supersedes:** — nothing.
+- **Supersedes:** — nothing. **Its resident-only limit is replaced by
+  [0038](0038-spend-three-sources.md)**, which keeps this decision and this field and widens where the number
+  can come from; everything else here stands.
 - **Related:** [0024](0024-forward-the-lead-route.md) (the route a spend is billed on),
   [0035](0035-archive-readable-on-request.md) / [0036](0036-archive-lookup-by-identity.md) (the other
   per-row fields added recently).
