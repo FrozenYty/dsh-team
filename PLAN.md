@@ -153,9 +153,10 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   tombstone both parse. A pruned tombstone keeps its `trashDir` and records `trashState: 'pruned'`,
   `restore_member` refuses with `reason: 'pruned'` and never calls the workspace, and the retirement
   reports `pruned`. Pruning twice leaves the same state. The tombstone half is a decision rather than a
-  deletion: a tombstone is never dropped, because the drained row still sits in the parent's catalog and
-  removing the tombstone re-adopts the member as a live ghost — ADR 0011 records why that alternative was
-  rejected.
+  deletion: a tombstone is never dropped **until its artifact could no longer exist** — it leaves
+  `roster.json` for `archive.jsonl` past the retention window, and its child id stays in `retiredChildIds`
+  so the member cannot be re-adopted as a live ghost (ADR 0011's rejection, superseded for the window case
+  by ADR 0030).
   Changed in v0.8.0 (ADR 0012): the cap is no longer the `TRASH_LIMIT` constant. `apply(ctx, config)`
   resolves the effective limit from the `trashLimit` field of this bundle's patch row, refuses a value that
   is not an integer of at least 1 at load — before any tool is registered — and the retirement enforces and
