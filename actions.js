@@ -49,6 +49,7 @@ import {
   openTasksOf,
   planMember,
   planTask,
+  readArchivedRecords,
   readRoster,
   reownerTasks,
   staleRouteOf,
@@ -825,12 +826,33 @@ export async function sweepEphemeral({
  * This read is one of the two sweep triggers (ADR 0013): it first retires every one-shot member whose
  * turn has ended and which owns no open task, so the rows it returns already show those members as
  * `retired` and the result reports `swept` and `swept_targets` when the sweep retired anyone.
+ *
+ * `archived` is the only thing in this bundle that opens `archive.jsonl` on a read path, and it is the
+ * caller's own decision rather than a threshold someone tuned: ADR 0030 keeps the archive off the hot path,
+ * so `archived: true` **is** the statement "I know this is a file read, do it" (ADR 0035). With the flag
+ * the answer gains this Lead's archived tombstones — bounded by `ARCHIVE_READ_LIMIT`, with the real total
+ * and the number of unreadable lines beside them — and the succession edges on every row resolve against
+ * the roster *and* the archive, so an edge that named an archived member stops being a bare id. Without it
+ * nothing is opened and nothing changes, which is a test rather than an intention.
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
- *   trashLimit?: number}} request
+ *   trashLimit?: number, archived?: boolean, readArchive?: Function}} request - `readArchive` is the seam
+ *   over the one archive read, in the style of the trash path's `renameFn`: a caller that passes its own
+ *   function can prove the plain path never calls it, instead of inferring that from the answer. Production
+ *   never passes it.
  * @returns {Promise<{members: object[]}>} the tool's result object, unchanged.
  */
-export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDir, hooks, trashLimit = DEFAULT_TRASH_LIMIT }) {
+export async function listMembers({
+  ctx,
+  table,
+  leadSessionId,
+  leadAgent,
+  dataDir,
+  hooks,
+  trashLimit = DEFAULT_TRASH_LIMIT,
+  archived = false,
+  readArchive = readArchivedRecords,
+}) {
   const caller = requireLiveLead('list_members', leadSessionId, leadAgent)
   const swept = await sweepEphemeral({ ctx, table, leadSessionId, leadAgent: caller, dataDir, hooks, trashLimit })
   const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
@@ -838,14 +860,42 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
   // a row can say whether that member is still billing an API this Session has left (ADR 0024). An
   // unreadable route leaves every row uncomparable, which is why it is not an error here either.
   const leadRoute = currentRouteOf(caller)
-  const archived = archivedCount(roster)
+  const archivedRecords = archivedCount(roster)
+  // The one archive read in the bundle, and it happens only here, only when the caller asked (ADR 0030).
+  const read = archived ? await readArchive(dataDir, leadSessionId) : undefined
+  // A row's succession edge resolves against what this read is holding, so the flag decides whether an
+  // archived target is resolvable at all: with it, an edge to a member whose record left the roster reports
+  // its target; without it, the bare id the roster can still name, which is ADR 0030's answer.
+  const resolvable = read === undefined ? roster.members : [...roster.members, ...read.records.map((entry) => entry.member)]
+  const rows = roster.members.map((member) => memberRow(ctx, member, leadRoute, resolvable))
+  for (const entry of read?.records ?? []) {
+    rows.push({
+      ...memberRow(ctx, entry.member, leadRoute, resolvable),
+      // Marked, and marked with when: a row read from the archive is history rather than a member the
+      // sweep could still act on, and the flag that produced it is not something the caller should have to
+      // remember by position.
+      archived: true,
+      ...(entry.archivedAt === undefined ? {} : { archived_at: entry.archivedAt }),
+    })
+  }
+  const archiveFile = read === undefined
+    ? (archivedRecords > 0 ? join(dataDir, ARCHIVE_FILE_NAME) : undefined)
+    : read.path
   return {
-    members: roster.members.map((member) => memberRow(ctx, member, leadRoute, roster.members)),
+    members: rows,
     ...swept,
     // This list is the recent members: the tombstones past the trash window moved to the archive, and a
     // reader that was told nothing would mistake the window for the whole team.
-    archived_records: archived,
-    ...(archived > 0 ? { archive_file: join(dataDir, ARCHIVE_FILE_NAME) } : {}),
+    archived_records: archivedRecords,
+    ...(archiveFile === undefined ? {} : { archive_file: archiveFile }),
+    // With the flag, what the file itself holds: how many of this Lead's archived tombstones came back and
+    // how many exist, so the newest-of-a-bounded-read never looks like the whole history (ADR 0035). The
+    // two are read from the file and the record respectively, which is why they are two numbers.
+    ...(read === undefined ? {} : {
+      archived_returned: read.records.length,
+      archived_total: read.total,
+      ...(read.unreadable > 0 ? { archived_unreadable: read.unreadable } : {}),
+    }),
   }
 }
 

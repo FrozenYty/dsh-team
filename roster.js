@@ -817,6 +817,89 @@ export async function findArchived(dataDir, target) {
 }
 
 /**
+ * How many archived tombstones one read returns. ADR 0035 fixes the number and this is where it lives.
+ *
+ * The archive is append-only and unbounded by design — ADR 0030: an archive that deletes is not an archive
+ * — so a read that returned all of it would make `list_members` a way to load an unbounded file into one
+ * response. The newest `ARCHIVE_READ_LIMIT` come back, the real total comes back beside them, and the
+ * tool's description declares the number: a cap the caller cannot read is a cap it will discover by
+ * counting.
+ */
+export const ARCHIVE_READ_LIMIT = 50
+
+/**
+ * Read one Lead's archived tombstones out of `<dataDir>/archive.jsonl`.
+ *
+ * **This is not the hot path, by construction.** ADR 0030 forbids reading the archive behind an ordinary
+ * read, and nothing calls this function unless the caller asked for it — `list_members { archived: true }`
+ * is the caller saying "I know this is a file read, do it" (ADR 0035). A plain `list_members` never opens
+ * the file, which is a property of the call site rather than of this function, and a test holds a spy
+ * there so the property fails loudly if a later read grows the habit.
+ *
+ * The file is one append-only history for every Lead in the data root, so three things are this reader's
+ * job and none of them is the writer's:
+ *
+ *   - **one Lead's records only** — the line records the `leadSessionId` it was written for, and another
+ *     Lead's tombstones must never appear in this answer;
+ *   - **one row per member id** — a line is appended *before* the roster is replaced, so a crash between
+ *     the two leaves the same record twice (a duplicate an append-only history can live with). The reader
+ *     keys by member id, so the second line replaces the first instead of adding a row, and the surviving
+ *     entry carries the newest line that named that member;
+ *   - **a damaged line is counted, not raised** — a crash mid-append leaves a partial last line, and a
+ *     truncated line must not fail the whole read. It is skipped and counted, and the caller reports the
+ *     count.
+ *
+ * The order of the returned records is the file's own order: an append-only file's tail is what happened
+ * last, which does not depend on any clock agreeing with another.
+ * @param {string} dataDir - the data directory in effect (the bound root).
+ * @param {string} leadSessionId - the Lead this read answers for.
+ * @param {{limit?: number}} [options] - the cap; defaults to `ARCHIVE_READ_LIMIT`.
+ * @returns {Promise<{path: string|undefined, records: Array<{archivedAt: string|undefined, member: object}>,
+ *   total: number, unreadable: number}>} the newest records, how many exist, and how many lines were skipped.
+ */
+export async function readArchivedRecords(dataDir, leadSessionId, { limit = ARCHIVE_READ_LIMIT } = {}) {
+  const path = join(dataDir, ARCHIVE_FILE_NAME)
+  const text = await readFile(path, 'utf8').catch(() => undefined)
+  // A missing archive is not an error: the flag asks for something that may never have been written.
+  if (text === undefined) return { path: undefined, records: [], total: 0, unreadable: 0 }
+  const byMember = new Map()
+  let unreadable = 0
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      // The truncated last line of a crash mid-append lands here, and so does any other damage.
+      unreadable += 1
+      continue
+    }
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) {
+      unreadable += 1
+      continue
+    }
+    // Another Lead's line is readable, just not this answer's business, so it is not counted as damage.
+    if (row.leadSessionId !== leadSessionId) continue
+    const member = row.member
+    if (member === null || typeof member !== 'object' || Array.isArray(member) || typeof member.memberId !== 'string' || member.memberId === '') {
+      unreadable += 1
+      continue
+    }
+    // Keyed by member id: a repeated line replaces the entry rather than adding a row, which is what makes
+    // the crash window harmless. A `Map` keeps the first position and takes the newest value, so the
+    // surviving entry carries the latest line that named this member.
+    byMember.set(member.memberId, { archivedAt: typeof row.archivedAt === 'string' ? row.archivedAt : undefined, member })
+  }
+  const ordered = [...byMember.values()]
+  return {
+    path,
+    records: ordered.slice(Math.max(0, ordered.length - Math.max(0, limit))),
+    total: ordered.length,
+    unreadable,
+  }
+}
+
+/**
  * The seed file the user names, for a root that has no roster yet.
  *
  * `DSH_TEAM_SEED` is a path to one file, read once per new root and never written. It is what replaced the

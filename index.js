@@ -90,6 +90,7 @@ import {
 import { createRetiredCache, installProjectionFilter, installRosterFilter, installSlotCredit } from './host-hooks.js'
 import { DEFINITION_REFUSAL_REASONS } from './definitions.js'
 import {
+  ARCHIVE_READ_LIMIT,
   ASSIGNMENT_MAX,
   HANDOFF_TEMPLATE_MAX,
   PHASE,
@@ -428,6 +429,11 @@ const MEMBER_ROW = {
     // "who held this position before, and who took it over" is answerable from a row.
     predecessor: SUCCESSION_EDGE,
     successor: SUCCESSION_EDGE,
+    // Present only on a row this read took out of `archive.jsonl`, which happens only when the caller
+    // passed `archived: true`: such a row is history rather than a member the sweep could act on, and it
+    // carries when the record left the roster (ADR 0030, ADR 0035).
+    archived: { type: 'boolean' },
+    archived_at: { type: 'string' },
     // Present on a result whose sweep retired finished one-shot members; absent otherwise.
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
@@ -640,9 +646,17 @@ const MEMBER_LIST_VALUE = {
     storage: STORAGE_VALUE,
     // How many tombstones this Lead has that are no longer in the roster, and where they went: past the
     // trash retention window the artifact is gone, so the record moves to an append-only archive and only
-    // the newest `trashLimit` stay here. `archive_file` is present only when the count is not zero.
+    // the newest `trashLimit` stay here. `archive_file` is present only when the count is not zero, and
+    // with `archived: true` it is the path that was actually read.
     archived_records: { type: 'integer' },
     archive_file: { type: 'string' },
+    // Present only when the caller passed `archived: true` (ADR 0035): how many archived tombstones this
+    // answer carries, how many this Lead's history holds, and how many lines the reader had to skip
+    // because they were damaged. The first is bounded by `ARCHIVE_READ_LIMIT`; the second is the number
+    // that keeps a truncated answer from being mistaken for the whole archive.
+    archived_returned: { type: 'integer' },
+    archived_total: { type: 'integer' },
+    archived_unreadable: { type: 'integer' },
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
     // On a result whose sweep retired a member that owned open work: how many tasks lost their owner, and
@@ -1078,7 +1092,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir: dataDirFor(),
+          dataDir: dataDirFor(caller),
           hooks,
           name: args.name,
           label: args.label,
@@ -1099,14 +1113,21 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. Every row carries member_id, the roster identity the succession links name, and where a replacement created a link the row carries it in the direction that record owns: predecessor (the target and member id this member took over from) on the successor, and successor (the target and member id that took the position) on the tombstone of the member it replaced — so the chain reads from either end, by member id, and survives retirement and a pruned session artifact. An edge whose member id is no longer in the roster (a tombstone past the retention window lives in the archive) reports the id without a target, and the archived_records and archive_file fields say where that history is. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at. This list is the recent members, not everyone this Lead ever had: past the trash retention window a tombstone leaves the roster for an append-only archive, and archived_records counts those while archive_file names the file, so a target missing from here may still be in the archive rather than gone.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. Every row carries member_id, the roster identity the succession links name, and where a replacement created a link the row carries it in the direction that record owns: predecessor (the target and member id this member took over from) on the successor, and successor (the target and member id that took the position) on the tombstone of the member it replaced — so the chain reads from either end, by member id, and survives retirement and a pruned session artifact. An edge whose member id is no longer in the roster (a tombstone past the retention window lives in the archive) reports the id without a target, and the archived_records and archive_file fields say where that history is. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at. This list is the recent members, not everyone this Lead ever had: past the trash retention window a tombstone leaves the roster for an append-only archive, and archived_records counts those while archive_file names the file, so a target missing from here may still be in the archive rather than gone — pass archived: true to read that history: the archived tombstones of this Lead come back as rows marked archived with archived_at, at most the newest '
+        + ARCHIVE_READ_LIMIT
+        + ' of them, alongside archived_returned (how many this answer carries), archived_total (how many that history holds) and archived_unreadable (how many lines the reader had to skip because they were damaged). Reading the archive is a file read, so it happens only when the caller asks for it: a plain read never opens it (ADR 0030, ADR 0035). With the flag, a succession edge whose member id is no longer in the roster resolves its target from the archive instead of reporting a bare id.',
       parameters: {
         type: 'object',
         additionalProperties: false,
-        properties: {},
+        properties: {
+          archived: {
+            type: 'boolean',
+            description: `Set true to also read this Lead's archived tombstones out of archive.jsonl, the append-only history a tombstone moves to once it is past the trash retention window. It is a file read and the only one on this tool, so it happens only when you ask for it — a plain read never opens the archive (ADR 0030, ADR 0035). The archive is unbounded by design, so the answer carries at most the newest ${ARCHIVE_READ_LIMIT} archived records, with archived_returned, archived_total and archived_unreadable beside them saying how many came back, how many exist and how many lines were unreadable. Omit it, or pass false, for exactly the read this tool has always done.`,
+          },
+        },
       },
       output: { schema: MEMBER_LIST_VALUE },
-      async execute(_args, exec) {
+      async execute(args, exec) {
         const caller = callingAgent(exec.agent, 'list_members')
         requireLead(ctx, caller, 'list_members')
         const table = await rosterTable()
@@ -1115,9 +1136,10 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir: dataDirFor(),
+          dataDir: dataDirFor(caller),
           hooks,
           trashLimit,
+          archived: args.archived === true,
         })
         return { ...listed, host_hooks: await hooks.report(), storage: (await source).report(leadSessionIdOf(caller)) }
       },
@@ -1191,7 +1213,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir: dataDirFor(),
+          dataDir: dataDirFor(caller),
           hooks,
           target: args.target,
           reason: args.reason,
@@ -1232,7 +1254,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           hooks,
           // The data directory in effect, so a tombstone written from this release resolves without an
           // absolute path and an older one still finds its artifact.
-          dataDir: dataDirFor(),
+          dataDir: dataDirFor(caller),
         })
       },
     })))
@@ -1504,7 +1526,16 @@ export function apply(ctx, config) {
   // loaded at that moment rather than suspending a host stream on a promise this plugin does not own.
   let readySource
   source.then((value) => { readySource = value }, () => undefined)
-  /** The data directory one Lead's trash lives under: its bound root, or the pre-move default. */
+  /**
+   * The data directory one Lead's roster, trash and archive live under: its bound root, or the pre-move
+   * default for a Lead this process never bound.
+   *
+   * The agent is required, not optional: resolving without one answers the *process* default rather than
+   * this Lead's root, so a Lead whose workspace is not where the host process started had its trash written
+   * under the frozen directory while its record — which stores a root-relative path — stayed in the
+   * workspace. The candidate chain's frozen leg then found the artifact, which is exactly why nobody
+   * noticed; the archive has no such leg, so a read of it would have looked in the wrong place outright.
+   */
   const dataDirFor = (agent) => binder.rootOf(leadSessionIdOf(agent)) ?? resolveDataDir()
   /** Bind one Lead to its root, once. The binding decides where its roster and its trash live. */
   const bindLead = (agent) => binder.bind(leadSessionIdOf(agent), agent?.session?.header?.cwd)
