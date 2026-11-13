@@ -98,8 +98,11 @@ Session that has no workspace to own bytes in.
 
 Greenfield: nothing is moved on upgrade. The first read of a root imports the domain's record and writes
 both the file and the marker; the domain is left exactly as it was. Rolling back is deleting
-`roster.json` — the next load finds no record for that Lead and imports the domain's copy again. The
-marker needs no handling, because it records the import rather than switching it, and a session that
+`roster.json` — the next load finds no record for that Lead and imports the domain's copy again, which is
+falsifiable rather than merely asserted: `tests/store.test.mjs` carries the test
+`with the roster file deleted the domain is the source again, and the plugin keeps working`, which removes
+the file, rebinds, and expects the domain's hundred records back and the file written again from there.
+The marker needs no handling, because it records the import rather than switching it, and a session that
 never resolves a root never migrates, because it never left.
 
 ## Revisit when
