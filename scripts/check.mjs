@@ -455,6 +455,26 @@ for (const name of templateFiles) {
   }
 }
 
+// 9. The version is one number written in four places, and nothing noticed when they stopped agreeing.
+//    v0.31.1 was merged with the manifest still at 0.31.0 and no changelog section at all, and this check
+//    passed: the two documents that say what a release contained had nothing to say about it. So the newest
+//    released section must name the manifest's version, and both READMEs must too — every one of them is a
+//    file a release touches anyway, and a place a reader looks first.
+const manifestVersion = manifest?.version
+if (typeof manifestVersion === 'string') {
+  const newest = (read('CHANGELOG.md') ?? '').split(/\r?\n/).find((line) => /^## \[/.test(line)) ?? ''
+  const named = /^## \[([^\]]+)\]/.exec(newest)?.[1]
+  if (named !== manifestVersion) {
+    fail(`CHANGELOG.md: newest released section is ${named === undefined ? 'missing' : `[${named}]`}, but package.json says ${manifestVersion} — a release that ships no section says nothing about what it contained`)
+  }
+  for (const [name, expected] of [
+    ['README.md', `- Current version: v${manifestVersion}.`],
+    ['README-zh.md', `- 当前版本：v${manifestVersion}。`],
+  ]) {
+    if (!(read(name) ?? '').includes(expected)) fail(`${name}: must carry "${expected}"`)
+  }
+}
+
 if (failures.length > 0) {
   console.error(`check failed: ${failures.length} problem(s)`)
   for (const failure of failures) console.error(`  - ${failure}`)

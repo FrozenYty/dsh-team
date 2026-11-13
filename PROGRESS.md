@@ -2774,3 +2774,32 @@
   it does recreate one, that is the argument for removing the open rather than waiting.
 - **Version.** `0.31.0`: a resolution rule gained a leg, a tool's output schema lost a value it can no
   longer produce, and the storage domain stopped being able to answer anything.
+
+## 2026-11-13 — the state is files only, the domain retires, and the version now checks itself (v0.31.1)
+
+- **ADR 0031 records the decision the two previous releases made in code**: the plugin's state is files
+  only, and the host's storage domain is retired as a source of answers. It supersedes **ADR 0027's
+  storage-domain clause only**, because both halves of that clause are false in different ways — the domain
+  cannot answer a read at all, and its file on this machine was deleted after a SHA256 comparison against
+  both migration backups. ADR 0014 gets a **pointer rather than a supersession**, and that distinction is
+  the point of writing it down: the *name* `team_roster` is still frozen for exactly the reason 0014 gives.
+  A location changed, not a name — the same judgement this file recorded for 0018 against 0021.
+- **The rollback story is gone and the documents no longer claim it survives.** What replaces it is named:
+  the archive, the byte-identical backups, and the seed for carrying a roster to a new root. The legacy
+  import leg is recorded as **debt with a deadline** rather than as an oversight — it is how a profile that
+  has never bound a workspace reaches its records on the new frozen root, and the domain open plus
+  `migrateLegacyRoster` must be removed **together**, because the copy needs a target. And `'none'` is
+  recorded as having no production witness, which is a fact about a value in a published schema.
+- **The Lead merged a release with no records at all, and the gate said `check passed`.** ADR 0031 landed
+  as `v0.31.1` in its merge message while `package.json` still said `0.31.0`, `CHANGELOG.md` had no section
+  for it, and `PROGRESS.md` had no entry — and **nothing noticed**, because `scripts/check.mjs` had never
+  compared the manifest's version with anything. The two documents whose whole purpose is to say what a
+  release contained had nothing to say about that release, and the only thing that caught it was the person
+  who caused it, reading the files instead of the exit code.
+- **That gap is now a check, and it was proved able to fail.** The newest released `CHANGELOG.md` section
+  must name the manifest's version, and both READMEs must carry it — three files a release touches anyway
+  and the first place a reader looks. Probed by bumping `package.json` alone: the check fails on all three
+  by name. This is the same class of gap this file has recorded three times today: **a rule that lives in
+  prose and runs nowhere fails quietly**, and a version is exactly the kind of number that drifts while
+  every other check stays green.
+- **Version.** `0.31.1`: documents, the records the previous merge owed, and one new check with its probe.
