@@ -104,7 +104,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 1. **记下原因**——模型给出的 `reason` 写进墓碑的 `retireReason`。
 2. **排空**——`ctx.subagents.drainChildren(lead, [childId])` 停掉子代理，释放它的激活名额与驻留。从未发布过的、或已经结束的子代理没有可排空的；两种情况都继续退役，因为生命周期事实由记录掌握。
 3. **立碑**——记录转为 `retired`，带上 `retiredAt`、`assignment`、原因，以及下一步准备使用的回收站路径，并标记 `trashState: 'pending'`（没有可移动之物时直接是 `'none'`）；这一步发生在碰文件系统**之前**（§4）。在这里崩溃留下的是“退役记录 + 要么没移动、要么已进回收站的产物”；`pending` 表示无从确定，恢复会先去回收站找，因此两种情况都能收尾。
-4. **移动产物并确认**——持久化会话移入插件的回收站目录，记录随后确认为 `trashState: 'done'`，并写上 `trashDir`、`trashRelPath`、`originalPath` 与 `trashKind`。没有可移动的产物时，改由工作区归档隐藏会话，丢弃计划中的回收站字段，记录与返回结果都会说明这一点（`archived: true`、`trashState: 'none'`）。`archived` 与 `trashDir` 互斥：只有没发生移动时才会走归档分支。
+4. **移动产物并确认**——持久化会话移入插件的回收站目录，记录随后确认为 `trashState: 'done'`，并写上 `trashDir`、`trashRelPath`、`originalRelPath` 与 `trashKind`（`originalRelPath` 是相对会话根的来源；v0.34.0 之前写下的记录携带的是绝对 `originalPath`——ADR 0034）。没有可移动的产物时，改由工作区归档隐藏会话，丢弃计划中的回收站字段，记录与返回结果都会说明这一点（`archived: true`、`trashState: 'none'`）。`archived` 与 `trashDir` 互斥：只有没发生移动时才会走归档分支。
 
 5. **只在此时约束回收站**——成功移入过产物的那次退役会在同一次调用里执行本 Lead 的保留上限；上限本身、候选范围与 `pruned` 状态见 `docs/roster-storage-zh.md` `docs/architecture-zh.md` §3（ADR 0011、ADR 0012）。这套协议最终留下的墓碑也不是永久的：越过保留窗口、且产物在恢复会搜索的每一条腿上都已不存在之后，它会离开花名册进入 `archive.jsonl`，而其子会话 id 仍留在 `retiredChildIds` 里，因此该成员不会被重新收养（`docs/roster-storage-zh.md` §3、ADR 0030）。
 

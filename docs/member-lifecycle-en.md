@@ -240,8 +240,10 @@ half-finished. What `retire_member` does, in the order the code does it:
    record and an artifact that is either unmoved or already trashed; `pending` says which is unknown and
    restore looks in the trash first, so both cases are recoverable.
 4. **Move the artifact, then confirm.** The persisted Session moves into the plugin's trash directory and
-   the record is confirmed with `trashState: 'done'`, its `trashDir`, `trashRelPath`, `originalPath` and
-   `trashKind`.
+   the record is confirmed with `trashState: 'done'`, its `trashDir`, `trashRelPath`, `originalRelPath`
+   and `trashKind`.
+   (`originalRelPath` is the origin relative to the sessions root, and a record written before v0.34.0
+   carries an absolute `originalPath` instead — ADR 0034.)
    When no artifact can be moved, the workspace archive hides the Session instead, the intended trash
    fields are dropped, and the record and the result say that this is what happened (`archived: true`,
    `trashState: 'none'`). `archived` and `trashDir` are mutually exclusive: the archive branch runs only
