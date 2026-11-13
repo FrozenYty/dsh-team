@@ -3217,3 +3217,27 @@
   is gated on it"* already said and what a reader can still misread.
 - **Version.** `0.36.1`: one ADR, three document pairs, one phase closed by its own gate, and a rule about
   rules made one notch more precise.
+
+## 2026-11-13 — the gate rule survives its own first misreading, and the commit is its first application (v0.36.2)
+
+- **The clause went at the end of the same paragraph it qualifies**, not into a footnote: that sentence is
+  the one that gets misread, and **a footnote elsewhere is not read at the moment of the misreading**. Where
+  a rule is stated is part of whether it works.
+- **The gap was real**: §4 covered *one process's* command list, never mentioned processes, never mentioned a
+  guard reading a variable the process never set, and never distinguished a silent block from a vacuous pass.
+- **The clause names the failure and puts the safe shape first**, because that is the one that happened: the
+  guard only works inside one process, since an exit code does not travel between shell calls; a step in the
+  *next* call cannot be gated on this one's result; and a guard reading an unset variable has two shapes —
+  **read as false it blocks silently** (safe, today's instance) or **written as a truthiness test it passes
+  vacuously** (dangerous, because the step runs and nothing checked it). Naming the safe shape first is not
+  politeness: it is what makes the dangerous one recognisable when it appears.
+- **The commit that adds the clause is the clause's first application** — gate, guard, suite, guard, then
+  stage, commit and publish, all inside one call. That is precisely the arrangement the previous attempt
+  could not have had, and a rule whose first application is its own commit needs no argument about whether
+  it can be followed.
+- **What it still cannot do**: it is documentation, like the rule it qualifies. A contributor can gate across
+  processes and nothing will stop them; the cost is a silent no-op, and it is now written where the rule is.
+  That is the fifth rule today recorded with evidence and no enforcement — and the second where the missing
+  enforcement is a hook on somebody else's machine rather than something a check could do.
+- **Version.** `0.36.2`: seven lines of `CONTRIBUTING.md`, and one rule that no longer depends on being read
+  correctly the first time.
