@@ -1873,7 +1873,6 @@
   should find the answer in the changelog, and PR 47 set the precedent that a documents-and-manifest
   change still ships a version.
 
-## 2026-11-13 — the README is a first-use document, and the routes subject moves out of it (v0.25.4)
 
 - **The defect was not length, it was order.** `README.md` was 651 lines (559 non-blank) across 23
   sections, and `Install and verify` was the eighteenth, at line 526: a stranger had to scroll past four
@@ -1957,3 +1956,59 @@
 - **What it does not change.** No code: this is an acceptance run against `v0.25.0` / `v0.25.1`, both
   already released. It is the evidence behind the README's status list, and its date is what the README now
   cites instead of describing the run itself.
+## 2026-11-13 — Every in-repository citation resolves, or the check says which one does not (P4-17, v0.25.5)
+
+- **The defect class this closes, and its two proofs.** ADR 0025 was cited from about seventeen places in
+  `roster.js`, `actions.js` and the architecture document before that ADR existed, and nothing noticed until
+  a read-only survey grepped for it. The checker written for that class during the document split lived in a
+  session scratch folder, where it could not fail anyone's pull request. Both are now one numbered section of
+  the repository's own gate.
+- **What was built.** `scripts/check.mjs` §7 follows two forms: a document reference — `docs/<name>.md` in
+  prose or a link — must exist, and a section reference — §N, §N.M, §N.M.K — must resolve to a numbered
+  heading in the document it points at. Which document that is follows four steps, in order: the document the
+  same citation names (`` `docs/x-en.md` §4.5 ``, "§4.5 of `docs/x-en.md`", the short stem form the split
+  introduced — `member-lifecycle §3` — a markdown link, "[docs/x-en.md](docs/x-en.md) §5", and a
+  continuation after a separator, "§4.5 and §4.5.2",
+  "§4.2/§4.3/§4.4"); failing that, the document the reference appears in, when it has the heading; failing
+  that, the one English document at the top level of `docs/` that has it, when exactly one does; and failing
+  all three, it fails and says so rather than picking one. A bare § that two documents both have is reported
+  as ambiguous, with both named. The link form was added while this branch was being merged: the README pair
+  names its document that way, the resolver read only the backticked and stem forms, and the result was a
+  correct citation reported as an ambiguity between `docs/architecture-en.md` and `docs/INDEX-en.md`. The
+  document-reference pass had always accepted a link, so the repair was to make the section pass agree with
+  it rather than to rewrite prose that already named its document plainly.
+- **Three decisions about what is *not* checked, each with its reason.** `PROGRESS.md` and `CHANGELOG.md` are
+  exempt: an entry that cited a section before it moved is correct as of the commit that wrote it, and
+  re-checking history would force edits to a record that may not be rewritten. A section reference into a root
+  document is checked as a document reference only — `AGENTS.md` numbers its points in prose, so "§4.8" is the
+  eighth point of §4, and the heading test would call a correct citation wrong. The six host modules *are*
+  read, because their comments cite these documents and are current-state commentary rather than history —
+  seven section references and two document references between them at the time of writing — while `scripts/`
+  is not, since its `docs/` strings are patterns rather than citations.
+- **What the check found on the merged tree, which is the point of it.** Six citations the document split had
+  left pointing at sections that no longer exist anywhere, and one placeholder of this repository's own:
+  `actions.js` cited `docs/architecture-en.md` §4.3 and §4.3.1 twice each, `roster.js` cited §4.4 and §4.3,
+  and ADR 0021 cited §4.3.2; the sections had moved to `docs/member-lifecycle-en.md` §1 and §2,
+  `docs/handoff-en.md` §1 and `docs/task-board-en.md` §2, which the change map in `docs/INDEX-en.md` §4
+  records. The placeholder was `docs/foo-en.md` in this file, now written `docs/<name>-en.md` so a pattern
+  cannot be read as a citation. Each fix is a citation only: no sentence was reworded, and nothing about the
+  plugin changed. Every other ADR citation had already been rewritten by the split, which is what makes
+  0021's an oversight rather than a convention.
+- **Verification.** `node scripts/check.mjs` prints `check passed`; `node --test --test-isolation=none
+  tests/*.test.mjs` is 212 tests, 212 passing (no test file was touched). The rule was proved able to fail
+  twice on the real tree, and the exact text is quoted here because the message is the deliverable: a
+  temporary line in `CONTRIBUTING.md` reading "`docs/architecture-en.md` §99" produced
+  `CONTRIBUTING.md: docs/architecture-en.md has no §99`, and one reading "`docs/zz-missing-document-en.md` §1"
+  produced `CONTRIBUTING.md: cites docs/zz-missing-document-en.md §1, but docs/zz-missing-document-en.md does
+  not exist` and, from the document-reference pass, `CONTRIBUTING.md: cites
+  docs/zz-missing-document-en.md, which does not exist`. Both probe lines were removed and the tree returns to
+  `check passed`; `scripts/check.mjs` hashed
+  `E728A7F5E7C9565EAA1EFDA0E836B688AB14814600F8A30E22F1927035E68268` before and after the proofs, so the
+  script was not left carrying one.
+- **What stays undone, and what would make it sure.** A section reference that exists in exactly one document
+  but was meant for another still resolves — `PLAN.md`'s "the external review's §3" reads as its own §3 — and
+  no mechanical rule can tell, so the check only promises that a citation *can* be followed. The check has met
+  one `docs/` tree, the one it was written against; it has not seen the next rename.
+- **Version.** `0.25.5`: the repository promised that a citation resolves, and this is the release where that
+  promise is kept by something other than the reader's patience. (The README rewrite claimed `0.25.4` and
+  `P4-16` while this branch was open, so both numbers moved; the collision is recorded in the merge commit.)

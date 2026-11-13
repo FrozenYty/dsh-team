@@ -144,5 +144,5 @@ A second team setting needs the frontmatter (then the accepted field set becomes
 "empty for now" is superseded), a Lead needs more than one brief template per project (per role or per
 kind of member, a new decision rather than a second file), the Harness ships a first-party team-config
 primitive this plugin could adopt instead of `team/team.md`, or the task board needs to be shared between
-two Leads in one project, which would move §4.3.2's state into the file and need its own consistency
+two Leads in one project, which would move `docs/task-board-en.md` §2's state into the file and need its own consistency
 story.

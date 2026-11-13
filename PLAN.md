@@ -441,7 +441,7 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   refusal and the live housekeeping retirement are the owner's install check.
 
 - [x] **P4-15** The bilingual-pair check is a rule over `docs/`, not a list of pairs (v0.25.2).
-  Done when a new `docs/foo-en.md` without `foo-zh.md` fails the check by name in either direction, a
+  Done when a new `docs/<name>-en.md` without `<name>-zh.md` fails the check by name in either direction, a
   deliberate single-language document cannot pass unless it is declared with a reason, `*-en-zh.md` is
   proven to hold both languages rather than merely named so, root documents are handled explicitly rather
   than falling through the scan, and the rule is stated in `CONTRIBUTING.md`.
@@ -461,9 +461,25 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   Delivered: the README pair went from 651 lines (559 non-blank) across 23 sections to 253 (209) across 13,
   and `Install and verify` is the second section instead of the eighteenth. Four subjects left it for the
   documents that already owned them — `member-lifecycle`, `task-board`, `handoff`, `roster-storage` — two got
-  a pair of their own (`docs/routes-{en,zh}.md` for the measured route and billing behaviour,
+  a pair of its own (`docs/routes-{en,zh}.md` for the measured route and billing behaviour,
   `docs/upgrading-{en,zh}.md` for the v0.14.0 removal table), and `Status` was cut from 66 lines to 14 with
   the per-release evidence staying in `PROGRESS.md`. `Limits and deliberate omissions` was kept as it stood.
   Both sides are 13 headings, both new pairs were classified by the `docs/` rule, and the reachability grep
   for every dropped section is in the PR that delivered this.
+
+- [x] **P4-17** Every in-repository citation resolves, or the check says which one does not (v0.25.5).
+  Done when a citation to a document that does not exist fails by name, a citation to a section that document
+  does not have fails by name, the rule is stated in `CONTRIBUTING.md`, and neither `PROGRESS.md` nor
+  `CHANGELOG.md` is forced to rewrite a historical entry.
+  Delivered: `scripts/check.mjs` §7 resolves document references and §-references in `docs/`, `README` pair,
+  `AGENTS.md`, `CONTRIBUTING.md`, `PLAN.md` and the six host modules, following the document a citation names
+  (including the short `member-lifecycle §3` form and same-line continuations), then the containing document,
+  then the single English `docs/` document that has the section, and failing when none applies. The two
+  historical records are exempt by name and the reason is written beside the exemption. The check found six
+  stale citations left by the document split and one placeholder in this file; all seven were fixed as
+  citations only. Proofs: a citation to a section `docs/architecture-en.md` does not have, and a citation to a
+  document that does not exist, were each planted in `CONTRIBUTING.md`, each failed by name, and were each
+  removed. `scripts/check.mjs` hashed
+  `E728A7F5E7C9565EAA1EFDA0E836B688AB14814600F8A30E22F1927035E68268` before and after the proofs, and 212
+  tests pass with no test file touched. Renumbered from P4-16 and 0.25.4 when the README task took both.
 
