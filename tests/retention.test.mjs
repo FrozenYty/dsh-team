@@ -518,7 +518,8 @@ test('a retirement records the trash directory and a root-relative path, never a
   // move, so there is nothing to recompute it from.
   assert.equal(tombstone.trashPath, undefined, 'the record no longer carries an absolute trash path')
   assert.match(tombstone.trashDir, /^fresh-child-\d+$/, 'the record carries the directory name')
-  assert.equal(tombstone.trashRelPath, join('trash', 'lead-1', tombstone.trashDir), 'and a path relative to the data root')
+  assert.equal(tombstone.trashRelPath, ['trash', 'lead-1', tombstone.trashDir].join('/'), 'and a path relative to the data root, in forward slashes so a roster that travels still resolves')
+  assert.equal(tombstone.trashRelPath.includes('\\'), false, 'the platform separator is not in the record')
   assert.equal(isAbsolute(tombstone.trashRelPath), false)
 
   // The absolute path is computed at read time from the data directory in effect, which is what makes

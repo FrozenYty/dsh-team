@@ -3006,3 +3006,50 @@
   because a lint would have to know which assertions are about ordering. That last one is an honest limit
   rather than an oversight: the rule has three pieces of evidence and no enforcement.
 - **Version.** `0.34.1`: one ADR, three document pairs, and a rule in the place its reader stands.
+
+## 2026-11-13 — the harness half of the schema check runs on every push, and a travelling path is written one way (v0.35.0)
+
+- **The check that rotted green is now covered on the half that actually rotted.** `schema-check.mjs` split
+  cleanly all along: one function takes the validator out of the installed asar, another builds a
+  bundle-shaped input — a fake host plus a fixed call list — and a third runs the first over the second.
+  Only the first needs an archive, and **the corruption was in the second**, so `collectFromBundle` is now
+  exported and a unit test drives it on every push, with no asar. When this machine does have the archive,
+  the same test runs the Host's own validator and reports its verdict; when it does not, the test
+  **reports that fact rather than skipping** — *"no Harness archive … the harness half was checked, the
+  Host's validator was not"* — because a skip is exactly why the script came to be believed without ever
+  being run.
+- **What the test demands is what would have caught it.** The fake host's answer set is compared against the
+  bundle's own `inject`, so a dependency the bundle **declares** and the fake does not answer fails by name;
+  and **every call must return a value** — a fake that threw everything would still print "the Host accepts
+  every schema this bundle declares", a green that proved nothing and is worse than the crash it replaced.
+- **Three probes, and the third reproduces the original corruption** — a Lead with no working directory,
+  which makes the fake write its roster somewhere else and the script fail on `ENOENT`. That one fails as a
+  bare error rather than a named assertion, and the shape was kept deliberately: a working directory is not
+  something a test can conjure, and **failing loudly is the point of that leg**.
+- **A travelling path is now written one way.** `trashRelPath` was built with `join`, so a roster carried
+  from Windows to POSIX resolved that leg by treating `\` as a literal character and fell through to the
+  others — which is why nobody noticed. It is written with forward slashes now and **read tolerantly**:
+  one `relativeSegments` helper splits on either separator and is shared by the three readers and the
+  migration script, which is the same asymmetry the path chain already follows — **strict on write,
+  tolerant on read**. The legal segments of that field cannot contain a backslash, so splitting on both is
+  safe by construction rather than by hope.
+- **And making that change found a bug in the previous migration.** `isMigrated` compared the field by
+  **character**, and the records that migration wrote carry platform separators — so on Windows every
+  already-migrated record was reported as pending work and rewritten. It compares by **segment** now. One
+  fix exposing the next one in the same field is the pattern this file has recorded all day.
+- **One test can only fail on POSIX**, and the report says so instead of implying otherwise: a record whose
+  `trashRelPath` uses backslashes must still resolve to where the chain expects, which Windows accepts
+  natively either way. It is written with both spellings and one mixed, and CI runs it on Linux — proved by
+  platform semantics plus the shared helper's local probes, **not** by manufacturing a red and watching it.
+  Distinguishing those two kinds of evidence is the point of writing it down.
+- **What this does not fix, because it cannot.** The asar half is still a local check: every push now covers
+  *the input still matches the bundle*, not *the Host still accepts these schemas*. A Host upgrade can
+  invalidate the second while CI stays green, and that is a property of having no archive on the runner
+  rather than a gap this release could close. The mitigation is that the local command self-checks and
+  reports the verbatim verdict, unchanged.
+- **Verification.** 294 tests, two new; the schema check reports *"the Host accepts every schema this bundle
+  declares, and every value checked"*; and the write-strict/read-tolerant rule was probed from both ends —
+  reverting the write to `join` fails by name on the separator, reverting `isMigrated` to a character
+  comparison fails as `'rewrite' !== 'noop'`.
+- **Version.** `0.35.0`: one exported function and the coverage that makes it meaningful, one separator
+  convention, and one migration comparison fixed on the way past.

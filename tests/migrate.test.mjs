@@ -133,7 +133,7 @@ test('a legacy artifact is planned, moved, and the record is rewritten for the n
 
   const migrated = await findByID(fx.rosterFile, '11111111-aaaa-4000-8000-000000000001')
   assert.equal(migrated.trashDir, DIR_NAME)
-  assert.equal(migrated.trashRelPath, join('trash', LEAD, DIR_NAME))
+  assert.equal(migrated.trashRelPath, ['trash', LEAD, DIR_NAME].join('/'))
   assert.equal(migrated.trashPath, undefined, 'the absolute path is gone')
   assert.equal(migrated.originalPath, join('/old', 'sessions', 'child', 'session.jsonl'), 'originalPath stays absolute')
   assert.equal((await readRoster(fx.rosterFile)).serial, 5, 'the file records that it changed')

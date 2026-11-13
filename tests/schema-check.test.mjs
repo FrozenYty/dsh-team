@@ -3,19 +3,26 @@
  *
  * The archive itself is not here — CI has no Harness — so what is tested is everything that decides
  * whether the check is right: the archive header reader (against a synthetic archive this file builds to
- * the same layout), the module-specifier scan, Node's resolution walk, and the checking logic with a
- * stand-in validator. The one thing left to the local run is the validator's own verdict.
+ * the same layout), the module-specifier scan, Node's resolution walk, the checking logic with a
+ * stand-in validator, and the *harness half* — the fake Host and the calls that drive the bundle, which
+ * is the part that rotted when nobody ran the script. The one thing left to the local run is the
+ * validator's own verdict, and the harness test takes it when the archive is on the machine.
  */
 
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
+import { inject } from '../index.js'
 import {
+  DEFAULT_ASAR,
   checkSchemas,
+  collectFromBundle,
   formatReport,
+  loadValidator,
   openArchive,
   readArchived,
   resolutionCandidates,
@@ -53,16 +60,21 @@ async function buildArchive(files) {
   return path
 }
 
-/** A validator stand-in: rejects the schemas and values a test names, accepts everything else. */
+/** A validator stand-in: rejects the schemas and values a test names, accepts everything else, and records
+ * what it was handed so a test can check the request rather than only the verdict. */
 function stubValidator({ rejectSchemas = [], rejectValues = [] } = {}) {
+  const seen = { assertOutput: [], assertObjectRoot: [], validate: [] }
   return {
+    seen,
     assertOutput: (schema) => {
+      seen.assertOutput.push(schema)
       for (const entry of rejectSchemas) {
         if (entry.schema === schema) throw Object.assign(new Error(`unsupported JSON schema: ${entry.violation}`), { violations: [entry.violation] })
       }
     },
-    assertObjectRoot: () => undefined,
+    assertObjectRoot: (schema) => { seen.assertObjectRoot.push(schema) },
     validate: (schema, value) => {
+      seen.validate.push({ schema, value })
       for (const entry of rejectValues) {
         if (entry.schema === schema && entry.value === value) {
           throw Object.assign(new Error(`invalid result: ${entry.violation}`), { violations: [entry.violation] })
@@ -188,4 +200,67 @@ test('an all-accepted run says so plainly', () => {
   assert.match(text, /list_members\s+output accepted\s+parameters accepted\s+results ok/)
   assert.match(text, /host rejections\s+0/)
   assert.match(text, /verdict: the Host accepts every schema this bundle declares/)
+})
+
+test('the harness half still matches the bundle: every injection is answered, every call returns', async (t) => {
+  // The half that needs no archive, and the half that rotted: at v0.31.0 every Session got a data root, the
+  // script's fake Host still gave its Lead no workspace, and the check broke without anyone running it.
+  const { tools, results, services } = await collectFromBundle()
+
+  // A dependency the bundle declares and this fake does not answer is that drift, named so the repair is
+  // obvious: add it to the fake, or stop declaring it.
+  for (const name of inject) {
+    assert.ok(services.includes(name), `the schema-check harness answers no "${name}", which the bundle declares in inject`)
+  }
+
+  // Every registered tool is declared with both schemas, and every call names a tool that exists: a renamed
+  // or removed tool shows up here rather than as a silently smaller report.
+  assert.ok(tools.length > 0, 'the harness registered at least one tool')
+  for (const tool of tools) {
+    assert.equal(typeof tool.name, 'string')
+    assert.equal(typeof tool.parameters, 'object', `${tool.name} declares a parameter schema`)
+    assert.equal(typeof tool.output?.schema, 'object', `${tool.name} declares an output schema`)
+  }
+  const registered = new Set(tools.map((tool) => tool.name))
+  for (const result of results) assert.ok(registered.has(result.tool), `the call to "${result.tool}" names a registered tool`)
+
+  // The script's own rule: these calls are chosen to return, not to throw, so the values the validator sees
+  // are values the tools produced. If a call starts throwing, the report would still say "accepted" while
+  // checking nothing — which is how a check goes quiet.
+  assert.deepEqual(results.filter((result) => result.error !== undefined), [], 'every call in the harness returned a value')
+
+  // And the request that reaches the validator has the shape the report implies.
+  const validator = stubValidator()
+  const report = checkSchemas({ validator, tools, results })
+  const assertedOutputs = validator.seen.assertOutput.filter((schema) => tools.some((tool) => tool.output.schema === schema))
+  assert.equal(assertedOutputs.length, tools.length, 'one output-schema assertion per tool')
+  // Parameter schemas go through the same assertion, and a violation there is informational: the registry
+  // projects them to the model without asserting. Counted, so a tool whose parameters stop being examined
+  // is visible.
+  assert.equal(validator.seen.assertOutput.length, tools.length * 2, 'and the parameter schema of every tool with it')
+  assert.equal(validator.seen.assertObjectRoot.length, tools.length, 'and the object-root assertion')
+  assert.equal(validator.seen.validate.length, results.length, 'one value check per returned result')
+  assert.deepEqual(report.failures, [], 'the stand-in rejects nothing')
+
+  // The archive half, when this machine has one. Reported either way: silence about which half ran is how
+  // the script came to be believed while it was broken.
+  const asarPath = process.env.DSH_ASAR ?? DEFAULT_ASAR
+  if (!existsSync(asarPath)) {
+    t.diagnostic(`no Harness archive at ${asarPath}: the harness half was checked, the Host's validator was not`)
+    return
+  }
+  let loaded
+  try {
+    loaded = await loadValidator(asarPath)
+  } catch (error) {
+    t.diagnostic(`the archive at ${asarPath} could not be read (${error instanceof Error ? error.message : String(error)}): the Host's validator was not checked`)
+    return
+  }
+  try {
+    const real = checkSchemas({ validator: loaded.validator, tools, results })
+    assert.deepEqual(real.failures, [], `the Host's validator (${loaded.identity.package}) rejects nothing this bundle declares`)
+    t.diagnostic(`the Host's validator ${loaded.identity.package} accepted every schema and every value`)
+  } finally {
+    await rm(loaded.extractDir, { recursive: true, force: true })
+  }
 })

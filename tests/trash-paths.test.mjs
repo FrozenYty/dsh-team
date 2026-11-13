@@ -229,3 +229,21 @@ test('a tombstone whose artifact is gone on every leg refuses with trash-missing
   assert.match(restored.message, /trash-missing/)
   assert.equal(readRoster(table, 'lead-1').members[0].phase, PHASE.retired, 'the record stays retired')
 })
+
+test('a record written with backslashes resolves where the chain expects it', () => {
+  // A tombstone written on Windows carries `trash\lead-1\<dir>`. Read on a platform that treats `\` as a
+  // literal character, passing that string to `resolve` once produced `<root>/trash\lead-1\<dir>` — a path
+  // that exists nowhere, so the chain fell through to the legs that are only there for older records. The
+  // field is written with forward slashes now and read tolerantly, which is why this holds on either side.
+  const dataDir = join(tmpdir(), 'dsh-team-paths-data')
+  const expected = join(dataDir, 'trash', 'lead-1', 'member-1-1')
+  for (const stored of ['trash/lead-1/member-1-1', 'trash\\lead-1\\member-1-1', 'trash/lead-1\\member-1-1']) {
+    const record = { trashState: TRASH_STATE.done, trashDir: 'member-1-1', trashRelPath: stored }
+    assert.equal(trashPathCandidates({ record, leadSessionId: 'lead-1', dataDir })[0].path, expected, `the root leg resolves "${stored}"`)
+    assert.equal(recordedTrashPath({ record, leadSessionId: 'lead-1', dataDir }), expected)
+  }
+  // Without `trashDir`, the directory name is the last segment from either spelling.
+  for (const stored of ['trash/lead-1/member-2-2', 'trash\\lead-1\\member-2-2']) {
+    assert.equal(recordedTrashDir({ trashRelPath: stored }), 'member-2-2', `the name is the last segment of "${stored}"`)
+  }
+})

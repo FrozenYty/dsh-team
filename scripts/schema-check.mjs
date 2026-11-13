@@ -301,8 +301,17 @@ export function checkSchemas({ validator, tools, results }) {
 /**
  * Drive this bundle's tool wrappers with a minimal Host context, so the results checked are values the
  * tools actually produced. The same shape the entry tests use; the calls are chosen to return, not throw.
+ *
+ * **Exported, and that is the point.** This is the half of the check that needs no archive: it is the fake
+ * Host, and the drift that once rotted this script was a fake that no longer matched what the bundle reads
+ * (every Session got a data root, and the harness here gave its Lead no workspace). A unit test drives it
+ * on every push, with a validator that records what it was asked and the Host's own validator when an
+ * archive is present. `services` is what this harness answers, so the test can hold it against the
+ * bundle's own `inject` list: a service the bundle starts requiring and this fake does not provide fails
+ * the test by name, which is the failure a reader of a green report would never see.
+ * @returns {Promise<{tools: Array<object>, results: Array<object>, services: string[]}>}
  */
-async function collectFromBundle() {
+export async function collectFromBundle() {
   const { ROSTER_FILE_NAME } = await import('../roster.js')
   const { TEAM_DIR } = await import('../trash.js')
   const tools = new Map()
@@ -323,7 +332,9 @@ async function collectFromBundle() {
     session: { id: 'child-1', header: { parentSession: 'lead-1' } },
     ctx: { tools: { register: (definition) => { childTools.set(definition.name, definition); return () => childTools.delete(definition.name) } } },
   }
-  const ctx = {
+  // The services this fake Host answers, and nothing else is answered below. `compaction` is not one of
+  // them: the bundle asks for it lazily and tolerates its absence, so it is a lookup, not an injection.
+  const services = {
     agents: { list: () => [lead, child], get: (id) => (id === lead.id ? lead : id === child.id ? child : undefined) },
     agentTeams: { tryMembership: () => undefined, listMembers: () => [] },
     subagents: {
@@ -334,13 +345,16 @@ async function collectFromBundle() {
       interrupt: () => {},
       getProvider: (name) => (name === 'spawn' ? { name, capabilities: { agentOptions: true, agentPreset: true } } : undefined),
     },
+    // The registry the bundle's tools register into, through the agent context. Declared because the bundle
+    // injects it, and an injection the host cannot answer is what stops the plugin loading at all.
+    tools: {},
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
+  }
+  const ctx = {
+    ...services,
     get: (name) => {
-      if (name === 'agentTeams') return { tryMembership: () => undefined, listMembers: () => [] }
-      // `compact_member` refuses without a backend; an empty one is enough for the "not resident" answer
-      // the harness produces, which is a real result to check.
       if (name === 'compaction') return {}
-      return undefined
+      return services[name]
     },
     inject: (names, callback) => { callback(); return { then: () => {} } },
     on: () => () => {},
@@ -405,7 +419,7 @@ async function collectFromBundle() {
   }
   const declared = [...tools.values()].map((definition) => ({ name: definition.name, parameters: definition.parameters, output: definition.output }))
   const memberDeclared = memberTool === undefined ? [] : [{ name: memberTool.name, parameters: memberTool.parameters, output: memberTool.output }]
-  return { tools: [...declared, ...memberDeclared], results }
+  return { tools: [...declared, ...memberDeclared], results, services: Object.keys(services) }
 }
 
 /** Render the run the way the operator reads it. */

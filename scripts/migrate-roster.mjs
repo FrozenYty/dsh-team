@@ -38,6 +38,7 @@ import {
   artifactIsMissing,
   locateTrashedArtifact,
   recordedTrashDir,
+  relativeSegments,
   resolveDataDir,
 } from '../trash.js'
 
@@ -55,21 +56,30 @@ export function destinationOf(dataRoot, leadSessionId, dirName) {
   return join(dataRoot, 'trash', leadSessionId, dirName)
 }
 
-/** The value the record has to carry afterwards: the directory name and the root-relative path. */
+/** The value the record has to carry afterwards: the directory name and the root-relative path.
+ * Forward slashes, for the same reason the plugin writes them: a record is a file that travels, and `\` is
+ * a separator only on the platform that wrote it. */
 export function migratedFields(leadSessionId, dirName) {
-  return { trashDir: dirName, trashRelPath: join('trash', leadSessionId, dirName) }
+  return { trashDir: dirName, trashRelPath: ['trash', leadSessionId, dirName].join('/') }
 }
 
 /**
  * Whether one record already carries the migrated shape for this destination.
+ *
+ * The relative path is compared by segments, not by its characters: a record migrated by an earlier release
+ * of this pair carries the platform separator, and rewriting it because of that would report work that is
+ * not there — and rewrite every record on Windows. Tolerant on read, strict on write, as everywhere else.
  * @param {object} record - one roster member record.
  * @param {{trashDir: string, trashRelPath: string}} fields - what it should carry.
  * @returns {boolean} true when nothing has to be rewritten.
  */
 export function isMigrated(record, fields) {
+  const carried = relativeSegments(record?.trashRelPath)
+  const wanted = relativeSegments(fields.trashRelPath)
   return record?.trashPath === undefined
     && record?.trashDir === fields.trashDir
-    && record?.trashRelPath === fields.trashRelPath
+    && carried.length === wanted.length
+    && carried.every((segment, at) => segment === wanted[at])
 }
 
 /** Read a JSON file, distinguishing "absent" from "unreadable" — the two need different sentences. */
