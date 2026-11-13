@@ -151,7 +151,11 @@ overwriting it (`docs/member-lifecycle-en.md` §1).
    destination, records whose bytes are still on disk, and the storage-domain mode are deliberately not
    bounded, and neither is the archive itself (ADR 0030). A restore of an archived tombstone answers
    `reason: 'archived'` naming the file, and `list_members` reports `archived_records` with `archive_file`
-   when that count is non-zero.
+   when that count is non-zero. **A read happens only when the caller asks for it** (`archived: true`): it
+   answers one Lead, returns at most the newest **50** records with `archived_returned` and the real
+   `archived_total` beside them, dedupes by member id because the append-before-replace crash window leaves
+   duplicates by design, and counts a damaged line as `archived_unreadable` instead of raising. A plain read
+   still never opens the file, which is the rule ADR 0030 set and ADR 0035 keeps (ADR 0035).
 
 ## 4. Where the file lives, and who may write it
 
