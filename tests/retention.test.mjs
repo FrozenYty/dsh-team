@@ -270,6 +270,125 @@ test('a retirement that moved an artifact in prunes the oldest tombstone and kee
   assert.equal(readRoster(table, 'lead-1').members.find((member) => member.memberId === 'seed-2').trashState, TRASH_STATE.done)
 })
 
+test('the cap flips the record of a spawned member, whose memberId is not its child id', async () => {
+  // A retirement names the trash directory after the *child Session id*, and the record it later flips
+  // is keyed by `memberId`. `planMember` gives a spawned member two different uuids; only an adopted one
+  // has them equal, and every cap test seeded that shape — which is why the mismatch survived the suite.
+  const root = await scratch()
+  const table = memoryTable()
+  const seeded = []
+  for (let index = 1; index <= DEFAULT_TRASH_LIMIT; index += 1) {
+    const entry = await seedEntry(root, { memberId: `child-${index}`, stamp: index })
+    seeded.push(record({
+      memberId: `member-${index}`,
+      name: `member-${index}`,
+      childId: `child-${index}`,
+      phase: PHASE.retired,
+      retiredAt: new Date(0).toISOString(),
+      trashPath: entry.trashPath,
+      trashKind: 'directory',
+      originalPath: join(root, 'sessions', `child-${index}`),
+      trashState: TRASH_STATE.done,
+      archived: false,
+    }))
+  }
+  const artifact = join(root, 'sessions', 'fresh-child')
+  await mkdir(artifact, { recursive: true })
+  await writeFile(join(artifact, 'session.jsonl'), 'log')
+  seeded.push(record({ memberId: 'fresh', name: 'fresh', childId: 'fresh-child' }))
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: seeded }))
+
+  const ctx = retirementCtx({ artifactOf: (id) => (id === 'fresh-child' ? artifact : undefined) })
+  const retired = await retireMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: lead,
+    dataDir: root,
+    hooks: hooks(),
+    target: 'fresh',
+  })
+  assert.equal(retired.trashed, true)
+  assert.equal(retired.pruned, 1, 'the cap removed the oldest artifact')
+
+  // What the cap removed is a record, and a record is identified by `memberId` — not by the child id
+  // the directory happens to be named after.
+  const pruned = readRoster(table, 'lead-1').members.find((member) => member.memberId === 'member-1')
+  assert.equal(pruned.trashState, TRASH_STATE.pruned, 'the tombstone whose bytes went says so')
+  assert.equal(pruned.trashPath, join(trashRootOf(root), 'child-1-1'), 'and still says where they went')
+
+  const restored = await restoreMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    target: 'member-1',
+    hooks: hooks(),
+    dataDir: root,
+  })
+  assert.equal(restored.restored, false)
+  assert.equal(
+    restored.reason,
+    'pruned',
+    'a record the cap emptied answers the typed reason the tool description promises, not trash-missing',
+  )
+  assert.match(restored.message, /pruned by the trash retention cap/)
+})
+
+test('a retirement that moved nothing leaves no trash destination on the record', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  // A live record still carrying the absolute path an older release wrote. Whatever left it there, the
+  // tombstone must not name a destination beside `archived: true`: `restore_member` would take the trash
+  // branch for an artifact that was never moved, which is a defect PROGRESS records as fixed once before.
+  await updateRoster(table, 'lead-1', () => ({
+    leadSessionId: 'lead-1',
+    members: [record({
+      memberId: 'fresh',
+      name: 'fresh',
+      childId: 'fresh-child',
+      trashPath: join(root, 'old-root', 'trash', 'lead-1', 'legacy-1'),
+      trashDir: 'legacy-1',
+    })],
+  }))
+
+  // No artifact to move, so the workspace archive is the branch that runs instead.
+  const base = retirementCtx()
+  const ctx = {
+    ...base,
+    get: (name) => (name === 'workspaceRegistry'
+      ? { archiveSession: async () => {}, unarchiveSession: async () => {} }
+      : base.get(name)),
+  }
+  const retired = await retireMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: lead,
+    dataDir: root,
+    hooks: hooks(),
+    target: 'fresh',
+  })
+  assert.equal(retired.trashed, false)
+  assert.equal(retired.archived, true, 'the archive fallback is the branch that ran')
+
+  const tombstone = readRoster(table, 'lead-1').members[0]
+  assert.equal(tombstone.trashState, TRASH_STATE.none)
+  for (const field of ['trashPath', 'trashDir', 'trashRelPath']) {
+    assert.equal(tombstone[field], undefined, `${field} is gone: the record names no destination`)
+  }
+
+  const restored = await restoreMember({
+    ctx,
+    table,
+    leadSessionId: 'lead-1',
+    target: 'fresh',
+    hooks: hooks(),
+    dataDir: root,
+  })
+  assert.equal(restored.restored, true)
+  assert.equal(restored.reason, 'unarchived', 'no trash branch is entered for a move that never happened')
+})
+
 test('a configured cap is the one the retirement enforces and prints, not the default', async () => {
   const root = await scratch()
   const table = memoryTable()

@@ -359,6 +359,22 @@ export async function pathExists(path) {
 }
 
 /**
+ * The last segment of a recorded path, or undefined when it has none.
+ *
+ * `basename('/')` and `basename('C:\\')` are the empty string, not undefined, so a corrupt record whose
+ * path is a bare root used to answer `''` and be treated as a real directory name: restore then resolved
+ * the whole root — the Lead's trash directory itself — and moved *that*, failing with `EBUSY` instead of
+ * reporting `no-recorded-path`.
+ * @param {unknown} path - one recorded path.
+ * @returns {string|undefined} its last segment, or undefined when there is nothing to name.
+ */
+function lastSegment(path) {
+  if (typeof path !== 'string' || path === '') return undefined
+  const name = basename(path)
+  return name === '' ? undefined : name
+}
+
+/**
  * The trash directory name a tombstone records, from either stored shape.
  *
  * A record written from this release carries `trashDir` — the name retirement gave the directory — and
@@ -372,11 +388,9 @@ export async function pathExists(path) {
 export function recordedTrashDir(record) {
   const named = record?.trashDir
   if (typeof named === 'string' && named !== '') return named
-  const relative = record?.trashRelPath
-  if (typeof relative === 'string' && relative !== '') return basename(relative)
-  const absolute = record?.trashPath
-  if (typeof absolute === 'string' && absolute !== '') return basename(absolute)
-  return undefined
+  const relative = lastSegment(record?.trashRelPath)
+  if (relative !== undefined) return relative
+  return lastSegment(record?.trashPath)
 }
 
 /**
@@ -442,6 +456,24 @@ export async function locateTrashedArtifact({ record, leadSessionId, dataDir, ho
     if (await pathExists(candidate.path)) return candidate
   }
   return undefined
+}
+
+/**
+ * Whether a tombstone that says its move landed no longer has anything behind it.
+ *
+ * This is the rule a migration applies to the records the retention defect left wrong. A `done` tombstone
+ * whose artifact is not on any leg of the chain was pruned by the cap — the cap is the only deletion on
+ * this path — and has to become `pruned`, which is what makes `restore_member` answer the typed reason
+ * rather than the generic `trash-missing`. A record that never claimed a landed move is not this
+ * question's business: a `pending` move may or may not have landed, and a record naming no destination
+ * moved nothing.
+ * @param {{record: object, leadSessionId: string, dataDir?: string, home?: string}} request
+ * @returns {Promise<boolean>} true when the record claims a landed move and the bytes are gone.
+ */
+export async function artifactIsMissing({ record, leadSessionId, dataDir, home = homedir() }) {
+  if (record?.trashState !== undefined && record.trashState !== 'done') return false
+  if (recordedTrashDir(record) === undefined) return false
+  return (await locateTrashedArtifact({ record, leadSessionId, dataDir, home })) === undefined
 }
 
 /**
@@ -592,7 +624,12 @@ export async function pruneLeadTrash({ trashRoot, limit = DEFAULT_TRASH_LIMIT, m
     const member = byDir.get(entry.name)
     if (member === undefined) continue
     if (member.trashState !== 'done' && member.trashState !== 'pending') continue
-    candidates.push({ ...parsed, name: entry.name, trashPath, trashState: member.trashState })
+    // The name carries the child Session id, and that is *not* the roster identity: a spawned member's
+    // `memberId` and `childId` are two different uuids, and `retireMember` flips records by `memberId`.
+    // Reporting the parsed name here left every spawn-shaped tombstone at `done` while its bytes were
+    // gone, so `restore_member` answered `trash-missing` instead of the `pruned` it promises.
+    const memberId = typeof member.memberId === 'string' && member.memberId !== '' ? member.memberId : parsed.memberId
+    candidates.push({ ...parsed, memberId, name: entry.name, trashPath, trashState: member.trashState })
   }
 
   const excess = candidates.length - limit

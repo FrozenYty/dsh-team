@@ -1732,6 +1732,11 @@ export async function retireMember({
     } else {
       delete next.trashDir
       delete next.trashRelPath
+      // A record written before the root-relative shape can still be carrying this one, and the
+      // invariant is that a tombstone never names a trash destination *and* `archived: true` — a
+      // leftover absolute path sends `restore_member` back into the trash branch for an artifact that
+      // was never moved there.
+      delete next.trashPath
       delete next.trashKind
       delete next.originalPath
       next.trashState = TRASH_STATE.none

@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.27.1] - 2026-11-13
+
+- The retention cap flips the record it emptied, instead of an id parsed out of the directory name.
+
 ## [0.27.0] - 2026-11-13
 
 - The roster is this plugin's own file under the workspace, and the storage domain becomes the import and the rollback.
