@@ -63,17 +63,90 @@ export function frozenDataDir(home = homedir()) {
 }
 
 /**
- * Resolve the plugin data directory.
- * @param {NodeJS.ProcessEnv} env - process environment.
- * @param {string} home - user home directory.
- * @returns {string} absolute data directory.
+ * The workspace-relative directory this plugin owns, beside the memory notebook.
+ *
+ * One folder holds everything dsh-team writes: the roster file, its import marker and the trash. It is
+ * a *relative* name because the absolute root is per workspace, not per machine.
  */
-export function resolveDataDir(env = process.env, home = homedir()) {
+export const TEAM_DIR = '.agents/team'
+
+/**
+ * The data directory an operator configured, or undefined when none is set.
+ * @param {NodeJS.ProcessEnv} env - process environment.
+ * @returns {string|undefined} the configured root, trimmed.
+ */
+function configuredDataDir(env) {
   for (const variable of [DATA_DIR_ENV, LEGACY_DATA_DIR_ENV]) {
-    const override = env[variable]
+    const override = env?.[variable]
     if (typeof override === 'string' && override.trim() !== '') return override.trim()
   }
+  return undefined
+}
+
+/**
+ * Resolve the plugin data directory.
+ *
+ * The order is the operator's override, then the workspace the caller named, then the frozen pre-0.26.0
+ * directory. The last one is a read-time fallback, not a destination: it is where an artifact from an
+ * earlier release still sits (see `trashPathCandidates` below), and a caller that means to *write*
+ * asks `createRootBinder` instead, which answers `undefined` rather than pointing new bytes there.
+ * @param {NodeJS.ProcessEnv} env - process environment.
+ * @param {string} home - user home directory.
+ * @param {string} [cwd] - the workspace directory this call is for.
+ * @returns {string} absolute data directory.
+ */
+export function resolveDataDir(env = process.env, home = homedir(), cwd) {
+  const configured = configuredDataDir(env)
+  if (configured !== undefined) return configured
+  if (typeof cwd === 'string' && cwd !== '') return resolve(cwd, TEAM_DIR)
   return frozenDataDir(home)
+}
+
+/**
+ * The data root each Lead Session is bound to, for the life of this process.
+ *
+ * A workspace root is derived from the Lead's working directory, and a session's working directory can
+ * change while it runs (`working_directory` is a tool). Resolving the root on every call would therefore
+ * move the data out from under a running Lead: its next read would look in the new workspace, find
+ * nothing, and its records would look orphaned. So the first resolution binds, and every later one
+ * answers the bound root. The binding lives here, in this process's memory — nothing a
+ * `working_directory` call touches can reach it — and it is keyed by Lead Session id, so two Leads in
+ * two workspaces each keep their own root.
+ *
+ * `undefined` is a real answer: a session whose workspace cannot be known (no working directory, no
+ * override) has nowhere this plugin may write, and the caller keeps using the storage domain instead of
+ * inventing a location. That is also what keeps a profile without a workspace behaving exactly as it did
+ * before the roster file existed.
+ *
+ * The binding is deliberately not persisted. A file that recorded it would itself live at a location the
+ * current directory decides, so it could not settle the very question it was written to answer; and after
+ * a restart the session's own working directory is the host's answer, which is a better starting point
+ * than a stale absolute path. What *is* durable is the roster file at the bound root, and that is what a
+ * later process reads.
+ * @param {{env?: NodeJS.ProcessEnv, home?: string}} [options] - the environment and home directory the
+ *   configured override is read from.
+ * @returns {{bind: (leadSessionId: string, cwd?: string) => string|undefined,
+ *   rootOf: (leadSessionId: string) => string|undefined, roots: () => Map<string, string>}}
+ */
+export function createRootBinder({ env = process.env, home = homedir() } = {}) {
+  const bound = new Map()
+  const configured = configuredDataDir(env)
+  return {
+    bind(leadSessionId, cwd) {
+      const existing = bound.get(leadSessionId)
+      if (existing !== undefined) return existing
+      const root = configured ?? (typeof cwd === 'string' && cwd !== '' ? resolve(cwd, TEAM_DIR) : undefined)
+      if (root === undefined) return undefined
+      bound.set(leadSessionId, root)
+      return root
+    },
+    rootOf(leadSessionId) {
+      return bound.get(leadSessionId)
+    },
+    roots() {
+      return new Map(bound)
+    },
+  }
 }
 
 /** Render one rejected value so the message distinguishes `'20'` from `20` and shows `NaN` and `null`. */

@@ -1,17 +1,24 @@
 /**
  * Durable roster storage and lifecycle helpers for dsh-team.
  *
- * No imports beyond `node:crypto`: a profile-linked bundle cannot resolve `@deepseek-ai/*` or `zod`
- * (ADR 0002). The domain spec below is therefore hand-built. That is safe because the storage facility
- * calls exactly one method on a value schema — `.parse` — when it opens a domain and when it decodes a
- * record; the canonical `defineDomain` constructor only adds load-time validation we cannot import.
+ * No imports beyond Node's own modules: a profile-linked bundle cannot resolve `@deepseek-ai/*` or
+ * `zod` (ADR 0002). The domain spec below is therefore hand-built. That is safe because the storage
+ * facility calls exactly one method on a value schema — `.parse` — when it opens a domain and when it
+ * decodes a record; the canonical `defineDomain` constructor only adds load-time validation we cannot
+ * import.
  *
  * One roster record per Lead Session holds every member of that Lead's team. The record is the durable
  * lifecycle fact; live state (resident, running) is read from the Harness at call time and never stored,
  * so the two can never disagree.
+ *
+ * The bytes are this plugin's own: one `roster.json` per workspace root under `.agents/team/`, written
+ * with plain `node:fs`. The storage domain is kept as the one-time import source and the rollback path,
+ * and it is never deleted (`docs/roster-storage-en.md`).
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 /**
  * Domain name: /^[a-z][a-z0-9_]*$/ per the storage facility.
@@ -602,16 +609,376 @@ async function migrateLegacyRoster(ctx, table) {
 }
 
 /**
- * Open the roster domain and return its table.
+ * Open the roster store for this process: the storage domain as the import source and rollback path,
+ * plus this plugin's own file at each Lead's bound root.
  * @param ctx - plugin context, with `storageDomain` injected.
- * @returns the roster table handle.
+ * @param binder - the root binder from `trash.js`; `undefined` leaves every Lead on the domain.
+ * @returns the roster source: `{ table, bind, ready, readyFor, report }`.
  */
-export async function openRosterStore(ctx) {
+export async function openRosterStore(ctx, binder) {
   const domain = await ctx.storageDomain.open(ROSTER_SPEC)
   ctx.effect(() => () => domain.close(), 'team-roster.domainClose()')
-  const table = domain.table('rosters')
-  await migrateLegacyRoster(ctx, table)
-  return table
+  const domainTable = domain.table('rosters')
+  await migrateLegacyRoster(ctx, domainTable)
+  return createRosterSource({ domainTable, binder })
+}
+
+/** The one file a workspace's rosters live in, under the bound root. */
+export const ROSTER_FILE_NAME = 'roster.json'
+
+/** What the one-time import from the storage domain records: which Lead came across, and when. */
+export const IMPORT_MARKER_NAME = 'roster-import.json'
+
+/** The content of a roster file that has never been written. */
+const emptyRosterFile = () => ({ version: 1, serial: 0, rosters: {} })
+
+/** One sentence for a caught error, so a report never says "Error" and nothing else. */
+function describeError(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Read one JSON file, telling "there is no such file" apart from "it is there and I cannot use it".
+ * @param {string} file - absolute path.
+ * @returns {Promise<{exists: boolean, value?: object, problem?: string}>}
+ */
+async function readJsonFile(file) {
+  let text
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { exists: false }
+    return { exists: true, problem: `unreadable (${describeError(error)})` }
+  }
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (error) {
+    return { exists: true, problem: `not valid JSON (${describeError(error)})` }
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { exists: true, problem: 'not a JSON object' }
+  }
+  return { exists: true, value }
+}
+
+/**
+ * Decode one roster file: its `serial` and its records, or the reason it cannot be used.
+ *
+ * Every record is validated with the same `parseRoster` the storage facility applied when it opened the
+ * domain, so a file with one corrupt record is refused as a whole and the root falls back to the domain
+ * — exactly what `invalid-record` did for a domain. A file that loads anyway would put a malformed record
+ * in front of every tool.
+ * @param {{value?: object}} reading - what `readJsonFile` returned.
+ * @returns {{serial: number, rosters: object}|{problem: string}}
+ */
+function decodeRosterFile(reading) {
+  const rosters = reading.value?.rosters
+  if (rosters === null || typeof rosters !== 'object' || Array.isArray(rosters)) {
+    return { problem: 'no "rosters" object' }
+  }
+  for (const [leadSessionId, roster] of Object.entries(rosters)) {
+    try {
+      parseRoster(roster)
+    } catch (error) {
+      return { problem: `record "${leadSessionId}" is invalid (${describeError(error)})` }
+    }
+  }
+  return {
+    serial: Number.isSafeInteger(reading.value.serial) ? reading.value.serial : 0,
+    rosters: { ...rosters },
+  }
+}
+
+/**
+ * Replace one file without ever leaving it half-written: the new bytes go to a temporary sibling, which
+ * is then renamed over the target. A rename inside one directory is the platform's atomic replacement,
+ * so a crash before it leaves the previous file exactly as it was and a crash after it leaves the new
+ * one; there is no window in which the file is short. The temporary file is removed when the rename
+ * itself fails.
+ * @param {string} file - absolute path of the file to replace.
+ * @param {string} text - the complete new content.
+ * @param {(from: string, to: string) => Promise<void>} renameFn - the rename, injectable so a test can
+ *   fail it and prove the previous file survives.
+ */
+async function replaceFileAtomic(file, text, renameFn) {
+  await mkdir(dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  await writeFile(temporary, text, 'utf8')
+  try {
+    await renameFn(temporary, file)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+/**
+ * The rosters this process serves, and the one place that decides where their bytes go.
+ *
+ * **One writer per workspace.** The rosters of one workspace live in one file, and nothing serializes
+ * two processes that open it: a lock file was rejected because it adds a stale-lock failure mode that
+ * nothing cleans up, while the file itself already reveals the second writer. Every write re-reads the
+ * file first — which is also what merges a concurrent change instead of clobbering it — and reports a
+ * serial it did not write as `foreign_write_at`. Two Lead Sessions in one workspace therefore share a
+ * file by design; the honest limit is that a second writer is detected when this process next reads or
+ * writes, not the instant it writes.
+ *
+ * A root is served in one of two modes, and the second is the rollback:
+ *
+ *   - **file** — the Lead's root holds `roster.json`; reads and writes go there. It is created by
+ *     importing the Lead's record from the storage domain once, which the marker beside it records;
+ *   - **storage domain** — no root could be resolved for the Lead (no workspace, no override), or the
+ *     file is absent and has just been imported from the domain. The domain is never written to once a
+ *     root exists, and it is never deleted, so deleting `roster.json` puts a workspace back on it.
+ *
+ * @param {{domainTable?: object, binder?: object, renameFn?: Function, now?: () => string}} options -
+ *   `domainTable` is the storage domain's roster table (import source and fallback), `binder` answers
+ *   which root a Lead is bound to, and `renameFn` is the atomic-replacement seam.
+ * @returns {{table: object, bind: Function, ready: Function, readyFor: Function, report: Function}}
+ */
+export function createRosterSource({ domainTable, binder, renameFn = rename, now = () => new Date().toISOString() } = {}) {
+  /** One state per root this process has touched. */
+  const states = new Map()
+
+  const stateOf = (root) => {
+    let state = states.get(root)
+    if (state === undefined) {
+      state = {
+        root,
+        file: join(root, ROSTER_FILE_NAME),
+        marker: join(root, IMPORT_MARKER_NAME),
+        content: emptyRosterFile(),
+        loaded: false,
+        loading: undefined,
+        problem: undefined,
+        importedAt: undefined,
+        foreignWriteAt: undefined,
+        // The file serial this process last wrote. `0` means "never written here", which is why it is
+        // also the guard that stops the first load from reporting a writer that does not exist.
+        lastSerial: 0,
+        chain: Promise.resolve(),
+      }
+      states.set(root, state)
+    }
+    return state
+  }
+
+  const enqueue = (state, job) => {
+    const result = state.chain.then(job, job)
+    state.chain = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  /** Read the root's file into memory. A file that cannot be used leaves the root on the domain. */
+  const load = async (state) => {
+    if (state.loaded) return
+    const reading = await readJsonFile(state.file)
+    if (reading.value !== undefined) {
+      const decoded = decodeRosterFile(reading)
+      if (decoded.rosters !== undefined) {
+        state.content = { version: 1, serial: decoded.serial, rosters: decoded.rosters }
+        state.lastSerial = decoded.serial
+      } else {
+        state.problem = decoded.problem
+      }
+    } else if (reading.exists) {
+      state.problem = reading.problem ?? 'unreadable'
+    }
+    state.loaded = true
+  }
+
+  /** The freshest content for one root: the file on disk when it can be read, the memory copy otherwise. */
+  const freshest = async (state) => {
+    const reading = await readJsonFile(state.file)
+    if (reading.value !== undefined) {
+      const decoded = decodeRosterFile(reading)
+      if (decoded.rosters === undefined) {
+        state.problem = decoded.problem
+        return state.content
+      }
+      if (state.lastSerial !== 0 && decoded.serial !== state.lastSerial) {
+        // Somebody else wrote this file since this process last did. The change is merged below rather
+        // than clobbered, and the fact is kept for the read report.
+        state.foreignWriteAt = typeof reading.value.updatedAt === 'string' ? reading.value.updatedAt : now()
+      }
+      // The file is the truth, so a successful read also refreshes what this process serves.
+      state.content = { version: 1, serial: decoded.serial, rosters: decoded.rosters }
+      return state.content
+    }
+    if (reading.exists) state.problem = reading.problem ?? 'unreadable'
+    return state.content
+  }
+
+  /** Write the whole file for one root, and remember what this process wrote. */
+  const persist = async (state, content) => {
+    const next = { ...content, serial: content.serial + 1, updatedAt: now() }
+    await replaceFileAtomic(state.file, `${JSON.stringify(next, null, 2)}\n`, renameFn)
+    state.content = next
+    state.lastSerial = next.serial
+    // A problem is deliberately not cleared here. It is a fact about this process's session — the file
+    // was unusable at some point and these records were served from the domain — and a reader that only
+    // saw the repaired file would never learn that.
+    return next
+  }
+
+  /** Record one import beside the file, so a reader can tell where the records came from. */
+  const writeMarker = async (state, leadSessionId, record) => {
+    const reading = await readJsonFile(state.marker)
+    const leads = { ...(reading.value?.leads ?? {}) }
+    leads[leadSessionId] = {
+      importedAt: state.importedAt,
+      members: Array.isArray(record?.members) ? record.members.length : 0,
+      tasks: Array.isArray(record?.tasks) ? record.tasks.length : 0,
+    }
+    await replaceFileAtomic(
+      state.marker,
+      `${JSON.stringify({ version: 1, source: ROSTER_SPEC.name, leads }, null, 2)}\n`,
+      renameFn,
+    )
+  }
+
+  /**
+   * Import one Lead's record from the storage domain, once, into this root.
+   *
+   * This is the one write a load can make, and it is deliberately best-effort: the imported content is
+   * served whether or not it reaches the disk, so a read-only workspace still answers with the Lead's
+   * real roster and reports why it could not keep it.
+   */
+  const importLead = async (state, leadSessionId) => {
+    await enqueue(state, async () => {
+      if (state.content.rosters[leadSessionId] !== undefined) return
+      const record = domainTable?.get?.(leadSessionId)
+      if (record === undefined) return
+      state.content = {
+        ...state.content,
+        rosters: { ...state.content.rosters, [leadSessionId]: record },
+      }
+      state.importedAt = now()
+      try {
+        await persist(state, state.content)
+        await writeMarker(state, leadSessionId, record)
+      } catch (error) {
+        state.problem = `the imported roster could not be written (${describeError(error)})`
+      }
+    })
+  }
+
+  const loadAndImport = async (state, leadSessionId) => {
+    state.loading ??= load(state)
+    await state.loading
+    await importLead(state, leadSessionId)
+  }
+
+  /** One write, on this root's chain: re-read, change, replace. */
+  const write = (state, leadSessionId, produce) => enqueue(state, async () => {
+    const fresh = await freshest(state)
+    const current = fresh.rosters[leadSessionId]
+    const stored = produce(current)
+    const next = await persist(state, { ...fresh, rosters: { ...fresh.rosters, [leadSessionId]: stored } })
+    return next.rosters[leadSessionId]
+  })
+
+  const table = {
+    get(leadSessionId) {
+      const root = binder?.rootOf?.(leadSessionId)
+      if (root === undefined) return domainTable?.get?.(leadSessionId)
+      const state = states.get(root)
+      if (state === undefined || !state.loaded) return domainTable?.get?.(leadSessionId)
+      return state.content.rosters[leadSessionId]
+    },
+    async put(leadSessionId, value) {
+      const root = binder?.rootOf?.(leadSessionId)
+      if (root === undefined) return await domainTable.put(leadSessionId, value)
+      const state = stateOf(root)
+      state.loading ??= load(state)
+      await state.loading
+      return await write(state, leadSessionId, () => value)
+    },
+    async update(leadSessionId, mutate) {
+      const root = binder?.rootOf?.(leadSessionId)
+      if (root === undefined) return await domainTable.update(leadSessionId, mutate)
+      const state = stateOf(root)
+      state.loading ??= load(state)
+      await state.loading
+      return await write(state, leadSessionId, (current) => {
+        if (current === undefined) throw new Error(`no record "${leadSessionId}" to update`)
+        return stampRoster(mutate(current), leadSessionId)
+      })
+    },
+    entries() {
+      const rows = []
+      const boundKeys = new Set(binder?.roots?.().keys() ?? [])
+      for (const state of states.values()) {
+        for (const [leadSessionId, roster] of Object.entries(state.content.rosters)) rows.push([leadSessionId, roster])
+      }
+      if (domainTable?.entries !== undefined) {
+        for (const [leadSessionId, roster] of domainTable.entries()) {
+          if (boundKeys.has(leadSessionId)) continue
+          rows.push([leadSessionId, roster])
+        }
+      }
+      return rows[Symbol.iterator]()
+    },
+  }
+
+  return {
+    table,
+    /**
+     * Bind one Lead to the root its workspace names, and start loading that root.
+     * Synchronous on purpose: it is called while a Lead's tools are registered, and the load continues
+     * on its own while the first tool call is still on its way.
+     * @returns {string|undefined} the bound root, or undefined when this Lead keeps the domain.
+     */
+    bind(leadSessionId, cwd) {
+      const root = binder?.bind?.(leadSessionId, cwd)
+      if (root === undefined) return undefined
+      const state = stateOf(root)
+      state.loading ??= load(state)
+      return root
+    },
+    /** Every root bound so far is loaded and imported. */
+    async ready() {
+      for (const [leadSessionId, root] of binder?.roots?.() ?? []) {
+        await loadAndImport(stateOf(root), leadSessionId)
+      }
+    },
+    /** One Lead's root is loaded and imported. */
+    async readyFor(leadSessionId) {
+      const root = binder?.rootOf?.(leadSessionId)
+      if (root === undefined) return
+      await loadAndImport(stateOf(root), leadSessionId)
+    },
+    /**
+     * Where this Lead's roster is, and anything a reader has to know about it: where it was imported
+     * from, a writer this process did not expect, or a file it could not read.
+     * @param {string} leadSessionId - the Lead asking.
+     * @returns {object} the `storage` block of `list_members`.
+     */
+    report(leadSessionId) {
+      const root = binder?.rootOf?.(leadSessionId)
+      if (root === undefined) {
+        return {
+          source: 'storage-domain',
+          message: 'This Session has no workspace to own bytes in, so its roster is still served from the storage domain — the rollback path. Give the Session a working directory, or set DSH_TEAM_DATA_DIR, to move it under the workspace.',
+        }
+      }
+      const state = states.get(root)
+      const value = { source: 'file', path: join(root, ROSTER_FILE_NAME) }
+      const notes = []
+      if (state?.importedAt !== undefined) value.imported_at = state.importedAt
+      if (state?.foreignWriteAt !== undefined) {
+        value.foreign_write_at = state.foreignWriteAt
+        notes.push(`another writer changed this workspace's roster at ${state.foreignWriteAt}, and dsh-team expects one writer per workspace: two Lead Sessions in one workspace share this file and the last write wins`)
+      }
+      if (state?.problem !== undefined) {
+        value.read_problem = state.problem
+        notes.push(`the roster file could not be used (${state.problem}), so this Lead's records are being served from the storage domain until the next successful write`)
+      }
+      if (notes.length > 0) value.message = `${notes.join('; ')}.`
+      return value
+    },
+  }
 }
 
 /** Read one Lead's roster, or an empty roster when none exists yet. */
