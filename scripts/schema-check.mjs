@@ -23,6 +23,7 @@
  * Usage: `node scripts/schema-check.mjs` (set `DSH_ASAR` to check another build).
  */
 
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -309,9 +310,18 @@ export function checkSchemas({ validator, tools, results }) {
  * archive is present. `services` is what this harness answers, so the test can hold it against the
  * bundle's own `inject` list: a service the bundle starts requiring and this fake does not provide fails
  * the test by name, which is the failure a reader of a green report would never see.
- * @returns {Promise<{tools: Array<object>, results: Array<object>, services: string[]}>}
+ *
+ * **Both shapes of `list_members` are produced, because the tool can return two.** With `archive` (the
+ * default) the harness stages a tombstone that leaves the roster and then asks for it with
+ * `archived: true`, so the validator sees a value carrying archived rows; with `archive: false` it asks for
+ * the same thing on a fresh data root, where there is no file to read. A check that produced only the plain
+ * shape would let a field the Host refuses pass unnoticed, which is the one class of failure this script
+ * exists to catch.
+ * @param {{archive?: boolean}} [options] - `archive: false` stages no tombstone, so the flagged read answers
+ *   from a data root with no archive file.
+ * @returns {Promise<{tools: Array<object>, results: Array<object>, services: string[], dataDir: string}>}
  */
-export async function collectFromBundle() {
+export async function collectFromBundle({ archive = true } = {}) {
   const { ROSTER_FILE_NAME } = await import('../roster.js')
   const { TEAM_DIR } = await import('../trash.js')
   const tools = new Map()
@@ -320,6 +330,15 @@ export async function collectFromBundle() {
   // with no working directory would write its roster under the operator's real home directory, and the store
   // would not be the thing this script drives. Nothing here needs a storage domain — the bundle opens none.
   const workspace = await mkdtemp(join(tmpdir(), 'dsh-team-schema-'))
+  const dataDir = join(workspace, TEAM_DIR)
+  const rosterFile = join(dataDir, ROSTER_FILE_NAME)
+  // Where a Session's artifact sits. The trash move needs one to report, and a tombstone that names no trash
+  // directory is never archived — it is the only shape the archive writer accepts.
+  const sessionsRoot = join(workspace, 'sessions')
+  const memberNamed = async (name) => {
+    const stored = JSON.parse(await readFile(rosterFile, 'utf8'))
+    return stored.rosters['lead-1']?.members.find((member) => member.name === name)
+  }
   const lead = {
     id: 'lead-1',
     status: 'idle',
@@ -349,6 +368,15 @@ export async function collectFromBundle() {
     // injects it, and an injection the host cannot answer is what stops the plugin loading at all.
     tools: {},
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
+    // A backend that reports a Session's directory while it is where the host put it. Without one, a
+    // retirement takes the workspace-archive branch, no tombstone ever names a trash directory, and the
+    // archive writer has nothing it is allowed to take.
+    sessionPersistence: {
+      stat: async (id) => {
+        const dir = join(sessionsRoot, id)
+        return existsSync(dir) ? { location: { path: dir } } : undefined
+      },
+    },
   }
   const ctx = {
     ...services,
@@ -361,7 +389,10 @@ export async function collectFromBundle() {
     effect: (install) => { install(); return () => {} },
     logger: { warn() {} },
   }
-  apply(ctx, undefined)
+  // A window of one, because the archive branch begins where the window ends: a tombstone leaves the roster
+  // only when it is past `trashLimit`, and a check that had to retire twenty-one members to reach that
+  // branch would be a check nobody reads. One is a legal value the loader accepts (its minimum).
+  apply(ctx, { trashLimit: 1 })
 
   const steps = [
     ['spawn_member', { name: 'reviewer', label: 'Reviewer', prompt: 'Review the parser.' }],
@@ -390,7 +421,31 @@ export async function collectFromBundle() {
   // records live in the roster file the tools just wrote, so the patch is a second writer touching that
   // file — and the store merges a change it did not write at its next write, which is why a write follows
   // it here before the member read.
-  const rosterFile = join(workspace, TEAM_DIR, ROSTER_FILE_NAME)
+  /**
+   * Stage one tombstone that leaves the roster, through the plugin's own writer.
+   *
+   * Nothing here writes an archive line. Each retirement moves a real artifact into the trash and records
+   * where it went; the oldest staged tombstone's bytes are then removed, which is what the retention cap
+   * does; the next write bounds the roster, and *that* is the code path that appends the line. A fixture
+   * that wrote the JSONL by hand would test this script's idea of the format and would keep passing if the
+   * writer changed shape.
+   */
+  const stageArchivedTombstone = async () => {
+    const staged = []
+    for (const name of ['archivist-a', 'archivist-b']) {
+      await tools.get('spawn_member').execute({ name, label: 'Keep the record', prompt: 'Hold this.', lifetime: 'one-shot' }, { agent: lead })
+      const born = await memberNamed(name)
+      await mkdir(join(sessionsRoot, born.childId), { recursive: true })
+      await writeFile(join(sessionsRoot, born.childId, 'session.jsonl'), 'log')
+      await tools.get('retire_member').execute({ target: name }, { agent: lead })
+      staged.push(await memberNamed(name))
+    }
+    // The writer archives a tombstone only when its artifact is on no leg of the chain, so the oldest one's
+    // trash copy is removed — exactly what the cap does when it prunes the oldest entries.
+    await rm(join(dataDir, staged[0].trashRelPath), { recursive: true, force: true })
+  }
+  if (archive) await stageArchivedTombstone()
+
   const stored = JSON.parse(await readFile(rosterFile, 'utf8'))
   const own = stored.rosters['lead-1']
   await writeFile(rosterFile, `${JSON.stringify({
@@ -417,9 +472,19 @@ export async function collectFromBundle() {
   } catch (error) {
     results.push({ tool: 'list_my_tasks', args: {}, error: error instanceof Error ? error.message : String(error) })
   }
+  // The other shape `list_members` can return, and the reason this harness stages a tombstone at all: a value
+  // carrying archived rows, a count and the archived time is judged by the Host like any other, and until
+  // this call existed nothing ever produced one. Counted as a real result in the summary, so the number the
+  // script prints is the number of values it ran.
+  const flagged = { archived: true }
+  try {
+    results.push({ tool: 'list_members', args: flagged, value: await tools.get('list_members').execute(flagged, { agent: lead }) })
+  } catch (error) {
+    results.push({ tool: 'list_members', args: flagged, error: error instanceof Error ? error.message : String(error) })
+  }
   const declared = [...tools.values()].map((definition) => ({ name: definition.name, parameters: definition.parameters, output: definition.output }))
   const memberDeclared = memberTool === undefined ? [] : [{ name: memberTool.name, parameters: memberTool.parameters, output: memberTool.output }]
-  return { tools: [...declared, ...memberDeclared], results, services: Object.keys(services) }
+  return { tools: [...declared, ...memberDeclared], results, services: Object.keys(services), dataDir }
 }
 
 /** Render the run the way the operator reads it. */

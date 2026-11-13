@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { inject } from '../index.js'
+import { readArchivedRecords } from '../roster.js'
 import {
   DEFAULT_ASAR,
   checkSchemas,
@@ -28,6 +29,7 @@ import {
   resolutionCandidates,
   specifiersOf,
 } from '../scripts/schema-check.mjs'
+import { assertMatchesSchema } from './schema-assert.mjs'
 
 /**
  * Build an archive with the layout the reader expects: the three size fields, the JSON header, then the
@@ -202,11 +204,44 @@ test('an all-accepted run says so plainly', () => {
   assert.match(text, /verdict: the Host accepts every schema this bundle declares/)
 })
 
+test('the archive the flagged value comes from is the plugin own writer output', async () => {
+  // The fixture is not written by the check: the harness stages two tombstones whose artifacts really move,
+  // removes the oldest one's bytes, and lets the next write bound the roster — which is the code path that
+  // appends the line. Reading it back through the plugin's reader is what proves the line is the writer's
+  // shape rather than the check's idea of it, and it is why a change to the line format cannot leave this
+  // test passing on a stale fixture.
+  const { dataDir } = await collectFromBundle()
+  const read = await readArchivedRecords(dataDir, 'lead-1')
+  assert.equal(read.path, join(dataDir, 'archive.jsonl'), 'the archive sits under the root the flagged read used')
+  assert.equal(read.total >= 1, true, 'the writer archived at least one tombstone')
+  assert.equal(read.unreadable, 0, 'and wrote nothing the reader has to skip')
+  assert.equal(typeof read.records[0].archivedAt, 'string', 'the line records when the record left the roster')
+  assert.equal(read.records[0].member.phase, 'retired', 'and carries the tombstone itself, not a projection of it')
+  assert.equal(typeof read.records[0].member.childId, 'string', 'which names the child Session the artifact came from')
+})
+
+test('a fresh data root with no archive still passes: the flag asks for a file that may not exist', async () => {
+  // The other direction of the same coverage: the flagged read must produce a valid value even when nothing
+  // has ever been archived, or the check would refuse on a profile that has not run long enough to need it.
+  const { tools, results, dataDir } = await collectFromBundle({ archive: false })
+  const read = await readArchivedRecords(dataDir, 'lead-1')
+  assert.equal(read.total, 0, 'no file, no records')
+  assert.equal(read.path, undefined, 'and no path is claimed for it')
+
+  const flagged = results.find((result) => result.tool === 'list_members' && result.args?.archived === true)
+  assert.ok(flagged !== undefined, 'the flagged read still ran')
+  assert.equal(flagged.error, undefined, 'and returned a value rather than throwing')
+  assert.equal(flagged.value.archived_returned, 0)
+  assert.equal(flagged.value.archived_total, 0)
+  const declaration = tools.find((tool) => tool.name === 'list_members')
+  assertMatchesSchema(flagged.value, declaration.output.schema, 'list_members { archived: true } on a fresh root')
+  assert.deepEqual(checkSchemas({ validator: stubValidator(), tools, results }).failures, [], 'and nothing is rejected')
+})
+
 test('the harness half still matches the bundle: every injection is answered, every call returns', async (t) => {
   // The half that needs no archive, and the half that rotted: at v0.31.0 every Session got a data root, the
   // script's fake Host still gave its Lead no workspace, and the check broke without anyone running it.
   const { tools, results, services } = await collectFromBundle()
-
   // A dependency the bundle declares and this fake does not answer is that drift, named so the repair is
   // obvious: add it to the fake, or stop declaring it.
   for (const name of inject) {
@@ -241,6 +276,32 @@ test('the harness half still matches the bundle: every injection is answered, ev
   assert.equal(validator.seen.assertObjectRoot.length, tools.length, 'and the object-root assertion')
   assert.equal(validator.seen.validate.length, results.length, 'one value check per returned result')
   assert.deepEqual(report.failures, [], 'the stand-in rejects nothing')
+
+  // **Both shapes `list_members` can return are in the run.** The plain read was always here; the flagged one
+  // is the value the Host had never seen, and it carries fields nothing else produces. If it disappears the
+  // report silently goes back to checking fourteen values, which is what this asserts against.
+  const flagged = results.find((result) => result.tool === 'list_members' && result.args?.archived === true)
+  assert.ok(flagged !== undefined, 'the harness produced a list_members result with archived: true')
+  assert.equal(flagged.error, undefined, 'and it returned a value rather than throwing')
+  assert.ok(flagged.value.archived_returned >= 1, `the flagged value carries archived rows (saw ${flagged.value.archived_returned})`)
+  const archivedRows = flagged.value.members.filter((row) => row.archived === true)
+  assert.equal(archivedRows.length, flagged.value.archived_returned, 'the rows and the count agree')
+  assert.equal(typeof archivedRows[0].archived_at, 'string', 'and the archived row says when it left the roster')
+
+  // The declared schema is what decides whether that value survives the Host, so it is walked here explicitly:
+  // a field the value carries and the schema does not declare fails **by name**, which is the same failure the
+  // Host's `validateJsonSchemaValue` gives and the one no stand-in can produce on a machine without an asar.
+  const declaration = tools.find((tool) => tool.name === 'list_members')
+  assertMatchesSchema(flagged.value, declaration.output.schema, 'list_members { archived: true }')
+
+  // The number the script prints is the number of values it ran, and the flagged value is one of them.
+  const counted = results.filter((result) => result.error === undefined).length
+  const text = formatReport({
+    identity: { package: 'stand-in', module: 'stand-in', functions: [], error: 'none', extractedFiles: 0, missing: [] },
+    report,
+  })
+  assert.match(text, new RegExp(`real results checked\\s+${counted}\\b`), 'the printed count is the values that returned')
+  assert.equal(counted, results.length, 'and none of them threw')
 
   // The archive half, when this machine has one. Reported either way: silence about which half ran is how
   // the script came to be believed while it was broken.
