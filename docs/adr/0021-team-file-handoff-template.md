@@ -7,6 +7,11 @@
   source: a `team/team.md` in the Lead's project outranks it, and a store or clear is refused while that
   file exists. The placeholder vocabulary, the caps, the read-time reporting and the one-tool surface of
   0015 stand.
+- **Amended by [0029](0029-definition-chain.md) for the shared-directory premise only** — the team file
+  keeps the path this ADR gave it, and the premise in point 1 below that a member definition sits in the
+  same directory no longer holds: definitions are read from a chain now (`.agents/team/definitions`, then
+  `team/`, then the shipped templates). The reservation decision is unchanged and still sufficient,
+  because the member scan skips `team.md` wherever it reads.
 
 ## Context
 

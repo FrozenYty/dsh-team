@@ -202,9 +202,9 @@ bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行�
 
 ## 6. 成员定义（v0.16.0）
 
-成员过去只作为一种工具调用存在：提示词、标签与 assignment 只活在那次调用和 Lead 的花名册记录里，于是团队无法被评审、版本化或共享，同一个「reviewer」每个会话都要重打一遍。定义把成员从调用里搬到磁盘上——每个成员一个 markdown 文件，放在 Lead 工作目录下的 `team/`，随项目一起提交——花名册则仍是运行时状态（ADR 0018）。
+成员过去只作为一种工具调用存在：提示词、标签与 assignment 只活在那次调用和 Lead 的花名册记录里，于是团队无法被评审、版本化或共享，同一个「reviewer」每个会话都要重打一遍。定义把成员从调用里搬到磁盘上——每个成员一个 markdown 文件，从工作区的 `.agents/team/definitions/`、或它的 `team/` 目录读取，或来自本 bundle 随包提供的五个模板——花名册则仍是运行时状态（ADR 0018、ADR 0029）。
 
-**路径。** `<Lead 工作目录>/team/*.md`，由 `workingDirectory` 服务解析：`ctx.get('workingDirectory').ensure(leadAgent, signal)`（§7）。这与安装版 spawn seam 解析相对 `request.cwd` 用的是同一个服务、同一个方法，所以定义读到的目录，正是 `spawn_options.cwd` 相对解析的那个目录。该服务是可选的，与 `compaction` 一样用 `ctx.get` 读取；profile 没有挂载它、或它的 `ensure` 抛错，都是带类型的拒绝（`reason: "working-directory-unavailable"`），而不是猜一个目录。
+**路径。** 定义从三个目录组成的链上读取，越具体越先：`<Lead 工作目录>/.agents/team/definitions`，然后 `<Lead 工作目录>/team`，最后是 bundle 内 `templates/definitions` 里的五个模板。同一个名字的第一个声明胜出；在**同一个**目录里被声明两次的名字仍然会被拒绝并点出两个文件；一个坏文件只挡住它自己声明的那个名字（ADR 0029）。工作区的两个目录都由 `workingDirectory` 服务解析：`ctx.get('workingDirectory').ensure(leadAgent, signal)`（§7）。这与安装版 spawn seam 解析相对 `request.cwd` 用的是同一个服务、同一个方法，所以定义读到的目录，正是 `spawn_options.cwd` 相对解析的那个目录。该服务是可选的，与 `compaction` 一样用 `ctx.get` 读取；profile 没有挂载它、或它的 `ensure` 抛错，都是带类型的拒绝（`reason: "working-directory-unavailable"`），而不是猜一个目录。**团队文件不属于这条链：** 它仍在 `<Lead 工作目录>/team/team.md`（ADR 0021），因为它不是成员定义、也没有随包对应物——`.agents/team/` 放花名册文件与插件自有的定义，`team/` 放项目自己的团队文件（ADR 0029）。
 
 **文件。** 第 1 行 `---`、一段扁平 frontmatter、再一行 `---`，其后的 markdown 正文就是成员的提示词。可接受字段恰好是 `spawn_member` 本来就有的、用于描述角色的输入：`name` 与 `label` 必填，另有 `assignment`、`cwd`、`provider`、`model`、`reasoning_effort`、`max_tokens` 与 `agent_preset`。**`lifetime` 不在其中**，而 `ephemeral` 在 v0.25.0 被移除：生存期是关于某一个成员的声明，也是本人同意它自行离开的凭据，因此它只在 spawn 调用上做出，永远不会从文件继承（`docs/member-lifecycle-zh.md` §2、`docs/architecture-zh.md` §6.1、ADR 0026）。文件*名*不是身份——定义自己声明 `name`，它也正是 `spawn_member.definition` 查找用的键——调用上没有对应物的字段不在范围内。
 
@@ -257,7 +257,7 @@ bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行�
 | 得知某个子代理已停止 | `subagent/end`（一次运行结算时发布）以及 `agent/status` 的 `idle` 边沿；两者都不持久，所以一次性清扫仍自带证据（`docs/member-lifecycle-zh.md` §2、ADR 0013、ADR 0026） |
 | 等待成员的实时状态 | 在插件自己的上下文里 `ctx.on('agent/status', ({ agent, status }))`，并按本花名册持有的子会话 id 过滤；该分发带作用域过滤，而未加作用域的监听者会被放行（§5） |
 | 插件自有持久状态 | `ctx.storageDomain` 域，而不是会话事件（ADR 0003） |
-| 解析 Lead 的工作目录，以及成员定义与团队文件读取的 `team/` | `ctx.get('workingDirectory').ensure(agent, signal)`——与 spawn seam 解析相对 `cwd` 用的是同一个服务与方法；该服务可选，所以没有它的 profile 会拒绝定义 spawn，并且看不到团队文件，而不是猜一个目录（§6、`docs/handoff-zh.md` §2、ADR 0018、ADR 0021） |
+| 解析 Lead 的工作目录、团队文件读取的 `team/`，以及成员定义读取的那条链 | `ctx.get('workingDirectory').ensure(agent, signal)`——与 spawn seam 解析相对 `cwd` 用的是同一个服务与方法；该服务可选，所以没有它的 profile 会拒绝定义 spawn，并且看不到团队文件，而不是猜一个目录（§6、`docs/handoff-zh.md` §2、ADR 0018、ADR 0021、ADR 0029） |
 | 隐藏产物移不动的会话 | `ctx.workspaceRegistry.archiveSession`／`unarchiveSession`（可逆，不删除；退役与恢复的兜底分支） |
 | 让客户端丢掉已退役成员 | 包装 `sessionController` 的列表／投影／流出口（ADR 0004） |
 | 让官方团队面板列出本插件的活成员 | 同一组出口：把四字段成员行追加到即将发出的 `agentTeam` 值上（ADR 0023） |
@@ -275,5 +275,5 @@ bundle 自己不发起任何模型调用，它启用的 `compaction-basic` 行�
 - **转发的目录、路由与 preset 由调用方决定，插件只负责转发。** 在 Harness 解析之前，插件无法判断某个 `cwd` 是否可用；在注册表查询之前，它也无法判断某个 preset id 是否存在，因此两处拒绝都是把 seam 的答案翻译成带类型的结果，而不是一个可能与 Host 判断不一致的预检（ADR 0016）。
 - **Harness API 漂移**——本文点到的每个 Service 都来自已安装的 asar，版本会变；一次 Harness 升级就能让本文作废，而本仓库什么都没改。安装版的子代理 seam 与公开源码树不是同一代：公开树有成员 `name` 和 `resolveName`，安装版没有。采信任何公开示例之前，先读安装版的 `lib/index.js`。
 - **交接质量取决于记录在案的职责与任务板上的行**——插件读不到官方任务板，也读不到前任的对话，因此继任者的交接书只能由记录与自有任务板合成。一个从未记录过 `assignment`、任务板上也没有未完成行的成员，交接出去的就只是角色与任务板指针，而不是摘要。
-- **成员定义与团队文件都是插件只读的文件。** 它无法判断它们是否过期、其提示词是否符合 Lead 心里的工作，也无法判断同一个工作目录下的 `team/` 是否被两个 Lead 共用；那是项目的版本控制要管的事，不是本插件的职责。它能保证的事情更窄、也更可核对：调用方能用的定义，恰好是调用那一刻 `team/` 下可读的那些 `.md` 文件，团队文件恰好是 `team.md`；读不出来的文件会连路径与行号一起被拒绝，而不是只应用一半（§6、`docs/handoff-zh.md` §2、ADR 0018、ADR 0021）。
+- **成员定义与团队文件都是插件只读的文件。** 它无法判断它们是否过期、其提示词是否符合 Lead 心里的工作，也无法判断同一个工作目录下的 `team/` 或 `.agents/team/definitions/` 是否被两个 Lead 共用；那是项目的版本控制要管的事，不是本插件的职责。它能保证的事情更窄、也更可核对：调用方能用的定义，恰好是调用那一刻它在链上搜到的那些可读 `.md` 文件——工作区的两个目录与随包模板——团队文件恰好是 `<Lead 工作目录>/team/` 下的 `team.md`；读不出来的文件会连路径与行号一起被拒绝，而不是只应用一半（§6、`docs/handoff-zh.md` §2、ADR 0018、ADR 0021、ADR 0029）。
 - **压缩是 profile 级的**——启用后端会改变该 profile 内每个会话的行为。这是把官方特性打开，不是自研代码，但它并不只作用于本插件的成员。

@@ -13,7 +13,7 @@ the roster and has no browser half.
 
 ## Status
 
-- Current version: v0.28.0.
+- Current version: v0.28.1.
 - **Exercised in a real profile**: retirement, restore, message, stop, a replacement whose successor
   finished the predecessor's work, the trash cap and its refusal at load, the handoff template, spawn
   options and the forwarded route, the task board and its transfer, the three host hooks, and the one-shot
@@ -235,10 +235,10 @@ the plugin works — it never loads the Harness.
 | `index.js` | Host plugin entry: tool definitions, argument validation, Lead-only authority check |
 | `actions.js` | The roster operations behind the tools |
 | `roster.js`, `trash.js` | Durable roster (phases, name generations, adoption, migration) and the session trash with its restore and retention cap |
-| `definitions.js` | The `team/` layer: the flat-frontmatter parser, the member-definition scan and its caps, the team file's handoff template, and the working directory both are resolved from |
+| `definitions.js` | The definition layer: the flat-frontmatter parser, the scan across the definition chain and its caps, the team file's handoff template, and the working directories all are resolved from |
 | `host-hooks.js` | Projection filter (strip retired ids, add this plugin's live members to the team panel), shipped roster-read filter, roster slot credit, and the deferred install of all three |
 | `tests/`, `scripts/check.mjs` | Unit tests, and the repository checks CI runs |
-| `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `.github/` | The bundle, its CI workflow and templates |
+| `package.json`, `cordis.patch.yml`, `locale/`, `icon.svg`, `templates/`, `.github/` | The bundle, the five role templates it ships, its CI workflow and templates |
 | `PLAN.md`, `PROGRESS.md`, `docs/` | Open tasks, the append-only change log, and the design documents (bilingual) with the ADRs |
 
 ## Where everything else lives
