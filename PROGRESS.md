@@ -2191,3 +2191,56 @@
 - **Version.** `0.27.0`: where durable state lives changed. Nothing a user does behaves differently, the old
   domain keeps loading, and the change is reversible by deleting one file — but a new file appears on disk and
   `list_members` gained a field, which is not a patch.
+
+## 2026-11-13 — the retention cap flips the record it emptied, instead of an id parsed out of the directory name (v0.27.1)
+
+- **The defect, and how it stayed invisible.** The cap deletes an artifact and then flips its tombstone to
+  `pruned`, which is what lets `restore_member` answer `reason: 'pruned'`. The flip compared an id parsed
+  out of the trash **directory name** — the **child Session id** — against the roster's **memberId**. Those
+  are two different uuids for every member a spawn created and equal only for an adopted one, so for spawned
+  members the bytes were deleted and the record stayed `done` forever. **Pre-existing**: a probe reproduced
+  it identically against `main` before T1, and T1 then rewrote precisely that block.
+- **Confirmed live before it was fixed, not just argued.** Two Lead-scope calls on the shipped release:
+  `restore_member survey-lifecycle` — an adopted record, `pruned` — answered
+  `{"restored":false,"reason":"pruned","message":"… was pruned by the trash retention cap: the artifact at
+  …\\3d21e806-…-1794452491223 is gone, so the record stays retired…"}`, and `restore_member eph-alpha` — a
+  spawned record whose bytes the cap had deleted — answered
+  `{"restored":false,"message":"Nothing was moved back: trash-missing. The record stays retired."}` with
+  **no `reason` field at all**. Both moved nothing: the trash held 20 directories before and after, and the
+  roster 100 records at 5 active and 95 retired.
+- **The data predicted it before either probe did.** Of 94 tombstones carrying a trash destination, 28 are
+  `pruned` and **all 28 have `memberId == childId`**; **none** of the 63 spawned records is `pruned`; and
+  **46** of those 63 are `done` while their recorded location is already gone. 28 + 46 = the 74 dangling
+  record paths T1 measured. The count was 45 in the audit and 46 a few hours later, because one more record
+  crossed the cap in between — which is itself a reminder that this file is live.
+- **Three fixes, and where the identity is now taken from.** `pruneLeadTrash` reports the **record's own**
+  `memberId`, which is what `retireMember` flips on, using the name's id only as a fallback for a row that
+  carries none. The `!moved` branch of the confirming write deletes `trashPath` again — T1 had replaced that
+  line positionally, so a record could hold a legacy absolute path beside `archived: true` and send
+  `restore_member` back into the trash branch for an artifact that was never moved. And `recordedTrashDir`
+  now answers `undefined` rather than `''` for a path with no last segment, so a corrupt record reports
+  `no-recorded-path` instead of resolving to the filesystem root and failing with `EBUSY`.
+- **The suite was green because both test shapes hide it.** The only test asserting the flip seeded
+  `childId === memberId`, and T1's new cap test passed rows with no `childId` at all. The new test seeds
+  `memberId: 'member-N'` beside `childId: 'child-N'` — the shape `planMember` actually writes — and asserts
+  both that the tombstone became `pruned` and that `restore_member` answers `reason: 'pruned'`. All three
+  probes failed by name when the matching fix, the `trashPath` deletion and the empty-segment guard were
+  reverted one at a time.
+- **The 46 already-wrong records are left to the migration, deliberately.** Their future home —
+  `<workspace>/.agents/team/roster.json` — does not exist yet, so correcting them here would write to the
+  rollback path; the migration walks every tombstone anyway and the flip is idempotent. **Until it runs,
+  those 46 still answer the generic `trash-missing`**: the fix is forward-only, and saying so is the whole
+  difference between a fix and a claim. The migration has a rule to do it with — `artifactIsMissing`, which
+  says a `done` tombstone whose artifact is on none of the chain's legs is one the cap emptied, and leaves
+  `pending` records and records naming no destination alone.
+- **A document finding, reported and not fixed, that explains the bug's survival.** Four places describe a
+  trash directory as `<memberId>-<ms>` while a retirement actually writes `<childId>-<ms>`:
+  `docs/adr/0004`, `docs/adr/0011` point 3, `docs/member-lifecycle-{en,zh}.md` §4, and the very document
+  this release's predecessor paired, `docs/upstream-lifecycle-gap-en.md`. **The prose carried the same
+  confusion as the code**, which is a good candidate for why nobody saw it. Owed to T4, with the ADRs
+  superseded rather than edited.
+- **What this does not prove.** `artifactIsMissing` is exercised by its own test but its first real use is
+  the migration, so its behaviour over the live 46 is still a prediction. Nothing was installed for this
+  release, and no document was touched.
+- **Version.** `0.27.1`: a wrong answer was corrected. The tool surface, the stored shape and the location
+  of the data are unchanged.
