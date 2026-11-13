@@ -3,6 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-11-11
 - **Supersedes:** —
+- **Superseded by [0027](0027-roster-file-under-the-workspace.md) for the storage-domain row and by
+  [0028](0028-trash-directory-name-not-path.md) for the data-directory clause** — the domain is the import
+  source and the rollback path rather than where records live, and a tombstone records a directory name
+  with its path relative to the root rather than an absolute path under `~/.dsh/team-roster`. The four
+  frozen identifiers themselves, and the reason they are frozen, stand unchanged.
 
 ## Context
 
