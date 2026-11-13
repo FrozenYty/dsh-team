@@ -1,6 +1,11 @@
 # dsh-team
 
-[中文](README-zh.md)
+English | [中文](README-zh.md)
+
+[![ci](https://github.com/FrozenYty/dsh-team/actions/workflows/ci.yml/badge.svg)](https://github.com/FrozenYty/dsh-team/actions/workflows/ci.yml)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
+![build step](https://img.shields.io/badge/build-none-brightgreen)
 
 > Only the person changes, not the work.
 
@@ -13,19 +18,28 @@ the roster and has no browser half.
 
 ## Status
 
-- Current version: v0.28.2.
-- **Exercised in a real profile**: retirement, restore, message, stop, a replacement whose successor
-  finished the predecessor's work, the trash cap and its refusal at load, the handoff template, spawn
-  options and the forwarded route, the task board and its transfer, the three host hooks, and the one-shot
-  sweep with the consent gate — accepted on 2026-11-13, with the results recorded field by field in
-  `PROGRESS.md`'s entry of that date. `PROGRESS.md` keeps one entry per release, and each entry records
-  what that release proved live.
-- **Unit-tested only, never exercised in a profile**: the write-time caps, a retirement during an
-  in-flight spawn, overlapping roster writes, the route fallbacks, the definition and team-file layers,
-  the member-scope read, and the lifetime sweep and consent gate. `tests/` is the list of what exists.
-- **Not proven here at all**: `scripts/check.mjs` never loads the Harness, so nothing in this repository
-  can show that the plugin activates. Only an install can, and a fresh install has a real side effect, so
-  it is the owner's decision every time.
+- Current version: v0.28.3.
+- **Exercised in a real profile on this machine.** Retirement, restore, message, stop, a replacement whose
+  successor finished the predecessor's work, the trash cap and its refusal at load, the handoff template,
+  spawn options and the forwarded route, the task board and its transfer, the three host hooks, and the
+  one-shot sweep with the consent gate — recorded field by field in `PROGRESS.md`'s 2026-11-13 entry. The
+  plugin's own state move is no longer a plan: this profile's roster is a file, `<workspace>/.agents/team/
+  roster.json`, imported from the storage domain with a marker beside it, and the migration ran against
+  that live data — **110 records, 20 artifacts moved, 4,913,598 bytes verified at the destination, 46
+  tombstones reconciled to `pruned`, 44 left alone by reason, 0 refused.** The backup manifest and the
+  destination directory agree on the byte total, `4,913,598` both ways across 20 files, which is the only
+  reason the word "verified" is used here.
+- **Checked with something stronger than a reading.** **247 tests** pass and `scripts/check.mjs` prints
+  `check passed`; between them they cover the write-time caps, a retirement during an in-flight spawn,
+  overlapping roster writes, the route fallbacks, the definition chain, the member-scope read, and the
+  lifetime sweep and consent gate. The defect this release fixed was also **reproduced live before it was
+  fixed**: for a record whose bytes the retention cap had deleted, `restore_member` answered
+  `reason: "pruned"`, and for a spawned one it answered `trash-missing` with **no `reason` field at all**.
+  Both answers are in `PROGRESS.md`, and the trash held 20 directories before and after each probe.
+- **Not covered yet**: activation in anyone else's profile — `scripts/check.mjs` never loads the Harness,
+  so no repository can prove that; a Harness build whose services or storage layout differ from the
+  installed one; and the `rename` fast path of the trash move, which this machine never took, because its
+  data roots sit on different volumes and every move was the verified copy path (`EXDEV`) instead.
 - Release list: [CHANGELOG.md](CHANGELOG.md). Append-only history: [PROGRESS.md](PROGRESS.md).
 
 ## Install and verify
