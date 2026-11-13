@@ -2683,3 +2683,48 @@
   it. Corrected before the merge, because an ADR in review is not yet a closed record — once it is accepted,
   the fix would have needed a new ADR rather than an edit.
 - **Version.** `0.29.1`: documents only. No code, no stored shape, no shipped file.
+
+## 2026-11-13 — a new root is seeded from a file the user names, and the storage domain's last file is gone (v0.30.0)
+
+- **The domain had two roles, and the one that mattered was not the obvious one.** The fallback for a
+  session with no workspace is rare; **the import source for any new root** is not: a Lead that binds a
+  different workspace — a moved project, a second one — gets its records refilled from the domain, and
+  without them a new root starts empty. An empty root has no tombstones, so `ensureAdopted` hands every
+  child a **new live row**; the v0.29.0 guard blocks only an *archived* tombstone's child, and cannot
+  block a child that nothing remembers. So the job was never "delete a file" but "keep that second role in
+  a form the user can see", which is what `DSH_TEAM_SEED` is.
+- **`DSH_TEAM_SEED` is a path to one file, read once per new root, never written.** It accepts **both
+  shapes** — this plugin's own `{version, serial, rosters}` and a storage-domain dump `{tables: {rosters}}`
+  — so a user can carry a roster to another machine or point at a dump if that is what they hold. It applies
+  only to a root with **no** `roster.json`: an existing file is the truth, and a root counts as established
+  the moment it has one, even if that file lacks this Lead's record.
+- **The order is seed → domain → nothing, and a broken seed is loud.** Setting the seed is an explicit act,
+  so it wins. A path that does not exist, a file that does not parse, or a record the loader refuses leaves
+  the root empty and reports the problem — **it does not fall back to the domain**, because a silent
+  fallback turns a typo in a path into a mystery that looks like a successful import of somebody else's
+  records. The test asserts the domain was **never asked**, not merely that its answer lost.
+- **A seeded root records where it came from** — `provenance.json` with `source: 'seed'` and the path,
+  which is what that file exists for. And with no root, no seed and no record, `list_members` reports
+  `source: 'none'` with the two ways out: give the Session a working directory, or set
+  `DSH_TEAM_DATA_DIR`. An empty roster for a session with no workspace is the **true** answer, and the tool
+  says so instead of serving records that belong to somewhere else.
+- **The storage domain's file on this machine was deleted, and that is safe for a reason worth recording.**
+  Both migration backups in `<workspace>/.agents/team/backups/` are the **byte-identical** original
+  (SHA256 compared against the live file before deleting it), so the pre-migration snapshot survives as two
+  named copies. The domain is also **not the same data as the workspace file**: same 100 memberIds, but the
+  domain is the **pre-migration** shape — 94 absolute `trashPath`s, 0 `trashRelPath`s, 28 `pruned` — against
+  74 / 20 / 74 in the file. Rolling back to it would restore the 46 records to `done`-with-missing-bytes,
+  which is the defect's wrong answer coming back. That is the clearest statement yet of what a rollback to
+  a snapshot older than the last migration actually buys.
+- **One honest caveat, from the question I made the implementer answer: the file can come back.** Asked
+  "is there any path left that reads the storage domain", the answer was yes — a Lead with **no bound root**
+  still reads it *and still writes it* (`table.put` / `table.update` are the only remaining write paths),
+  so a rootless session that ever writes recreates the file. The seed removes the need for a domain at a
+  **new root**; it does not remove the write path. That is the next task, and it is a real design question:
+  what should a session with no root write to?
+- **Verification.** 270 tests pass, seven new, one per acceptance line. Four probes were each shown to fail
+  by name: removing the seed lookup, removing the established-root guard, letting a broken seed fall back
+  to the domain (which produced exactly the failure the rule exists to prevent — the domain's two records
+  appearing in a root whose seed path was mistyped), and removing the `none` branch.
+- **Version.** `0.30.0`: a new environment variable and a new source in `list_members`, on top of a stored
+  behaviour that no longer exists.
