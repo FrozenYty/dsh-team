@@ -2542,3 +2542,39 @@
   had to re-derive it from a PR.
 - **Version.** `0.28.4`: a local script, its tests, and one bullet in each README. No bundle file, no stored
   shape, no behaviour of the plugin.
+
+## 2026-11-13 — the import marker is named after what it is, and the file on disk keeps the record (v0.28.5)
+
+- **`roster-import.json` is now `provenance.json`**, at the owner's judgement and for a better reason than
+  taste: the old name described **a process**, while the file is **a record** of where the roster came from.
+  Its own contents say so — `source: "team_roster"`, and per Lead the import time and the counts that came
+  across. The exported constant went with it, `IMPORT_MARKER_NAME` → `PROVENANCE_FILE_NAME`, beside
+  `ROSTER_FILE_NAME`: a constant called `IMPORT_MARKER_NAME` that points at `provenance.json` would be a
+  small lie, and a reader pairs a filename only with those two exported names.
+- **The rename needed no compatibility leg, and that was established rather than assumed.** Two claims were
+  checked against the repository before the change and again after: **no document writes the filename**
+  (the ADRs and both READMEs say "a marker beside the file"; a grep over the whole tree found the literal
+  name in exactly four code places and two test references, and none afterwards), and **nothing reads the
+  file to decide anything** — `importLead` guards on whether the served content already holds a record for
+  that Lead, and `writeMarker` reads the file only to merge the `leads` map it is rewriting. So this is not
+  the trash path, which really is read and really does break when a root moves; a rename here has no
+  fallback to build.
+- **The trap in this kind of rename is that the test can be worthless without anybody noticing.** Changing
+  only the constant's *value* moves the writer and the reader together, so a test that writes and then reads
+  through the same constant passes whatever the name is. The probe therefore moved **one side only** — the
+  write — and `tests/store.test.mjs` failed by name with `ENOENT … provenance.json`, which is the proof that
+  the test pins the name rather than the existence of a file somewhere.
+- **The disk was the Lead's, because it is live data.** `<workspace>/.agents/team/roster-import.json` became
+  `provenance.json` by a move, not a rewrite: 358 bytes, two Leads, the same `importedAt` times and the same
+  100/10 members and 3/0 tasks. The old name leaves no orphan, and because the guard is content rather than
+  the marker, the plugin will find and merge that existing file instead of writing a second one.
+- **What was deliberately not renamed.** `state.marker` and `writeMarker` keep saying "marker": they describe
+  the mechanism, their comments still read true, and renaming them for symmetry is churn. The test's own
+  wording keeps "marker" for the same reason.
+- **One limit worth stating for a provenance record.** The file accumulates one entry per Lead it has
+  imported. A copy left under an older name elsewhere would not have its older entries carried across if a
+  new Lead imported later — but nothing merges two provenance files, and for a record of what happened that
+  is a cosmetic gap rather than a contract. It is not worth a compatibility leg, and saying so is cheaper
+  than building one.
+- **Version.** `0.28.5`: a published module and one test file. The stored shape is unchanged, the file on
+  disk is the same bytes under a better name, and nothing about how the plugin behaves is different.

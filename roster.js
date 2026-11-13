@@ -626,8 +626,8 @@ export async function openRosterStore(ctx, binder) {
 /** The one file a workspace's rosters live in, under the bound root. */
 export const ROSTER_FILE_NAME = 'roster.json'
 
-/** What the one-time import from the storage domain records: which Lead came across, and when. */
-export const IMPORT_MARKER_NAME = 'roster-import.json'
+/** The record of the one-time import from the storage domain: which Lead came across, and when. */
+export const PROVENANCE_FILE_NAME = 'provenance.json'
 
 /** The content of a roster file that has never been written. */
 const emptyRosterFile = () => ({ version: 1, serial: 0, rosters: {} })
@@ -747,7 +747,7 @@ export function createRosterSource({ domainTable, binder, renameFn = rename, now
       state = {
         root,
         file: join(root, ROSTER_FILE_NAME),
-        marker: join(root, IMPORT_MARKER_NAME),
+        marker: join(root, PROVENANCE_FILE_NAME),
         content: emptyRosterFile(),
         loaded: false,
         loading: undefined,

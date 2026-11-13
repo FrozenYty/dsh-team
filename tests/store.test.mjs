@@ -15,8 +15,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import {
-  IMPORT_MARKER_NAME,
   PHASE,
+  PROVENANCE_FILE_NAME,
   ROSTER_FILE_NAME,
   createRosterSource,
   planMember,
@@ -112,7 +112,7 @@ test('the real domain imports once, and the marker records what came across', as
   assert.equal(imported.tasks.length, 3)
   assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'the domain is the source, never the destination')
 
-  const marker = JSON.parse(await readFile(join(workspace, TEAM_DIR, IMPORT_MARKER_NAME), 'utf8'))
+  const marker = JSON.parse(await readFile(join(workspace, TEAM_DIR, PROVENANCE_FILE_NAME), 'utf8'))
   assert.equal(marker.source, 'team_roster', 'the marker names the domain it came from')
   assert.equal(marker.leads[REAL_LEAD].members, 100)
   assert.equal(marker.leads[REAL_LEAD].tasks, 3)
