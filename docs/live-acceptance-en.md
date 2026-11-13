@@ -110,7 +110,7 @@ resolved.
 
 ## 8. Two Leads in one data root see only their own archived records
 
-**Status: not yet run — this is its first pending check.** The archive is one file per data root and the
+**Status: not yet run — one of two pending checks.** The archive is one file per data root and the
 reader must answer one Lead only (ADR 0035). Today's profile has a single Lead Session, so the rule is
 covered by the suite and by no live observation.
 **Precondition:** two Lead Sessions sharing a data root, each with at least one archived tombstone.
@@ -119,6 +119,23 @@ matching that Lead's lines rather than the file's.
 **If it does not match** — one Lead's records appearing in the other's answer: the reader is answering by
 file rather than by Lead, and every count in checks 1 and 2 becomes meaningless once a second Lead exists.
 
+## 9. One archived record is found by identity, past the cap
+
+**Status: not yet run.**
+**Precondition, and it is the whole point:** the archive must hold **more records than the cap**, with the
+target living **only beyond it**. A lookup tested on a short archive passes while the feature is gone, which
+is why the size of the file is part of the check rather than context.
+**Call** `list_members` with `archived: true` and `archived_target` set to a target — or the raw member id —
+that is older than the newest 50.
+**Correct looks like** a hit returning **exactly one row**, `archived_returned: 1`, the row marked
+`archived` with its `archived_at`, and `archived_scanned` reporting the lines it read — a scan larger than
+50 is the evidence it looked past the window. A miss returns `archived_returned: 0` **with** `archived_scanned`,
+`archived_total` and a message naming the target, never a bare empty success.
+**If it does not match** — zero returned for a record you know is in the file: either the target you passed is
+not that record's identity (a partial name is not a match, by design) or the scan is being capped at 50,
+which is the defect this check exists for. `archived_scanned` missing on a miss, or equal to the returned
+count: the answer is not reporting its cost, so a miss can no longer be told from a failed read. A hit on
+prose such as `"Replaced by reviewer-g2"`: text matching came back, and identity stopped being identity.
 ## Recording a round
 
 Write the Host version, the date, each check's observed values, and any check that could not be run and
