@@ -158,14 +158,21 @@ function retaskAdvice(member) {
  * @param {object} member - one stored member record.
  * @param {{provider: string, model: string}|undefined} leadRoute - the Lead's current route, when the
  *   caller has it.
+ * @param {object[]|undefined} members - the roster this read is holding, used to resolve the target a
+ *   succession link names. A caller that passes none reports the id without a target rather than guessing
+ *   one from a name.
  * @returns {object} the row the model renders.
  */
-export function memberRow(ctx, member, leadRoute) {
+export function memberRow(ctx, member, leadRoute, members) {
   const live = liveStateOf(ctx, member)
   const compactor = ctx.get('compaction') !== undefined
   const row = {
     target: targetOf(member),
-    // The child Session id is the member's durable identity and what the host's own listings show.
+    // The roster identity a succession link names. It is not the child Session id: a member this plugin
+    // spawned gets its own id here, while an adopted child keeps its Session id as both. Exposing it is
+    // what lets a reader walk an edge it found on a row to the row that member id belongs to (ADR 0032).
+    member_id: member.memberId,
+    // The child Session id is what the host's own listings show and what a restore moves.
     // Every record this plugin writes carries one, so the model can name the exact child.
     child_id: member.childId,
     phase: member.phase,
@@ -214,7 +221,41 @@ export function memberRow(ctx, member, leadRoute) {
       row.route_note = staleRouteNote(row.target, member.route, leadRoute)
     }
   }
+  // The succession link, in the direction this record owns. `predecessor` is what this member inherited —
+  // present only on a successor a replacement started — and `successor` is what took its place, present
+  // only on the tombstone a replacement wrote (ADR 0032). Both name a member id, because a target is
+  // reused by every later generation and a link stored as a name would point at the wrong holder. The
+  // forward half has been stored as a bare id since v0.2, so its target is resolved from the record that
+  // id names; the reverse half is stored as the pair and reported as stored.
+  if (typeof member.predecessor === 'string' && member.predecessor.length > 0) {
+    row.predecessor = successionEdge(member.predecessor, members)
+  }
+  if (member.successor !== undefined) row.successor = member.successor
   return row
+}
+
+/**
+ * One direction of the succession link as a row reports it: the member id the link names, plus the target
+ * that id resolves to in the roster this read is holding.
+ *
+ * **The target may be absent, and that is this function's answer to the archive.** A tombstone past the
+ * retention window leaves the roster for `archive.jsonl` (ADR 0030), so a walk backwards can reach an id
+ * this read has no record for. The walk stops there: the edge keeps its id, the target is omitted, and
+ * nothing is invented. `archived` is not claimed either, because a list read cannot know it without
+ * opening the archive — and opening it is exactly what the archive exists to avoid: it is history, read
+ * by a human or by a refusal, never behind every edge of every `list`. What the read does say is where an
+ * unresolved id went: `list_members` reports `archived_records` and `archive_file` in the same answer.
+ * @param {string} memberId - the member id the link names.
+ * @param {object[]|undefined} members - the roster this read is holding.
+ * @returns {{target?: string, member_id: string}} the edge.
+ */
+function successionEdge(memberId, members) {
+  const linked = Array.isArray(members)
+    ? members.find((member) => member.memberId === memberId)
+    : undefined
+  return linked === undefined
+    ? { member_id: memberId }
+    : { target: targetOf(linked), member_id: memberId }
 }
 
 /**
@@ -763,7 +804,7 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
   const leadRoute = currentRouteOf(caller)
   const archived = archivedCount(roster)
   return {
-    members: roster.members.map((member) => memberRow(ctx, member, leadRoute)),
+    members: roster.members.map((member) => memberRow(ctx, member, leadRoute, roster.members)),
     ...swept,
     // This list is the recent members: the tombstones past the trash window moved to the archive, and a
     // reader that was told nothing would mistake the window for the whole team.
@@ -1402,7 +1443,7 @@ export async function spawnMember({
     if (refusal !== undefined) {
       const record = persisted.members.find((member) => member.memberId === planned.memberId) ?? failed
       const value = {
-        ...memberRow(ctx, record),
+        ...memberRow(ctx, record, undefined, persisted.members),
         ...swept,
         ...defined,
         started: false,
@@ -1444,7 +1485,7 @@ export async function spawnMember({
     return withMember(current, active)
   })
   const settled = persisted.members.find((member) => member.memberId === planned.memberId) ?? active
-  const successor = { ...memberRow(ctx, settled), ...defined }
+  const successor = { ...memberRow(ctx, settled, undefined, persisted.members), ...defined }
   if (settled.phase === PHASE.retired) {
     // A retirement committed between the reservation and the activation. Draining happens here,
     // when the child finally publishes: the retire that ran earlier had no child to drain.
@@ -1499,8 +1540,11 @@ export async function spawnMember({
       target: replace,
       reason: `Replaced by ${successorTarget}`,
       trashLimit,
-      // No `successor`: the handover above already moved this member's open work, and passing it again
-      // would report the same ids twice. The retirement is the record half only (P2-09, ADR 0017).
+      // The reverse half of the succession link: the tombstone this retirement writes records which
+      // member took the position, in the same serialized mutation that makes it a tombstone, so no reader
+      // ever sees a retired predecessor with an unrecorded successor (ADR 0032). The handover above already
+      // moved this member's open work, so the retirement contributes no task field (P2-09, ADR 0017).
+      successor: { target: successorTarget, member_id: planned.memberId },
     })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
@@ -1573,7 +1617,8 @@ export async function spawnMember({
  * @param {{ctx: object, table: object, leadSessionId: string, leadAgent: object|undefined,
  *   dataDir: string, hooks: {filter: {invalidate: Function}, slots: {refresh: Function}},
  *   target: string, reason?: string, confirmed?: string, consentRequired?: boolean,
- *   trashLimit?: number}} request - `trashLimit` is the effective cap
+ *   trashLimit?: number, successor?: {target: string, member_id: string}}} request - `trashLimit` is the
+ *   effective cap
  *   from the plugin config; it defaults to `DEFAULT_TRASH_LIMIT` for callers that pass none.
  *   `consentRequired` is true on the model's own retirement decision — the `retire_member` tool — and
  *   false on the two internal retirements that are not a decision to end a role: a replacement continues
@@ -1584,10 +1629,13 @@ export async function spawnMember({
  *   record in `retired` or `failed` never reach it at all. `confirmed` is the person's answer, quoted
  *   verbatim (ADR 0026).
  *
- *   There is no `successor` parameter on purpose. A replacement hands its work over itself, through
- *   `handOverTasks`, because it is the only caller that knows the successor and it must be able to do so
- *   whether or not the predecessor's record is still live. What is left here is the un-owning half: a
- *   retirement nobody replaces leaves open work owned by nobody and says which (P2-09, ADR 0017).
+ *   `successor` is the reverse half of the succession link, and only a replacement passes it: it is
+ *   written onto the tombstone in the same mutation that makes the record a tombstone, so a reader never
+ *   sees a retired predecessor whose successor is unrecorded (ADR 0032). It moves no work — a replacement
+ *   hands its work over itself, through `handOverTasks`, because it is the only caller that knows the
+ *   successor and it must be able to do so whether or not the predecessor's record is still live. What is
+ *   left here is the un-owning half: a retirement nobody replaces leaves open work owned by nobody and
+ *   says which, and writes no `successor` at all (P2-09, ADR 0017).
  * @returns {Promise<object>} the tool's result object, unchanged.
  */
 export async function retireMember({
@@ -1602,6 +1650,7 @@ export async function retireMember({
   confirmed,
   consentRequired = false,
   trashLimit = DEFAULT_TRASH_LIMIT,
+  successor,
 }) {
   if (leadAgent === undefined || leadAgent === null) {
     return {
@@ -1692,11 +1741,17 @@ export async function retireMember({
     return base
   }
 
-  // Step 1: the tombstone, with the trash directory the move is about to use. The member's open tasks
-  // were already re-addressed to the successor (or left unowned) by the handover write above, so this
-  // record only changes its own lifecycle fields. What it stores is the directory name and a
-  // root-relative path, never the absolute one: the absolute path is computed at read time from the
-  // data directory in effect, which is what lets the root move without rewriting a single record.
+  // Step 1: the tombstone, with the trash directory the move is about to use (the directory name and a
+  // root-relative path, never the absolute one: the absolute path is computed at read time from the data
+  // directory in effect, which is what lets the root move without rewriting a single record) and — when
+  // this retirement is the half of a replacement — the reverse half of the succession link. The member's
+  // open tasks were already re-addressed to the successor (or left unowned) by the handover write above,
+  // so this record only changes its own lifecycle fields.
+  //
+  // `successor` belongs in *this* mutation and no later one: the record becomes a tombstone here, and a
+  // reader must not be able to see a retired predecessor without the successor it left behind (ADR 0032).
+  // The confirming write in step 3 rebuilds from the stored record, so it carries the field forward
+  // rather than writing it again.
   const plan = await planMemberTrash(ctx, { leadSessionId, memberId: member.childId, dataDir })
   await updateRoster(table, leadSessionId, (current) => {
     const existing = current.members.find((candidate) => candidate.memberId === member.memberId)
@@ -1709,6 +1764,7 @@ export async function retireMember({
         trashState: TRASH_STATE.pending,
       }
       : { trashState: TRASH_STATE.none }
+    if (successor !== undefined) fields.successor = successor
     return withMember(current, tombstoneOf(existing, fields))
   })
 

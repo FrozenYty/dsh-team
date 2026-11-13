@@ -493,6 +493,22 @@ test('every answer conforms to the output schema its own tool declares', async (
   assert.equal(successor.transferred, 1)
   assert.equal(successor.predecessor_retired, true)
 
+  // The durable succession link is the field this release adds, and it reaches the model through two
+  // declared shapes: the successor's own answer carries `predecessor`, and the read serves both directions
+  // on the rows it lists (ADR 0032). A field the operation produces but the schema does not declare is
+  // rejected by the host *after* the replacement already happened, so both answers above and below go
+  // through `assertMatchesSchema`.
+  const replacedRecord = table.get('lead-1').members.find((member) => member.name === 'reviewer' && member.generation === 1)
+  assert.deepEqual(successor.predecessor, { target: 'reviewer', member_id: replacedRecord.memberId })
+  const linked = await answer('list_members', {})
+  const retiredRow = linked.members.find((row) => row.target === 'reviewer')
+  const liveRow = linked.members.find((row) => row.target === 'reviewer-g2')
+  assert.deepEqual(retiredRow.successor, { target: 'reviewer-g2', member_id: liveRow.member_id })
+  assert.deepEqual(liveRow.predecessor, { target: 'reviewer', member_id: retiredRow.member_id })
+  assert.equal(retiredRow.predecessor, undefined, 'the first holder of the name inherited from nobody')
+  assert.equal(liveRow.successor, undefined, 'and a live successor has handed nothing on yet')
+  assert.deepEqual(JSON.parse(JSON.stringify(linked)), linked, 'the linked read stays lossless JSON')
+
   // A row carrying a body, a write that amends it and one that clears it: the field is declared by
   // TASK_ROW, so every one of these answers is checked against the schema the tool declares (ADR 0020).
   await answer('task_board', { action: 'list' })
