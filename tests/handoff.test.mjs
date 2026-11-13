@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { test } from 'node:test'
 
 import { handoffPrompt, handoffTemplate, messageMember, retireMember, restoreMember, spawnMember, stopMember } from '../actions.js'
@@ -587,20 +588,34 @@ test('the tombstone is written before the workspace-archive branch runs', async 
 
 test('a retirement records archived only for the branch that ran, never beside a trash path', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-retire-'))
-  const memberDir = join(root, 'sessions', 'artifact')
-  await mkdir(memberDir, { recursive: true })
-  await writeFile(join(memberDir, 'session.jsonl'), 'log')
+  const sessions = join(root, 'sessions', 'key')
   const ctx = fakeCtx()
-  ctx.get = (name) => (name === 'sessionPersistence' ? { stat: async () => ({ location: { path: memberDir } }) } : undefined)
   const table = memoryTable()
   await firstReviewer(ctx, table)
+  // The ordinary shape of a Lead: more than one member, and one of them still where the host put it. That
+  // survivor is what lets a restore resolve the sessions root the portable record is relative to — nothing
+  // else on disk names it once the artifact has moved.
+  await spawnMember(call(ctx, table, { name: 'scribe', label: 'Write it down', prompt: 'Take notes.' }))
+  const keeper = memberNamed(table, 'scribe', 1)
+  const reviewer = memberNamed(table, 'reviewer', 1)
+  const memberDir = join(sessions, reviewer.childId)
+  for (const childId of [keeper.childId, reviewer.childId]) {
+    await mkdir(join(sessions, childId), { recursive: true })
+    await writeFile(join(sessions, childId, 'session.jsonl'), 'log')
+  }
+  // A host that answers per Session id, and only while that Session is where it put it.
+  ctx.get = (name) => (name === 'sessionPersistence'
+    ? { stat: async (id) => (existsSync(join(sessions, id)) ? { location: { path: join(sessions, id) } } : undefined) }
+    : undefined)
 
   const retired = await retireMember(call(ctx, table, { target: 'reviewer', dataDir: join(root, 'data') }))
   assert.equal(retired.trashed, true)
   assert.equal(retired.archived, false)
   const record = memberNamed(table, 'reviewer', 1)
-  assert.equal(record.trashPath, undefined, 'the tombstone carries no absolute path')
+  assert.equal(record.trashPath, undefined, 'the tombstone carries no absolute trash path')
   assert.equal(typeof record.trashRelPath, 'string', 'it carries a path relative to the data root')
+  assert.equal(record.originalPath, undefined, 'and no absolute original path either: the record is portable')
+  assert.equal(record.originalRelPath, join('key', reviewer.childId).split(sep).join('/'), 'what it carries is where the artifact came from, under the sessions root')
   assert.equal(record.trashState, 'done')
   assert.equal(record.archived, false, 'archived means the archive ran, and here a move did')
 
@@ -608,6 +623,7 @@ test('a retirement records archived only for the branch that ran, never beside a
   assert.equal(restored.restored, true)
   assert.equal(restored.reason, 'moved-back')
   assert.equal(memberNamed(table, 'reviewer', 1).phase, PHASE.active)
+  assert.equal(existsSync(join(memberDir, 'session.jsonl')), true, 'the artifact is back under this machine\'s sessions root')
 })
 
 test('a pending tombstone whose move never happened is reactivated, not refused', async () => {

@@ -607,6 +607,27 @@ export function parseRoster(value) {
         throw new Error('roster member successor needs a member_id')
       }
     }
+    // The portable original path, checked on load like the succession edge above: a record that arrived by
+    // seed is exactly where a wrong one would come from, and a path that escapes the sessions root would
+    // make a restore write outside it. It is a *relative* path with forward slashes — `<slug>/<leaf>` — and
+    // an absolute one, a drive letter, a backslash or a `..` segment is refused by name rather than
+    // resolved into something surprising (ADR 0028's shape, applied to the path a restore moves back to).
+    if (member.originalRelPath !== undefined) {
+      const relative = member.originalRelPath
+      if (typeof relative !== 'string' || relative.length === 0) {
+        throw new Error('roster member originalRelPath must be a non-empty string')
+      }
+      if (relative.startsWith('/') || relative.startsWith('\\') || /^[A-Za-z]:/.test(relative)) {
+        throw new Error('roster member originalRelPath must be relative to the sessions root, not absolute')
+      }
+      if (relative.includes('\\')) {
+        throw new Error('roster member originalRelPath must use forward slashes, so a roster that travels between platforms still resolves')
+      }
+      const segments = relative.split('/')
+      if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+        throw new Error('roster member originalRelPath must not escape the sessions root or hold empty segments')
+      }
+    }
     // Every tool selects a member by its target, and the lookup takes the first match. A record that
     // holds one target twice would resolve silently to whichever member was written first, so it is
     // refused when the record is loaded rather than guessed at when it is used.

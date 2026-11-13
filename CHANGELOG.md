@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.34.0] - 2026-11-13
+
+- An artifact's origin is stored relative to the sessions root, and the flaky test that hid a real tie.
+
 ## [0.33.1] - 2026-11-13
 
 - A bilateral succession, and the storage domain removed, recorded as the two decisions they are.

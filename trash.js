@@ -263,6 +263,38 @@ export async function moveSessionArtifact({
 }
 
 /**
+ * The two path segments one session's directory sits at, under the sessions root: `<slug>/<leaf>`.
+ *
+ * This is what a tombstone stores instead of an absolute path, for the reason ADR 0028 gave for the trash:
+ * the roster is a file a person copies to another machine, and an absolute path from this one names
+ * nothing there. Both segments are taken **as the host spelled them on disk** — the leaf is the encoded
+ * Session id the persistence backend uses, and the first segment is the workspace slug *the host chose*,
+ * never recomputed from the working directory: a prediction of the host's naming rules would break
+ * silently the day they change, and this field is evidence of what the host actually did.
+ *
+ * The anchor is the member's own Session id: a session directory is the one named after it. When the
+ * artifact does not sit in such a directory (the backend reported a bare file somewhere else), there is
+ * nothing to make relative, and the caller stores no path at all rather than a guess.
+ * @param {{path: string, isDirectory: boolean}} source - the artifact a retirement is about to move.
+ * @param {string} memberId - the member's Session id.
+ * @returns {string|undefined} the relative path with forward slashes, or undefined when there is no anchor.
+ */
+export function originalRelPathOf(source, memberId) {
+  const sessionDir = source.isDirectory && decodeSegment(basename(source.path)) === memberId
+    ? source.path
+    : !source.isDirectory && decodeSegment(basename(dirname(source.path))) === memberId
+      ? dirname(source.path)
+      : undefined
+  if (sessionDir === undefined) return undefined
+  const leaf = basename(sessionDir)
+  const slug = basename(dirname(sessionDir))
+  if (slug === '' || leaf === '') return undefined
+  // Forward slashes on purpose: the field is read on the machine the roster travelled to, which may not be
+  // the platform that wrote it, so the separator must be the one both of them agree on.
+  return `${slug}/${leaf}`
+}
+
+/**
  * Decide where one member's persisted session belongs in the trash, without moving anything yet.
  *
  * Retirement writes its tombstone before the move, so the intended trash path has to exist as a value
@@ -272,8 +304,9 @@ export async function moveSessionArtifact({
  * @param {object} ctx - host plugin context.
  * @param {{leadSessionId: string, memberId: string, dataDir: string, now?: number}} request
  * @returns {Promise<
- *   {planned: true, trashPath: string, trashRelPath: string, originalPath: string, kind: 'directory'|'file',
- *    source: {path: string, isDirectory: boolean}, trashRoot: string, dirName: string}
+ *   {planned: true, trashPath: string, trashRelPath: string, originalPath: string, originalRelPath?: string,
+ *    kind: 'directory'|'file', source: {path: string, isDirectory: boolean}, trashRoot: string,
+ *    dirName: string}
  *   | {planned: false, reason: string}>}
  */
 export async function planMemberTrash(ctx, request) {
@@ -297,12 +330,16 @@ export async function planMemberTrash(ctx, request) {
   if (source === undefined) return { planned: false, reason: 'artifact-missing' }
   const trashRoot = join(dataDir, 'trash', leadSessionId)
   const dirName = `${memberId}-${stamp}`
+  const originalRelPath = originalRelPathOf(source, memberId)
   return {
     planned: true,
     trashPath: join(trashRoot, dirName),
     // What the tombstone stores: the directory this retirement gave the artifact, and where it sits
     // under the data root. Both are stable when the root moves; an absolute path is not.
     trashRelPath: join('trash', leadSessionId, dirName),
+    // Where the artifact came from, as the sessions root plus these two segments. The absolute is computed
+    // at read time from the sessions root in effect *there*, which is what makes the record portable.
+    ...(originalRelPath === undefined ? {} : { originalRelPath }),
     originalPath: source.path,
     kind: source.isDirectory ? 'directory' : 'file',
     source,
@@ -477,27 +514,83 @@ export async function artifactIsMissing({ record, leadSessionId, dataDir, home =
 }
 
 /**
- * Derive the directory that holds child Session directories, using any sibling still on disk.
- * A reported location looks like `.../<workspace-key>/<childId>/<artifact>`, so two `dirname` calls reach
- * the directory whose children are member directories.
+ * Derive the sessions root — the directory whose children are the workspace directories the host made —
+ * from any sibling Session still on disk.
+ *
+ * The anchor is the sibling's own Session id, not a fixed number of `dirname` calls: the backend may report
+ * the session directory (`.../<slug>/<id>`) or a file inside it (`.../<slug>/<id>/artifact`), and counting
+ * directories gets one of the two wrong. Everything above the segment named after the sibling is the root,
+ * whatever the id decoded to on disk, and the segment immediately above it is the slug the host chose —
+ * which a caller resolving a stored relative path must *not* reuse, because a roster that travelled carries
+ * the other machine's slug inside the path it stores.
+ *
+ * This is the only way the bundle can see the sessions root: through the persistence service, from a
+ * session that is still where the host put it. Asking for the member being restored does not work — a
+ * retired member's artifact is in the trash by definition, so the live store is the one place it is not,
+ * and a tombstone's own recorded absolute path belongs to the machine that wrote it.
  * @param {{stat?: (id: string) => Promise<unknown>}|undefined} persistence - session persistence service.
  * @param {string[]} childIds - candidate sibling Session ids.
  * @param {string} exceptId - the member being restored; never used as its own template.
  * @returns {Promise<string|undefined>} the sessions root, or undefined when no sibling is readable.
  */
-export async function sessionRootFromSibling(persistence, childIds, exceptId) {
+/**
+ * The sessions root implied by one reported artifact path, or undefined when it is too short to hold one.
+ *
+ * The anchor is the Session id, not a fixed number of `dirname` calls: the backend may report the session
+ * directory (`.../<slug>/<id>`) or a file inside it (`.../<slug>/<id>/artifact`), and counting directories
+ * gets one of the two wrong. Everything above the segment named after the Session is the root, and the
+ * segment immediately above it is the slug the host chose — which a caller resolving a stored relative path
+ * must *not* reuse, because a roster that travelled carries the other machine's slug inside the path.
+ * @param {string} reported - a path the persistence service reported.
+ * @param {string} childId - the Session id that path is for.
+ * @returns {string|undefined} the sessions root.
+ */
+function sessionsRootOfReport(reported, childId) {
+  const segments = reported.split(/[\\/]+/).filter((segment) => segment !== '')
+  const at = segments.findIndex((segment) => decodeSegment(segment) === childId)
+  // Fewer than two segments above the id means the report is too short to hold a root and a slug.
+  if (at < 2) return undefined
+  // Drop the session directory, anything below it, and the slug above it.
+  let root = reported
+  for (let level = 0; level < segments.length - at + 1; level += 1) root = dirname(root)
+  return root
+}
+
+/**
+ * The sessions root one Session's own report implies, or undefined when the host no longer knows it.
+ *
+ * This is the leg that answers for a Lead whose only member is the one being restored, and for the crash
+ * window of a `pending` move, where the artifact never left. It is also the *same machine's* root whenever
+ * it answers at all, so it can never send a roster that travelled back to the machine it came from.
+ * @param {{stat?: (id: string) => Promise<unknown>}|undefined} persistence - session persistence service.
+ * @param {string} childId - the Session id to ask about.
+ * @returns {Promise<string|undefined>} the sessions root.
+ */
+export async function sessionsRootFromReport(persistence, childId) {
   if (persistence === undefined || typeof persistence.stat !== 'function') return undefined
+  let snapshot
+  try {
+    snapshot = await persistence.stat(childId)
+  } catch (error) {
+    return undefined
+  }
+  const reported = snapshot?.location?.path
+  if (typeof reported !== 'string' || reported === '') return undefined
+  return sessionsRootOfReport(reported, childId)
+}
+
+/**
+ * Derive the sessions root from any sibling Session still on disk.
+ * @param {{stat?: (id: string) => Promise<unknown>}|undefined} persistence - session persistence service.
+ * @param {string[]} childIds - candidate sibling Session ids.
+ * @param {string} exceptId - the member being restored; never used as its own template.
+ * @returns {Promise<string|undefined>} the sessions root, or undefined when no sibling is readable.
+ */
+export async function sessionsRootFromSibling(persistence, childIds, exceptId) {
   for (const childId of childIds) {
     if (childId === exceptId) continue
-    let snapshot
-    try {
-      snapshot = await persistence.stat(childId)
-    } catch (error) {
-      continue
-    }
-    const reported = snapshot?.location?.path
-    if (typeof reported !== 'string' || reported === '') continue
-    return dirname(dirname(reported))
+    const root = await sessionsRootFromReport(persistence, childId)
+    if (root !== undefined) return root
   }
   return undefined
 }

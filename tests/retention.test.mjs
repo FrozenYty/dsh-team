@@ -526,7 +526,11 @@ test('a retirement records the trash directory and a root-relative path, never a
   const computed = join(root, tombstone.trashRelPath)
   assert.equal(existsSync(computed), true, 'the computed absolute path is where the artifact actually is')
   assert.equal(retired.trash_path, computed, 'the result still reports one absolute path')
-  assert.equal(tombstone.originalPath, artifact, 'the original path is a fact about the move, not a root')
+  // The original path is stored relative to the sessions root, so the record is portable: what it keeps is
+  // where the artifact came from under whichever root is in effect, and the absolute this machine saw is
+  // not in the file at all.
+  assert.equal(tombstone.originalRelPath, ['sessions', 'fresh-child'].join('/'), 'the record carries where it came from, relative to the sessions root')
+  assert.equal(tombstone.originalPath, undefined, 'and no machine-specific absolute path')
 
   // Acceptance for the relative record on the read side: restore moves the artifact back from it.
   const restored = await restoreMember({

@@ -13,7 +13,7 @@ import {
   resolveDataDir,
   resolveSource,
   restoreSessionArtifact,
-  sessionRootFromSibling,
+  sessionsRootFromSibling,
   trashMemberSession,
 } from '../trash.js'
 
@@ -188,19 +188,25 @@ test('a missing trash entry or unspecified path is reported', async () => {
 })
 
 test('the sessions root is derived from a sibling still on disk', async () => {
+  // A real layout, with this platform's separators: `<sessions root>/<workspace key>/<id>/<artifact>`.
+  const sessionsRoot = await mkdtemp(join(tmpdir(), 'dsh-team-sessions-'))
+  const siblingDir = join(sessionsRoot, 'key', 'member-a')
+  await mkdir(siblingDir, { recursive: true })
   const persistence = {
     stat: async (id) => {
-      if (id === 'member-a') return { location: { path: '/root/key/member-a/session.jsonl' } }
+      if (id === 'member-a') return { location: { path: join(siblingDir, 'session.jsonl') } }
       throw new Error('missing')
     },
   }
-  assert.equal(
-    await sessionRootFromSibling(persistence, ['member-a', 'member-b'], 'member-b'),
-    '/root/key',
-  )
+  // The root, not the workspace directory: a stored relative path carries its own slug, so reusing this
+  // machine's slug would put a roster that travelled under a directory the host did not choose.
+  assert.equal(await sessionsRootFromSibling(persistence, ['member-a', 'member-b'], 'member-b'), sessionsRoot)
   // The member being restored is never used as its own template.
-  assert.equal(await sessionRootFromSibling(persistence, ['member-b'], 'member-b'), undefined)
-  assert.equal(await sessionRootFromSibling(undefined, ['member-a'], 'member-b'), undefined)
+  assert.equal(await sessionsRootFromSibling(persistence, ['member-b'], 'member-b'), undefined)
+  assert.equal(await sessionsRootFromSibling(undefined, ['member-a'], 'member-b'), undefined)
+  // A report too short to hold a root and a slug is no answer, so the next sibling is asked.
+  const short = { stat: async (id) => (id === 'member-c' ? { location: { path: 'member-c' } } : undefined) }
+  assert.equal(await sessionsRootFromSibling(short, ['member-c'], 'member-b'), undefined)
 })
 
 test('a missing persistence service or artifact is reported, never thrown', async () => {
