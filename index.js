@@ -96,7 +96,7 @@ import {
   readRoster,
   targetOf,
 } from './roster.js'
-import { resolveDataDir, resolveTrashLimit } from './trash.js'
+import { createRootBinder, resolveDataDir, resolveTrashLimit } from './trash.js'
 
 export const name = 'dsh-team'
 
@@ -568,6 +568,28 @@ const HOST_HOOKS_VALUE = {
   },
 }
 
+/**
+ * Where this Lead's roster lives, and what a reader has to know about it.
+ *
+ * `file` is this plugin's own `roster.json` under the bound workspace root. `storage-domain` means no
+ * workspace could be resolved, so the roster is still served from the domain — the rollback path.
+ * `foreign_write_at` is a writer this process did not expect: the workspace is expected to have exactly
+ * one, and a second one is reported rather than locked out.
+ */
+const STORAGE_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['source'],
+  properties: {
+    source: { type: 'string', enum: ['file', 'storage-domain'] },
+    path: { type: 'string' },
+    imported_at: { type: 'string' },
+    foreign_write_at: { type: 'string' },
+    read_problem: { type: 'string' },
+    message: { type: 'string' },
+  },
+}
+
 const MEMBER_LIST_VALUE = {
   type: 'object',
   additionalProperties: false,
@@ -575,6 +597,7 @@ const MEMBER_LIST_VALUE = {
   properties: {
     members: { type: 'array', items: MEMBER_ROW },
     host_hooks: HOST_HOOKS_VALUE,
+    storage: STORAGE_VALUE,
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
     // On a result whose sweep retired a member that owned open work: how many tasks lost their owner, and
@@ -766,15 +789,21 @@ export function livePanelMembers(roster) {
  * Install every Lead-scoped tool.
  * @param agent - exact Team Lead whose model should receive the tools.
  * @param ctx - plugin context.
- * @param store - promise of the roster table; resolved lazily by each roster tool.
+ * @param source - promise of the roster source; each tool call awaits the Lead's own root before reading.
  * @param hooks - host-side effects a retirement refreshes.
- * @param dataDir - plugin data directory the trash lives under.
+ * @param dataDirFor - the data directory this Lead's trash lives under, resolved from its bound root.
  * @param trashLimit - the effective per-Lead trash cap resolved from the plugin config (ADR 0012).
  * @returns a disposer that unwinds every registration in reverse order.
  */
-function install(agent, ctx, store, hooks, dataDir, trashLimit) {
+function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
   const scoped = agent.ctx
   const disposers = []
+  /** This Lead's roster table, once the root it is bound to has been loaded and imported. */
+  const rosterTable = async () => {
+    const roster = await source
+    await roster.readyFor(leadSessionIdOf(agent))
+    return roster.table
+  }
   const register = (disposer) => {
     disposers.push(disposer)
   }
@@ -801,7 +830,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('compact_member: target must be a non-empty string')
         }
-        const table = await store
+        const table = await rosterTable()
         const leadSessionId = leadSessionIdOf(caller)
         const roster = await ensureAdopted(ctx, caller, table, leadSessionId)
         const member = findByTarget(roster, args.target)
@@ -997,13 +1026,13 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
             }
           }
         }
-        const table = await store
+        const table = await rosterTable()
         return await spawnMember({
           ctx,
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir,
+          dataDir: dataDirFor(),
           hooks,
           name: args.name,
           label: args.label,
@@ -1034,17 +1063,17 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
       async execute(_args, exec) {
         const caller = callingAgent(exec.agent, 'list_members')
         requireLead(ctx, caller, 'list_members')
-        const table = await store
+        const table = await rosterTable()
         const listed = await listMembers({
           ctx,
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir,
+          dataDir: dataDirFor(),
           hooks,
           trashLimit,
         })
-        return { ...listed, host_hooks: await hooks.report() }
+        return { ...listed, host_hooks: await hooks.report(), storage: (await source).report(leadSessionIdOf(caller)) }
       },
     })))
 
@@ -1069,7 +1098,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           && (!Number.isSafeInteger(args.timeout_ms) || args.timeout_ms < 1 || args.timeout_ms > WAIT_TIMEOUT_MAX)) {
           throw new Error(`wait_members: timeout_ms must be an integer from 1 through ${WAIT_TIMEOUT_MAX}`)
         }
-        const table = await store
+        const table = await rosterTable()
         return await waitMembers({
           ctx,
           table,
@@ -1110,13 +1139,13 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.confirmed !== undefined && typeof args.confirmed !== 'string') {
           throw new Error('retire_member: confirmed must be a string carrying the person\'s words')
         }
-        const table = await store
+        const table = await rosterTable()
         return await retireMember({
           ctx,
           table,
           leadSessionId: leadSessionIdOf(caller),
           leadAgent: caller,
-          dataDir,
+          dataDir: dataDirFor(),
           hooks,
           target: args.target,
           reason: args.reason,
@@ -1148,7 +1177,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('restore_member: target must be a non-empty string')
         }
-        const table = await store
+        const table = await rosterTable()
         return await restoreMember({
           ctx,
           table,
@@ -1157,7 +1186,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           hooks,
           // The data directory in effect, so a tombstone written from this release resolves without an
           // absolute path and an older one still finds its artifact.
-          dataDir,
+          dataDir: dataDirFor(),
         })
       },
     })))
@@ -1192,7 +1221,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.assignment !== undefined && typeof args.assignment !== 'string') {
           throw new Error('message_member: assignment must be a string')
         }
-        const table = await store
+        const table = await rosterTable()
         return await messageMember({
           ctx,
           table,
@@ -1224,7 +1253,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (typeof args.target !== 'string' || args.target.length === 0) {
           throw new Error('stop_member: target must be a non-empty string')
         }
-        const table = await store
+        const table = await rosterTable()
         return await stopMember({ ctx, table, leadSessionId: leadSessionIdOf(caller), leadAgent: caller, target: args.target })
       },
     })))
@@ -1250,7 +1279,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.template !== undefined && typeof args.template !== 'string') {
           throw new Error('handoff_template: template must be a string')
         }
-        const table = await store
+        const table = await rosterTable()
         return await handoffTemplate({
           ctx,
           table,
@@ -1325,7 +1354,7 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
         if (args.status !== undefined && !['open', 'done'].includes(args.status)) {
           throw new Error('task_board: status must be "open" or "done"')
         }
-        const table = await store
+        const table = await rosterTable()
         return await taskBoard({
           table,
           leadSessionId: leadSessionIdOf(caller),
@@ -1358,10 +1387,10 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
  * non-root Agent) while the answer stays narrow (only the rows that Session owns).
  * @param agent - the member Agent whose model should receive the tool.
  * @param ctx - plugin context.
- * @param store - promise of the roster table; resolved lazily by each call.
+ * @param source - promise of the roster source; the member read waits for every bound root.
  * @returns a disposer that removes the registration.
  */
-function installMember(agent, ctx, store) {
+function installMember(agent, ctx, source) {
   return agent.ctx.tools.register(defineTool({
     name: 'list_my_tasks',
     description: 'Read the tasks you own on your Lead\'s work board: one row per task whose owner is your own target, each with its id, title, body, status and timestamps, and how many are still open. The body is what "done" means for the task and where the work stopped, so read it before starting or redoing anything. This is a read-only view: only the Lead writes the board, so when you finish a task say so in your reply and the Lead marks the row done. You cannot see another member\'s tasks, a task nobody owns, or the Lead\'s whole board.',
@@ -1369,8 +1398,9 @@ function installMember(agent, ctx, store) {
     output: { schema: MY_TASKS_VALUE },
     async execute(_args, exec) {
       const caller = callingAgent(exec.agent, 'list_my_tasks')
-      const table = await store
-      return listMyTasks(requireMember(table, caller, 'list_my_tasks'))
+      const roster = await source
+      await roster.ready()
+      return listMyTasks(requireMember(roster.table, caller, 'list_my_tasks'))
     },
   }))
 }
@@ -1389,16 +1419,21 @@ function installMember(agent, ctx, store) {
 export function apply(ctx, config) {
   const trashLimit = resolveTrashLimit(config)
   const installed = new Map()
-  const dataDir = resolveDataDir()
-  // The storage facility is the readiness barrier for the roster; a rejected open surfaces as a tool
+  // Where each Lead's bytes go. A Lead binds once, on first use, so a `working_directory` call later in
+  // the session cannot move its data root (see `createRootBinder`).
+  const binder = createRootBinder()
+  // The storage facility is the import source and the rollback path; a rejected open surfaces as a tool
   // error on first use instead of an unhandled rejection at load.
-  const store = openRosterStore(ctx)
-  store.catch(() => undefined)
-  // The panel overlay reads the roster synchronously at each outgoing frame. `store` resolves before any
-  // member can be spawned, so the accessor starts empty rather than suspending a host stream on a promise
-  // this plugin does not own.
-  let rosterTable
-  store.then((table) => { rosterTable = table }, () => undefined)
+  const source = openRosterStore(ctx, binder)
+  source.catch(() => undefined)
+  // The panel overlay reads the roster synchronously at each outgoing frame, so it takes whatever is
+  // loaded at that moment rather than suspending a host stream on a promise this plugin does not own.
+  let readySource
+  source.then((value) => { readySource = value }, () => undefined)
+  /** The data directory one Lead's trash lives under: its bound root, or the pre-move default. */
+  const dataDirFor = (agent) => binder.rootOf(leadSessionIdOf(agent)) ?? resolveDataDir()
+  /** Bind one Lead to its root, once. The binding decides where its roster and its trash live. */
+  const bindLead = (agent) => binder.bind(leadSessionIdOf(agent), agent?.session?.header?.cwd)
 
   const log = (line) => {
     if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(line)
@@ -1415,16 +1450,21 @@ export function apply(ctx, config) {
     }
     return ids
   }
-  const readRetired = async () => retiredChildIds(await store)
+  const readRetired = async () => {
+    const roster = await source
+    await roster.ready()
+    return retiredChildIds(roster.table)
+  }
   // The shipped roster read is synchronous — its caller maps the array directly — so it reads the same
   // set straight from the in-memory table. A live read cannot be stale, which is why it is one of the
-  // three hooks that needs no invalidation. `undefined` means the table is not resolved yet.
-  const readRetiredNow = () => (rosterTable === undefined ? undefined : retiredChildIds(rosterTable))
+  // three hooks that needs no invalidation. `undefined` means the source is not resolved yet.
+  const readRetiredNow = () => (readySource === undefined ? undefined : retiredChildIds(readySource.table))
   const readRetiredByTeam = async () => {
-    const table = await store
+    const roster = await source
+    await roster.ready()
     const byTeam = new Map()
-    for (const [leadSessionId, roster] of table.entries()) {
-      const count = roster.members.filter((member) => member.phase === PHASE.retired).length
+    for (const [leadSessionId, value] of roster.table.entries()) {
+      const count = value.members.filter((member) => member.phase === PHASE.retired).length
       if (count > 0) byTeam.set(leadSessionId, count)
     }
     return byTeam
@@ -1432,7 +1472,7 @@ export function apply(ctx, config) {
   // The built-in team panel renders the shipped fold, which never heard of a member started through
   // `ctx.subagents`. The same exit that hides a retired id adds this Lead's live members, in the shape
   // the wire schema requires (ADR 0023).
-  const readLive = (leadSessionId) => rosterTable === undefined ? [] : livePanelMembers(readRoster(rosterTable, leadSessionId))
+  const readLive = (leadSessionId) => (readySource === undefined ? [] : livePanelMembers(readRoster(readySource.table, leadSessionId)))
   const retired = createRetiredCache({ readRetired, log })
 
   // A hook must not be lost to load order: the row can activate before `sessionController` exists, and a
@@ -1507,7 +1547,10 @@ export function apply(ctx, config) {
     } else if (membership.role !== 'lead') {
       return
     }
-    installed.set(agent, install(agent, ctx, store, hooks, dataDir, trashLimit))
+    // Bind before the tools exist: a Lead's data root is fixed for the life of its session, and the
+    // first resolution is the one its working directory gives (see `createRootBinder`).
+    bindLead(agent)
+    installed.set(agent, install(agent, ctx, source, hooks, () => dataDirFor(agent), trashLimit))
   }
 
   // The member scope is the other half of the same shape: an Agent that is not a root is a child, and
@@ -1517,7 +1560,7 @@ export function apply(ctx, config) {
   const maybeInstallMember = (agent) => {
     if (installedMembers.has(agent)) return
     if (isRootAgent(ctx, agent)) return
-    installedMembers.set(agent, installMember(agent, ctx, store))
+    installedMembers.set(agent, installMember(agent, ctx, source))
   }
 
   for (const agent of ctx.agents.list()) {

@@ -107,3 +107,22 @@ overwriting it (`docs/member-lifecycle-en.md` §1).
    cap but never pruned, and only this plugin's own trash copies are deleted — the platform has no
    Session-deletion API, and its only "hide it" mechanism is a reversible archive that cannot bound
    bytes. A retirement that moved nothing prunes nothing. No timer and no read-time sweep exists.
+
+## 4. Where the file lives, and who may write it
+
+**One file per workspace.** The record is this plugin's own `roster.json` under `.agents/team/` in the
+Lead's workspace, beside the memory notebook, and the trash sits under the same root; a profile that sets
+`DSH_TEAM_DATA_DIR`, or the frozen `DSH_TEAM_ROSTER_DATA_DIR`, uses that directory instead (ADR 0014). A
+Lead binds to its root the first time it uses it and the binding lives in the running process, so a
+`working_directory` call later in the same session cannot move the root and orphan what it already wrote. A
+Session whose workspace cannot be resolved keeps using the storage domain instead, and `list_members` says
+so in `storage`. The domain is never written once a file exists and is never deleted: it is the one-time
+import source, and deleting `roster.json` is the rollback. Records are replaced by a temporary file plus a
+rename, so a crash leaves either the whole previous file or the whole new one; a file that cannot be read,
+or that holds one record the loader refuses, falls back to the domain rather than throwing.
+
+**One writer per workspace.** Two Lead Sessions in one workspace share that file by design, and nothing
+serializes them — a lock file would add a stale-lock failure mode that nothing cleans up. Every write
+re-reads the file first, so a concurrent change is merged rather than clobbered, and a serial this process
+did not write is reported as `foreign_write_at` in `list_members`. Detection follows this process's next
+read or write, not the instant the second writer writes.
