@@ -2578,3 +2578,69 @@
   than building one.
 - **Version.** `0.28.5`: a published module and one test file. The stored shape is unchanged, the file on
   disk is the same bytes under a better name, and nothing about how the plugin behaves is different.
+
+## 2026-11-13 — a tombstone stays only while its artifact could, and the rest become history (v0.29.0)
+
+- **The last structural problem, and it was real.** `roster.json` grew without bound: 100 records, 95 of
+  them retired tombstones, roughly a kilobyte each, one more per retirement, nothing ever leaving. The
+  retention cap bounded the **trash directories** (20 per Lead) and never bounded the **records**, and
+  `list_members` mapped every record to a row, so the tool's own output grew with the file.
+- **The invariant, and why it is not an arbitrary threshold: a tombstone belongs in the roster exactly
+  while its artifact could still exist.** Beyond the most recent `trashLimit` retirements the cap has
+  already deleted the artifact, so `restore_member` can only answer `pruned` there — which makes archiving
+  such a record **lossless for functionality**, and leaves it only the two duties that are kept: being
+  read, and being counted.
+- **Enforced on every write for that Lead, not on retirement alone.** That is the difference between a
+  property of the file and a rule inside one operation, and it is why the 74 records already over the
+  window need no migration script: the next write of any kind flushes them. The window is derived from the
+  effective `trashLimit`, so it cannot drift out of step with the thing it is derived from.
+- **Four conditions, and the last one is the safety argument: outside the window, carrying a recorded
+  trash destination, not `pending`, and the artifact absent on every leg of the same resolver
+  `restore_member` uses.** The window decides *when to look*; the filesystem decides *the outcome*. A
+  record whose bytes are still on disk stays however old it is, and one that never moved anything stays
+  too, because its session may still be where it always was.
+- **The archive is `<data root>/archive.jsonl`** — append-only, one JSON object per line, each the full
+  tombstone with when and why it left, and **appended before the roster is replaced**: a crash between the
+  two leaves a duplicate line in an append-only history, where the other order would lose the record
+  entirely. The hot path never reads it. There is deliberately no cap on it — an archive that deletes is
+  not an archive — and if it ever needs one, that is a separate decision.
+- **The ids are the reason naive deletion would have been wrong.** `retiredChildIds` is a compact per-Lead
+  list of every retired child Session id, archived ones included, because the host hooks strip the shipped
+  panels and the `list_agents` rows **by id**: a tombstone that left the roster without leaving its id
+  would let its member reappear there. It is rewritten on every write so a **restored** member leaves the
+  list — a live member the panel strips would be worse than a stale record.
+- **The coupling I did not name, found by the implementer: adoption.** `ensureAdopted` compares a child id
+  against the roster's own records, so a child whose tombstone had been archived looked unseen and was
+  **adopted back as a live member** — a resurrection with a new `memberId` and the next generation of the
+  name, silently contradicting a tombstone that still existed. The panel filter is an exit wrapper, not a
+  source of truth, which is exactly why the guard had to go where the ids live. It is pinned by
+  `a child whose tombstone is archived is not adopted back as a live member`.
+- **Two more queries of the same class.** A `spawn_member` with `replace` naming an archived predecessor
+  now refuses by naming the archive — an archived predecessor cannot be replaced, because the handover
+  brief lives on the record — and the slot credit counts the id list rather than the tombstones still in
+  the roster, without which archiving would have quietly shrunk the credit a Lead gets for having retired
+  members. Both are the same lesson: **an archive changes every question that used to be answered by
+  looking at the roster.**
+- **Measured on a fixture shaped like the real one: 100 records become 26** — five live plus the newest
+  twenty — with **74 archived and 95 retired ids kept**, while one tombstone with no trash destination
+  cannot be archived and stays. **That 74 is the same number T3's dry-run measured as dangling**, which is
+  the window and the audit corroborating each other from opposite directions.
+- **Verification.** 263 tests pass, nine new, and four existing assertions were updated because the
+  behaviour deliberately changed — an import is now itself a bounded write, so `tests/store.test.mjs`
+  reads 26 rather than 100, and `list_members` gained a field. Four probes were each shown to fail by
+  name: removing the artifact check archived a record whose bytes were still there, removing the id
+  retention left thirty ids unstripped, reverting the adoption guard brought an archived member back as a
+  live row, and skipping the archive query turned the typed refusal into a generic one. `schema-check.mjs`
+  still reports 11 of 11 output schemas accepted and no Host rejection.
+- **A note on probe quality, of the kind this file keeps recording.** The adoption probe first failed on
+  its *second* assertion — the archived count read zero because the adopted-back member had legitimately
+  left the id list — rather than on adoption itself. The assertions were reordered so it now fails on the
+  reason it exists. A probe that fails beside its mechanism is a probe that very nearly slipped through.
+- **What this does not do.** The storage-domain mode is not bounded: with no root there is no neighbouring
+  file to archive into, so a profile without a workspace keeps its records in the domain exactly as before.
+  Records with no trash destination and records whose bytes are still on disk are never archived, by the
+  rule above rather than by oversight. And the flush needs the first **write** after this release is
+  loaded — reads never trigger it and never need it, so a roster can sit over the window until something
+  writes, which loses nothing.
+- **Version.** `0.29.0`: a stored shape changed and one documented behaviour changed with it — the roster
+  now holds recent history rather than all of it, and says so.

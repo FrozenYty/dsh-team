@@ -20,6 +20,7 @@ import { join } from 'node:path'
 
 import { loadDefinition, loadTeamTemplate } from './definitions.js'
 import {
+  ARCHIVE_FILE_NAME,
   HANDOFF_BRIEF_MAX,
   LIFETIME,
   PHASE,
@@ -31,6 +32,7 @@ import {
   TASK_TITLE_MAX,
   TRASH_STATE,
   adoptMember,
+  archivedCount,
   checkAssignment,
   checkHandoffTemplate,
   checkTaskBody,
@@ -38,6 +40,7 @@ import {
   declaredLifetime,
   findByTarget,
   findAnyTarget,
+  findArchived,
   findTask,
   handoffTemplateProblem,
   hasLiveTarget,
@@ -533,7 +536,12 @@ function listedMembersOf(ctx, caller) {
  */
 export async function ensureAdopted(ctx, caller, table, leadSessionId) {
   const roster = readRoster(table, leadSessionId)
-  const seen = new Set(roster.members.map((member) => member.childId))
+  // Archived tombstones count as seen: a child whose record moved to the archive must not be adopted back
+  // as a new live member, which is the one thing an archive must never allow.
+  const seen = new Set([
+    ...roster.members.map((member) => member.childId),
+    ...(Array.isArray(roster.retiredChildIds) ? roster.retiredChildIds : []),
+  ])
   const candidates = []
   const add = (row) => {
     if (typeof row.id !== 'string' || row.id.length === 0 || seen.has(row.id)) return
@@ -753,7 +761,15 @@ export async function listMembers({ ctx, table, leadSessionId, leadAgent, dataDi
   // a row can say whether that member is still billing an API this Session has left (ADR 0024). An
   // unreadable route leaves every row uncomparable, which is why it is not an error here either.
   const leadRoute = currentRouteOf(caller)
-  return { members: roster.members.map((member) => memberRow(ctx, member, leadRoute)), ...swept }
+  const archived = archivedCount(roster)
+  return {
+    members: roster.members.map((member) => memberRow(ctx, member, leadRoute)),
+    ...swept,
+    // This list is the recent members: the tombstones past the trash window moved to the archive, and a
+    // reader that was told nothing would mistake the window for the whole team.
+    archived_records: archived,
+    ...(archived > 0 ? { archive_file: join(dataDir, ARCHIVE_FILE_NAME) } : {}),
+  }
 }
 
 /**
@@ -1284,7 +1300,10 @@ export async function spawnMember({
     ? undefined
     : roster.members.find((member) => targetOf(member) === replace)
   if (replace !== undefined && predecessor === undefined) {
-    throw new Error(`spawn_member: no member named "${replace}" in the roster, live or retired`)
+    // A predecessor whose tombstone is past the trash window is in the archive, not gone: name it, so the
+    // caller starts a successor without replace instead of guessing whether the name was ever real.
+    const archived = await findArchived(dataDir, replace)
+    throw new Error(`spawn_member: no member named "${replace}" in the roster, live or retired${archived === undefined ? '' : `; its tombstone is archived in ${archived.path}, which keeps its history but not its handoff — start the successor without replace`}`)
   }
   let defined
   if (loaded !== undefined) {
@@ -1852,6 +1871,18 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks, 
   const roster = readRoster(table, leadSessionId)
   const member = findAnyTarget(roster, target)
   if (member === undefined) {
+    // The record may have left the roster for the archive: a tombstone past the trash window is history,
+    // and saying where it went is cheaper than letting a reader wonder whether the target ever existed.
+    // This is the only read of the archive on a restore, and it happens after the lookup already failed.
+    const archived = await findArchived(dataDir, target)
+    if (archived !== undefined) {
+      return {
+        target,
+        restored: false,
+        reason: 'archived',
+        message: `"${target}" is archived: its tombstone is past the trash retention window, so its artifact is gone and the record now lives in ${archived.path}${archived.archivedAt === undefined ? '' : ` (archived ${archived.archivedAt})`}. The record is kept as history; it is no longer in the roster, so it cannot be restored. Start a successor with spawn_member if the work must continue.`,
+      }
+    }
     throw new Error(`restore_member: no member named "${target}" in the roster, live or retired`)
   }
   if (member.phase !== PHASE.retired) {

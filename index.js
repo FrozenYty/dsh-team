@@ -601,6 +601,11 @@ const MEMBER_LIST_VALUE = {
     members: { type: 'array', items: MEMBER_ROW },
     host_hooks: HOST_HOOKS_VALUE,
     storage: STORAGE_VALUE,
+    // How many tombstones this Lead has that are no longer in the roster, and where they went: past the
+    // trash retention window the artifact is gone, so the record moves to an append-only archive and only
+    // the newest `trashLimit` stay here. `archive_file` is present only when the count is not zero.
+    archived_records: { type: 'integer' },
+    archive_file: { type: 'string' },
     swept: { type: 'integer' },
     swept_targets: { type: 'array', items: { type: 'string' } },
     // On a result whose sweep retired a member that owned open work: how many tasks lost their owner, and
@@ -714,7 +719,8 @@ const RESTORE_VALUE = {
     target: { type: 'string' },
     restored: { type: 'boolean' },
     // Which branch actually ran: moved-back, never-moved, unarchived, not-archived, already-active,
-    // pruned (the retention cap removed the artifact), or not-retired for a refusal.
+    // pruned (the retention cap removed the artifact), archived (the tombstone is past the trash window
+    // and lives in the archive now), or not-retired for a refusal.
     reason: { type: 'string' },
     path: { type: 'string' },
     // Present on a refusal when another generation of the stale target's name is live now.
@@ -1056,7 +1062,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'list_members',
-      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at.',
+      description: 'List every member and subagent this agent controls: members this plugin spawned, members the shipped team roster created, and children spawned with the shipped subagent or subagent_fork tools. Each row carries the target, the child session id, the lifecycle phase, the assignment recorded for it, the lifetime its spawn declared (standing or one-shot), ephemeral: true on a one-shot member, live state and, while resident, context pressure. A one-shot member that has been re-tasked at least twice is flagged retasked: true with a note saying it is probably a standing role — the plugin only advises, it never converts one, and only you can declare the other lifetime at the next spawn. A row also carries the route that member was started on (provider, model, and whether the plugin resolved it or the call supplied it), and when that route is not the one this Session is on now the row is marked route_stale: true with a route_note naming the member and the one call that replaces it — a member started before a model switch keeps being billed to the API it began on until it is replaced. Unknown children are adopted on the first read, and retired members stay listed as retired. This read first sweeps one-shot members whose turn has ended and which own no open task — through the same retirement path as retire_member, which is why those members then appear as retired — and reports swept and swept_targets when it retired any. A one-shot member whose turn ended but which still owns an open task is left alone and reported instead: blocked counts them, blocking_tasks names the row ids, and blocking_note names the one call that clears each, because an open row is a veto and an empty board is never proof that anything finished. It always answers host_hooks: whether each host hook installed in this process — panel_filter (the shipped team panel and the subagent picker), roster_filter (the shipped list_agents tool) and slot_credit — plus stripped_ids, the number of tombstoned child ids the installed filters are removing, and tombstone_read_failed. A retired member still shown by the shipped panel or list_agents, or a panel that never lists a member this plugin owns, is explained there rather than guessed at. This list is the recent members, not everyone this Lead ever had: past the trash retention window a tombstone leaves the roster for an append-only archive, and archived_records counts those while archive_file names the file, so a target missing from here may still be in the archive rather than gone.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1164,7 +1170,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
 
     register(scoped.tools.register(defineTool({
       name: 'restore_member',
-      description: 'Bring a retired member back: move its trashed session to the path it came from and return the record to active. It refuses when a live member already uses the target, reports why when no artifact was recorded, and answers reason "pruned" when the trash retention cap already removed the artifact — a pruned member cannot be restored. A restored session may take one client refresh to reappear.',
+      description: 'Bring a retired member back: move its trashed session to the path it came from and return the record to active. It refuses when a live member already uses the target, reports why when no artifact was recorded, and answers reason "pruned" when the trash retention cap already removed the artifact — a pruned member cannot be restored. A tombstone older than that cap\'s window is no longer in the roster at all: it answers reason "archived" and names the append-only archive that still holds the record. A restored session may take one client refresh to reappear.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -1409,6 +1415,34 @@ function installMember(agent, ctx, source) {
 }
 
 /**
+ * Every retired child Session id one Lead's record knows about.
+ *
+ * The record keeps the ids of the tombstones that moved to the archive, because the host hooks strip the
+ * shipped panels by id: a member whose tombstone left the roster must not reappear there. A record written
+ * before that field exists is read by scanning the tombstones it still holds, which is exactly the set the
+ * hooks used to build, so nothing changes for a profile that has not written since the upgrade.
+ * @param {object} roster - one Lead's record.
+ * @returns {Set<string>} the ids, archived ones included.
+ */
+function retiredIdsOf(roster) {
+  const ids = new Set(Array.isArray(roster?.retiredChildIds) ? roster.retiredChildIds : [])
+  for (const member of roster?.members ?? []) {
+    if (member?.phase !== PHASE.retired) continue
+    if (typeof member.childId === 'string' && member.childId.length > 0) ids.add(member.childId)
+  }
+  return ids
+}
+
+/** The one tombstone set every host hook strips, and the one read they share. */
+function retiredChildIds(table) {
+  const ids = new Set()
+  for (const [, roster] of table.entries()) {
+    for (const id of retiredIdsOf(roster)) ids.add(id)
+  }
+  return ids
+}
+
+/**
  * Install the tools in every live and subsequently published Lead scope, and the one read-only tool in
  * every live and subsequently published member scope.
  *
@@ -1427,7 +1461,7 @@ export function apply(ctx, config) {
   const binder = createRootBinder()
   // The storage facility is the import source and the rollback path; a rejected open surfaces as a tool
   // error on first use instead of an unhandled rejection at load.
-  const source = openRosterStore(ctx, binder)
+  const source = openRosterStore(ctx, binder, { trashLimit })
   source.catch(() => undefined)
   // The panel overlay reads the roster synchronously at each outgoing frame, so it takes whatever is
   // loaded at that moment rather than suspending a host stream on a promise this plugin does not own.
@@ -1440,18 +1474,6 @@ export function apply(ctx, config) {
 
   const log = (line) => {
     if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(line)
-  }
-  // The one tombstone set every host hook strips, and the one read they share. A retired member without a
-  // child id cannot match any row, so it is not in the set — which also keeps `stripped_ids` honest.
-  const retiredChildIds = (table) => {
-    const ids = new Set()
-    for (const [, roster] of table.entries()) {
-      for (const member of roster.members) {
-        if (member.phase !== PHASE.retired) continue
-        if (typeof member.childId === 'string' && member.childId.length > 0) ids.add(member.childId)
-      }
-    }
-    return ids
   }
   const readRetired = async () => {
     const roster = await source
@@ -1467,7 +1489,9 @@ export function apply(ctx, config) {
     await roster.ready()
     const byTeam = new Map()
     for (const [leadSessionId, value] of roster.table.entries()) {
-      const count = value.members.filter((member) => member.phase === PHASE.retired).length
+      // Every retired member, the archived ones included — the credit is for the slots a retirement freed,
+      // and a tombstone that moved to the archive freed the same slot as one still in the roster.
+      const count = retiredIdsOf(value).size
       if (count > 0) byTeam.set(leadSessionId, count)
     }
     return byTeam
