@@ -29,7 +29,8 @@ note          the start error, present only on a record whose spawn failed
 retiredAt     ISO timestamp, present only on a tombstone
 retireReason  the reason the model gave for the retirement, when it gave one
 trashDir      the name retirement gave the trash directory, on a tombstone; the part that survives the root moving
-trashRelPath  where that directory sits under the data root, on a tombstone; the absolute path is read-time
+trashRelPath  where that directory sits under the data root, on a tombstone; written with forward slashes and
+              read on either separator; the absolute path is read-time
 trashPath     the absolute path a move used, present only on a tombstone written before v0.26.0
 originalRelPath  where that artifact came from, relative to the sessions root: `<slug>/<leaf>` with forward
               slashes, absent when the artifact was not in a directory named after the member (ADR 0034)
@@ -129,6 +130,16 @@ overwriting it (`docs/member-lifecycle-en.md` §1).
    absolute path the record itself carries, and the frozen `~/.dsh/team-roster`. Duplicates are dropped,
    so the ordinary case is one candidate per leg, and a tombstone written by any earlier release restores
    with no migration at all (ADR 0028).
+
+**Strict on write, tolerant on read.** A recorded relative path is written with forward slashes and read by
+   splitting on **either** separator, because a roster is a file that travels and the machine reading it may
+   not be the one that wrote it: a record carrying the writing machine's separator read with `join` once put
+   the artifact under `<root>/trash\lead\dir`, a path that does not exist. The tolerance is constructive
+   rather than hopeful — **no legal segment of that field can contain a backslash**, since both the Lead and
+   the child Session id are encoded identities, so splitting on both cannot split a segment in half.
+   `scripts/migrate-roster.mjs` compares the same field by **segment** for the same reason, and that fixed a
+   real bug: comparing it by characters reported every already-migrated record on Windows as pending, so it
+   rewrote them all (ADR 0028, ADR 0034).
 
 **A tombstone leaves once its artifact could not exist.** Past the newest `trashLimit` tombstones the cap
    has already removed the bytes, so a restore there could only answer `pruned`; those records move to
