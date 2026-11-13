@@ -18,7 +18,7 @@ the roster and has no browser half.
 
 ## Status
 
-- Current version: v0.29.0.
+- Current version: v0.29.1.
 - **Exercised in a real profile on this machine.** Retirement, restore, message, stop, a replacement whose
   successor finished the predecessor's work, the trash cap and its refusal at load, the handoff template,
   spawn options and the forwarded route, the task board and its transfer, the three host hooks, and the
@@ -47,7 +47,10 @@ the roster and has no browser half.
 - **Not covered yet**: activation in anyone else's profile — `scripts/check.mjs` never loads the Harness,
   so no repository can prove that; a Harness build whose services or storage layout differ from the
   installed one; and the `rename` fast path of the trash move, which this machine never took, because its
-  data roots sit on different volumes and every move was the verified copy path (`EXDEV`) instead.
+  data roots sit on different volumes and every move was the verified copy path (`EXDEV`) instead. The
+  archive bound is in the same position: it runs on the first write after a reload and never on a read, so
+  this profile's roster has not flushed yet — a tombstone leaving for `archive.jsonl` past the retention
+  window is covered by the suite, not yet by a live observation here.
 - Release list: [CHANGELOG.md](CHANGELOG.md). Append-only history: [PROGRESS.md](PROGRESS.md).
 
 ## Install and verify

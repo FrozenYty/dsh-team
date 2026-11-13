@@ -74,6 +74,11 @@ tasks         on the roster record, not on a member: this Lead's work board, an 
               empty board is a record that never gained the field (ADR 0017, ADR 0020)
 ```
 
+One field belongs to the roster rather than to a member: `retiredChildIds` lists every retired child
+Session id this Lead has ever had, the archived ones included, and it is rewritten on every write so a
+restored member leaves it. The host hooks strip the shipped panels **by child id**, so this list — not the
+tombstone — is what keeps a retired member out of them (ADR 0030).
+
 `trashState` is validated on load, like `phase`: an unknown value is refused rather than guessed at.
 `pruned` keeps `trashDir` and `trashKind` and `originalPath` — the tombstone still says which directory
 went and where the artifact came from, and a record written before v0.26.0 keeps its absolute `trashPath`
@@ -121,10 +126,23 @@ overwriting it (`docs/member-lifecycle-en.md` §1).
    so the ordinary case is one candidate per leg, and a tombstone written by any earlier release restores
    with no migration at all (ADR 0028).
 
+**A tombstone leaves once its artifact could not exist.** Past the newest `trashLimit` tombstones the cap
+   has already removed the bytes, so a restore there could only answer `pruned`; those records move to
+   `archive.jsonl` — append-only, one JSON object per line, never read on the hot path — and only when the
+   record names a trash destination, its move is not `pending`, and its artifact is on **no** leg of the
+   chain described above. The window is derived from the effective cap, so it cannot drift from the cap,
+   and the bound runs on **every write for that Lead** rather than on one operation: records already past
+   it flush on the next write, with no migration script, and a read never flushes. Records with no
+   destination, records whose bytes are still on disk, and the storage-domain mode are deliberately not
+   bounded, and neither is the archive itself (ADR 0030). A restore of an archived tombstone answers
+   `reason: 'archived'` naming the file, and `list_members` reports `archived_records` with `archive_file`
+   when that count is non-zero.
+
 ## 4. Where the file lives, and who may write it
 
 **One file per workspace.** The record is this plugin's own `roster.json` under `.agents/team/` in the
-Lead's workspace, beside the memory notebook, and the trash sits under the same root; a profile that sets
+Lead's workspace, beside the memory notebook, with its import marker, `provenance.json` and
+`archive.jsonl` beside it, and the trash sits under the same root; a profile that sets
 `DSH_TEAM_DATA_DIR`, or the frozen `DSH_TEAM_ROSTER_DATA_DIR`, uses that directory instead (ADR 0014). A
 Lead binds to its root the first time it uses it and the binding lives in the running process, so a
 `working_directory` call later in the same session cannot move the root and orphan what it already wrote. A

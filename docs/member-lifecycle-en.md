@@ -249,7 +249,10 @@ half-finished. What `retire_member` does, in the order the code does it:
 
 5. **Bound the trash, only here.** A retirement that moved an artifact in enforces this Lead's
    retention cap in the same call; the cap itself, its candidates and the `pruned` state are
-   `docs/roster-storage-en.md` `docs/architecture-en.md` §3 (ADR 0011, ADR 0012).
+   `docs/roster-storage-en.md` `docs/architecture-en.md` §3 (ADR 0011, ADR 0012). The tombstone this
+   protocol ends with is not permanent either: past the retention window, and only once its artifact is on
+   no leg a restore searches, it leaves the roster for `archive.jsonl`, and its child id stays in
+   `retiredChildIds` so the member cannot be adopted back (`docs/roster-storage-en.md` §3, ADR 0030).
 
 6. **Hide.** Retired ids stop being served by the host projection exits, so every client drops the
    member, while the roster keeps the trash path for manual recovery.

@@ -63,6 +63,7 @@ README.md  ->  PLAN.md  ->  PROGRESS.md  ->  docs/architecture-zh.md  ->  与你
 | 为什么花名册住在工作区里的一个文件，以及存储域现在还用来做什么？ | `docs/adr/0027-roster-file-under-the-workspace.md` | 英文 |
 | 为什么墓碑记录的是目录名，以及保留上限如何与它匹配？ | `docs/adr/0028-trash-directory-name-not-path.md` | 英文 |
 | 为什么成员定义从一条链上读取，以及为什么随包模板会输给工作区里的文件？ | `docs/adr/0029-definition-chain.md` | 英文 |
+| 为什么墓碑会离开花名册，以及是什么让它的成员不再出现在官方面板里？ | `docs/adr/0030-tombstone-window-and-archive.md` | 英文 |
 | 上游缺的是哪段成员生命周期？可直接贴成 issue 的版本 | `docs/upstream-lifecycle-gap-zh.md` | 双语 |
 | 分支、提交、合并怎么做？ | `CONTRIBUTING.md` | 英文 |
 | 助手在本仓库的规则？ | `AGENTS.md` | 英文 |

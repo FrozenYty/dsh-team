@@ -66,6 +66,7 @@ A design subject is its own document rather than a section of `architecture-`: a
 | Why does the roster live in a file under the workspace, and what is the storage domain for now? | `docs/adr/0027-roster-file-under-the-workspace.md` | English |
 | Why does a tombstone record a directory name, and how does the cap match one? | `docs/adr/0028-trash-directory-name-not-path.md` | English |
 | Why is a member definition read from a chain, and why do the shipped templates lose to a workspace file? | `docs/adr/0029-definition-chain.md` | English |
+| Why does a tombstone leave the roster, and what keeps its member out of the shipped panels? | `docs/adr/0030-tombstone-window-and-archive.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap-en.md` | pair |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
