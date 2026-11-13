@@ -2043,3 +2043,51 @@
   stands as history and the current statement is in `docs/routes-en.md`.
 - **Version.** `0.25.6`: a correction to where the architecture pair sends a reader, which changes released
   documentation even though no code moved.
+
+## 2026-11-13 — a retirement tombstone stores where its artifact went, not where the root was (v0.26.0)
+
+- **The defect this removes before it can happen.** A tombstone recorded the **absolute** path its artifact
+  was moved to, and two readers trusted it: restore moved it back from that path, and the per-Lead retention
+  cap matched recorded paths against the directory it scanned. Both break the moment the data root moves —
+  restore fails, and the cap silently stops pruning because nothing it recorded lives under the new root any
+  more. That is the failure the data-location plan exists to prevent, and this release is the enabler: it
+  changes the record and the readers, and **moves nothing**.
+- **The new shape, and the one field that stays absolute.** A record now carries `trashDir` — the name
+  retirement gave the directory — and `trashRelPath`, where it sits under the data root. The absolute path is
+  computed when it is read. `originalPath` deliberately stays absolute: it points into `~/.dsh/sessions`,
+  which is the host's tree and does not move with this plugin's data, so it has no root to be relative to.
+- **The directory name is the part that survives a move, so it is the key.** `recordedTrashDir` reads the
+  name from either stored shape — `trashDir` from this release, or the last segment of an older `trashPath` —
+  and `pruneLeadTrash` now matches tombstones by that name instead of by a recorded path. The cap therefore
+  keeps working across a move and keeps working for the 94 records already on disk, with no migration.
+- **Restore tries three legs, in a fixed order, and stops at the first that exists.** The data directory in
+  effect (rebuilt from the name when the record carries a name but no relative path), then the absolute path
+  the record itself carries, then the frozen `~/.dsh/team-roster`. Duplicates are dropped, so the ordinary
+  case yields one candidate per leg rather than two. Nothing throws: no leg holding the artifact is reported
+  as `trash-missing`, which is what a `pruned` record already answered.
+- **Measured against the real roster before it was merged, read-only.** 94 tombstones carry a trash field:
+  28 answer `pruned`, 20 resolve at the first leg from the root configured today, 46 are `done` with no
+  artifact left on disk, and **none throw**. Swapping the root for a directory that holds no data moves all
+  20 from the first leg to the legacy one, which is the whole point of the change. 28 + 46 is the 74 dangling
+  records the plan measured earlier.
+- **Proved able to fail, then restored.** Deleting the legacy leg kills exactly three chain tests — the
+  expected array loses the `legacy` entry, `actual` is `undefined`, and a record carrying nothing but an
+  absolute path restores `false` instead of `true`. Writing the tombstone back to `trashPath` fails one test
+  in `retention.test.mjs` and one in `handoff.test.mjs`. Both probes were reverted and the full suite re-run.
+- **`actions.js`, `index.js` and one comment in `roster.js`.** Both retirement writes record the new fields;
+  `trash_path` in a tool result is the resolved absolute path; the `pruned` refusal prints the location it
+  computed rather than one it found. `restoreMember` gained a `dataDir` and the `restore_member` wrapper
+  passes the directory the plugin resolved at install. No stored field was renamed, so the load path did not
+  change. `tests/handoff.test.mjs` asserted `typeof record.trashPath === 'string'`, which the new shape must
+  break, so that assertion moved with it.
+- **What is deliberately left to the data-location documents.** `docs/roster-storage-{en,zh}.md` still
+  describes the old field and the `pruned` paragraph; `docs/member-lifecycle-en.md` §4 and the Chinese §4.4
+  still list `trashPath`; each README still names it once; and ADR 0011 §6, ADR 0014's absolute-path
+  paragraph and ADR 0009's comparison sentence are **accepted records** that a new ADR supersedes rather than
+  an edit. All of it is the document phase's work, listed in the PR body so none of it is invisible.
+- **What is not proved.** The `index.js` line that passes `dataDir` into the wrapper is covered by nothing:
+  the unit tests call `actions.js` directly. It reads correctly — it passes the directory the plugin resolved
+  at install, the same one the rest of the plugin uses — but only a live `restore_member` call proves it, and
+  the bundle was not installed for this release.
+- **Version.** `0.26.0`: a stored record shape changed. Nothing a user does behaves differently today, and
+  the old shape keeps loading, but a file on disk now carries different fields, which is not a patch.
