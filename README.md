@@ -13,7 +13,7 @@ the roster and has no browser half.
 
 ## Status
 
-- Current version: v0.28.0.
+- Current version: v0.28.1.
 - **Exercised in a real profile**: retirement, restore, message, stop, a replacement whose successor
   finished the predecessor's work, the trash cap and its refusal at load, the handoff template, spawn
   options and the forwarded route, the task board and its transfer, the three host hooks, and the one-shot

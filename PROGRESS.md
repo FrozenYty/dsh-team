@@ -2362,3 +2362,44 @@
   migration will be the last thing to run.
 - **Version.** `0.28.0`: new published files, a new capability, and a description the model reads. Nothing
   stored changed shape.
+
+## 2026-11-13 — the definition chain is recorded, and the team file's path is a decision rather than an unfinished move (v0.28.1)
+
+- **ADR 0029, and the judgement that produced exactly one ADR.** ADR 0018 point 1 *decided* that the path is
+  `<Lead working directory>/team/*.md` and that there is one directory rather than a path parameter — v0.28.0
+  changed that decision, so 0018 is superseded **for point 1 only**. Everything else in it stands: the
+  frontmatter subset and its refusals, the caps, the typed refusal, the one-parameter surface, and ADR 0019's
+  precedence on a `replace`. ADR **0021 gets no new ADR**, only a pointer: it decided one `team.md`, its
+  precedence, the reservation and the write refusal, and none of those changed — what went stale is a premise
+  in its *Context* ("a team file and a member definition share one directory"), and the reservation still
+  suffices because the member scan skips `team.md` wherever it reads. A closed record is amended where its
+  premise moved and replaced where its decision did; that distinction was the whole question.
+- **The sharpest rejected alternative, and it is why the order is what it is.** Putting the shipped templates
+  **first** would give every profile the maintained version — and would silently replace a project's own
+  `reviewer.md` of the same name. The ADR states the consequence in the terms this repository uses for it: the
+  plugin would be editing the meaning of a member without touching a file. So the shipped set is the last leg.
+- **The asymmetry is written down as a decision, not left to be read as an unfinished move.** `.agents/team/`
+  holds the roster file and the definitions the plugin owns; `team/` holds the project's own team file — one
+  artifact per project, not per member — and any definitions a project prefers to keep there. The file was not
+  moved. Every document that now describes the chain says the team file is outside it, so a reader meeting both
+  paths side by side is told which is which.
+- **Four places beyond the list I gave.** The document lane found `architecture` §9's substrate row and §7's
+  limits bullet (which promised "exactly the readable `.md` files under `team/`" — the very promise the chain
+  changes), the handoff pair's "same `team/` directory" sentence, and the README's package row, which had never
+  listed `templates/` at all, so a reader could not learn the shipped templates existed. A brief is a lead, not
+  a boundary; every one of today's five releases was improved by a lane searching rather than obeying.
+- **The method fix that made this deliverable survive.** The first attempt at this task failed after gathering
+  its whole inventory and before writing any of it down, and nothing was lost to the repository because nothing
+  had been written. The second attempt committed **four times, one document each**, and pushed as it went. That
+  is the lesson to carry: the inventory *is* the work, so write it down before verifying it, and a failure then
+  costs one file instead of a task.
+- **Verification.** `node scripts/check.mjs` printed `check passed` after every one of the four commits, and the
+  suite is 238 tests, 238 passing, with no test file touched. Heading parity for every pair edited, as levels:
+  architecture 18/18, README 13/13, handoff 4/4, INDEX 6/6. A re-grep afterwards shows `team/*.md` as a
+  definition path surviving nowhere outside `docs/adr/`, where 0018 keeps it and the new pointer explains it;
+  every remaining `team/team.md` refers to the team file; and the only other `team/` mentions are the v0.16
+  release-history bullets, which are correct as history.
+- **What is stated but not tested.** That a shipped template is read-only is a property of the code, and no
+  document check can prove it — the same class of gap this file recorded for the rollback claim, where the fix
+  was to name the test. There is no test to name here yet, and that is worth knowing rather than papering over.
+- **Version.** `0.28.1`: documents only. No code, no stored shape, no shipped file.
