@@ -71,7 +71,8 @@ import {
   recordedTrashPath,
   resolveDataDir,
   restoreSessionArtifact,
-  sessionRootFromSibling,
+  sessionsRootFromReport,
+  sessionsRootFromSibling,
 } from './trash.js'
 
 /**
@@ -256,6 +257,41 @@ function successionEdge(memberId, members) {
   return linked === undefined
     ? { member_id: memberId }
     : { target: targetOf(linked), member_id: memberId }
+}
+
+/**
+ * Where a tombstone's artifact belongs, as a path this machine can write to, plus which leg answered.
+ *
+ * The order is the one that keeps a copied roster working, and each step is a different kind of knowledge:
+ *
+ *   1. **relative to the sessions root** — the portable form, `<workspace-slug>/<leaf>`, resolved against
+ *      the root this machine has. This is what a roster that travelled uses, and it is why the record
+ *      carries a slug: the slug names a directory under the sessions root, not a working directory, so
+ *      the one the other machine used is the one that applies here.
+ *   2. **the legacy absolute** — what a record written before this release carries, and the fallback for a
+ *      relative path whose root cannot be resolved. A path that is wrong is still a better answer than a
+ *      refusal the person cannot act on, and on the machine that wrote it the path is right.
+ *   3. **the member's own id under the sessions root** — a tombstone written before any original path was
+ *      recorded at all.
+ *
+ * @param {object} member - one tombstone.
+ * @param {string|undefined} sessionsRoot - the sessions root in effect here, when a sibling revealed it.
+ * @returns {{path: string|undefined, source: 'relative'|'legacy-absolute'|'derived'|'unresolved-root'|'no-recorded-path'}}
+ */
+function originalPathFor(member, sessionsRoot) {
+  const relative = typeof member.originalRelPath === 'string' && member.originalRelPath.length > 0
+  const absolute = typeof member.originalPath === 'string' && member.originalPath.length > 0
+  if (relative) {
+    if (sessionsRoot !== undefined) {
+      return { path: join(sessionsRoot, ...member.originalRelPath.split('/')), source: 'relative' }
+    }
+    return absolute
+      ? { path: member.originalPath, source: 'legacy-absolute' }
+      : { path: undefined, source: 'unresolved-root' }
+  }
+  if (absolute) return { path: member.originalPath, source: 'legacy-absolute' }
+  if (sessionsRoot !== undefined) return { path: join(sessionsRoot, member.childId), source: 'derived' }
+  return { path: undefined, source: 'no-recorded-path' }
 }
 
 /**
@@ -1802,7 +1838,14 @@ export async function retireMember({
       next.trashDir = plan.dirName
       next.trashRelPath = plan.trashRelPath
       next.trashKind = plan.kind === 'file' ? 'file' : 'directory'
-      next.originalPath = plan.originalPath
+      // Where the artifact came from, as `<workspace-slug>/<leaf>` under the sessions root — never the
+      // absolute path this machine happened to see: the roster is a file a person carries to another
+      // machine, and an absolute path from here names nothing there (ADR 0028's shape, applied to the
+      // path a restore moves the artifact back to). `originalPath` is left deleted even when there was
+      // one to write: it is a legacy field this release reads and no longer writes.
+      if (plan.originalRelPath !== undefined) next.originalRelPath = plan.originalRelPath
+      else delete next.originalRelPath
+      delete next.originalPath
       next.trashState = TRASH_STATE.done
     } else {
       delete next.trashDir
@@ -1814,6 +1857,7 @@ export async function retireMember({
       delete next.trashPath
       delete next.trashKind
       delete next.originalPath
+      delete next.originalRelPath
       next.trashState = TRASH_STATE.none
     }
     return withMember(current, next)
@@ -1980,24 +2024,29 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks, 
   let restoredPath
   let branch
   if (recordedTrashDir(member) !== undefined) {
-    let originalPath = typeof member.originalPath === 'string' ? member.originalPath : undefined
-    if (originalPath === undefined) {
-      // A tombstone written before the original path was recorded. Derive the sessions root from a
-      // sibling still on disk rather than guessing; say so plainly when there is none.
-      const sessionsRoot = await sessionRootFromSibling(
-        ctx.get('sessionPersistence'),
-        roster.members.map((candidate) => candidate.childId),
-        member.childId,
-      )
-      if (sessionsRoot === undefined) {
-        return {
-          target: targetOf(member),
-          restored: false,
-          message: 'The tombstone has a trash path but no recorded original path, and no sibling session is on disk to derive the sessions root from. Move the artifact back by hand and re-add the member.',
-        }
+    // Where the artifact belongs. The sessions root is derived once, because a record that arrived by seed
+    // carries the slug of the machine it came from and the absolute path of a record written before this
+    // release names that machine too: only the root in effect here turns either of them into a place this
+    // host can write to. A sibling answers first (any other member still on disk); the member's own report
+    // answers when the host has not forgotten it yet, which is the only thing that works for a Lead whose
+    // one member is the one being restored.
+    const persistence = ctx.get('sessionPersistence')
+    const sessionsRoot = await sessionsRootFromSibling(
+      persistence,
+      roster.members.map((candidate) => candidate.childId),
+      member.childId,
+    ) ?? await sessionsRootFromReport(persistence, member.childId)
+    const destination = originalPathFor(member, sessionsRoot)
+    if (destination.path === undefined) {
+      return {
+        target: targetOf(member),
+        restored: false,
+        message: destination.source === 'unresolved-root'
+          ? 'The tombstone records where its artifact came from relative to the sessions root, and no sibling session is on disk to resolve that root, and it carries no absolute path to fall back to. Move the artifact back by hand and re-add the member.'
+          : 'The tombstone has a trash path but no recorded original path, and no sibling session is on disk to derive the sessions root from. Move the artifact back by hand and re-add the member.',
       }
-      originalPath = join(sessionsRoot, member.childId)
     }
+    const originalPath = destination.path
     // Which leg of the chain holds the artifact is decided here and nowhere else; a tombstone whose
     // bytes are gone on every leg yields the same `trash-missing` refusal a single missing path did.
     const located = await locateTrashedArtifact({ record: member, leadSessionId, dataDir })
@@ -2063,6 +2112,7 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks, 
     delete revived.trashPath
     delete revived.trashKind
     delete revived.originalPath
+    delete revived.originalRelPath
     delete revived.trashState
     delete revived.archived
     return withMember(current, revived)
