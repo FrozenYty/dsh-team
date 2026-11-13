@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.37.0] - 2026-11-13
+
+- One archived record can be looked up by identity, past the cap and without hiding the cost.
+
 ## [0.36.5] - 2026-11-13
 
 - The live acceptance round becomes a procedure, and the check that has never run says so.

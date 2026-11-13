@@ -233,3 +233,124 @@ test('a missing archive file is not an error: the flag asks for something that m
   assert.equal(listed.archived_unreadable, undefined, 'nothing was damaged, so nothing is reported as damaged')
   assert.equal(listed.archive_file, undefined, 'and no path is claimed for a file that is not there')
 })
+
+test('a lookup by target returns exactly that record, and by member id the same one', async () => {
+  const dataDir = await scratch()
+  await writeArchive(dataDir, [
+    line('lead-1', { memberId: 'member-old', childId: 'child-old', name: 'older', generation: 2 }, '2026-08-01T00:00:00.000Z'),
+    line('lead-1', { memberId: 'member-other', childId: 'child-other', name: 'other', generation: 1 }, '2026-08-02T00:00:00.000Z'),
+  ])
+  const table = memoryTable()
+  await table.put('lead-1', { leadSessionId: 'lead-1', members: [member()] })
+
+  // The target form an edge's `successor.target` carries, and the id form its `member_id` carries.
+  for (const [looked, label] of [['older-g2', 'a target'], ['member-old', 'a member id']]) {
+    const listed = await listMembers(call(fakeCtx(), table, { dataDir, archived: true, archivedTarget: looked }))
+    const archivedRows = listed.members.filter((row) => row.archived === true)
+    assert.equal(archivedRows.length, 1, `one record by ${label}`)
+    assert.equal(listed.archived_returned, 1)
+    assert.equal(archivedRows[0].target, 'older-g2')
+    assert.equal(archivedRows[0].member_id, 'member-old')
+    assert.equal(archivedRows[0].archived_at, '2026-08-01T00:00:00.000Z')
+    assert.equal(listed.archived_total, 2, 'the total is the whole history, unchanged by the lookup')
+    assert.equal(listed.archived_scanned, 2, 'and the scan says what it read')
+    assert.deepEqual(listed.members.filter((row) => row.archived !== true).map((row) => row.target), ['reviewer'], 'the roster rows are still there')
+  }
+})
+
+test('a miss is an answer: the line count, the target and the total, never an empty success', async () => {
+  const dataDir = await scratch()
+  await writeArchive(dataDir, [
+    line('lead-1', { memberId: 'member-a', childId: 'child-a', name: 'first' }, '2026-08-01T00:00:00.000Z'),
+    line('lead-1', { memberId: 'member-b', childId: 'child-b', name: 'second' }, '2026-08-02T00:00:00.000Z'),
+    // Another Lead's line is scanned but is not part of this Lead's answer; the count is the cost of the
+    // scan, which is what the caller needs to tell a real miss from a file that was never read.
+    line('lead-2', { memberId: 'member-z', childId: 'child-z', name: 'elsewhere' }, '2026-08-03T00:00:00.000Z'),
+  ])
+  const table = memoryTable()
+  await table.put('lead-1', { leadSessionId: 'lead-1', members: [member()] })
+
+  const listed = await listMembers(call(fakeCtx(), table, { dataDir, archived: true, archivedTarget: 'nobody-g3' }))
+  assert.equal(listed.archived_returned, 0, 'nothing was returned')
+  assert.equal(listed.archived_total, 2, 'but the history this Lead has is named')
+  assert.equal(listed.archived_scanned, 3, 'and how much of the file was read to say so')
+  assert.match(listed.message, /nothing in .*matches "nobody-g3"/i, 'the message names the target it looked for')
+  assert.match(listed.message, /3 line\(s\) scanned/, 'and the work it did')
+  assert.match(listed.message, /2 archived record\(s\) for this Lead/, 'and that the archive is not empty')
+  assert.equal(listed.members.filter((row) => row.archived === true).length, 0)
+})
+
+test('archived_target without archived: true is refused by name, and nothing is read', async () => {
+  const dataDir = await scratch()
+  const table = memoryTable()
+  await table.put('lead-1', { leadSessionId: 'lead-1', members: [member()] })
+  // Both seams throw if touched: the refusal must come from the arguments, not from a read that happened
+  // first and was then reported as an error.
+  const touched = () => { throw new Error('the archive was opened before the arguments were checked') }
+  await assert.rejects(
+    listMembers(call(fakeCtx(), table, { dataDir, archivedTarget: 'older-g2', readArchive: touched, findArchive: touched })),
+    (error) => {
+      assert.match(error.message, /archived_target/, 'the refusal names the parameter')
+      assert.match(error.message, /archived: true/, 'and the one it belongs with')
+      assert.match(error.message, /"older-g2"/, 'and the value it was given')
+      return true
+    },
+  )
+})
+
+test('a record older than the cap is still reachable by target', async () => {
+  const dataDir = await scratch()
+  const rows = []
+  for (let index = 0; index < ARCHIVE_READ_LIMIT + 5; index += 1) {
+    rows.push(line('lead-1', {
+      memberId: `member-${String(index).padStart(3, '0')}`,
+      childId: `child-${String(index).padStart(3, '0')}`,
+      name: `member-${index}`,
+      generation: 1,
+    }, `2026-09-01T00:00:${String(index).padStart(2, '0')}.000Z`))
+  }
+  await writeArchive(dataDir, rows)
+  const table = memoryTable()
+  await table.put('lead-1', { leadSessionId: 'lead-1', members: [] })
+
+  // The oldest record is beyond the newest ARCHIVE_READ_LIMIT, so the capped read cannot serve it — which is
+  // the whole reason the lookup exists (ADR 0036).
+  const capped = await listMembers(call(fakeCtx(), table, { dataDir, archived: true }))
+  assert.equal(capped.members.some((row) => row.target === 'member-0'), false, 'the window does not reach it')
+
+  const listed = await listMembers(call(fakeCtx(), table, { dataDir, archived: true, archivedTarget: 'member-0' }))
+  const archivedRows = listed.members.filter((row) => row.archived === true)
+  assert.equal(archivedRows.length, 1)
+  assert.equal(archivedRows[0].target, 'member-0')
+  assert.equal(listed.archived_returned, 1)
+  assert.equal(listed.archived_total, ARCHIVE_READ_LIMIT + 5)
+  assert.equal(listed.archived_scanned, ARCHIVE_READ_LIMIT + 5, 'the lookup read the whole file and says so')
+})
+
+test('a lookup matches identity, never prose', async () => {
+  const dataDir = await scratch()
+  // A record whose own words mention the target a caller might look for. `retireReason` and `label` are
+  // prose; the member is `scribe`, and no `reviewer-g2` record exists, so this must be a miss.
+  await writeArchive(dataDir, [
+    line('lead-1', {
+      memberId: 'member-scribe',
+      childId: 'child-scribe',
+      name: 'scribe',
+      generation: 1,
+      label: 'Replaced by reviewer-g2',
+      retireReason: 'Replaced by reviewer-g2',
+    }, '2026-10-01T00:00:00.000Z'),
+  ])
+  const table = memoryTable()
+  await table.put('lead-1', { leadSessionId: 'lead-1', members: [] })
+
+  const listed = await listMembers(call(fakeCtx(), table, { dataDir, archived: true, archivedTarget: 'reviewer-g2' }))
+  assert.equal(listed.archived_returned, 0, 'a sentence is not an identity')
+  assert.equal(listed.members.filter((row) => row.archived === true).length, 0)
+  assert.match(listed.message, /reviewer-g2/)
+  // And the generation is part of the identity: the same name at another generation is not a match either.
+  const wrongGeneration = await listMembers(call(fakeCtx(), table, { dataDir, archived: true, archivedTarget: 'scribe-g2' }))
+  assert.equal(wrongGeneration.archived_returned, 0, 'scribe is generation one, so scribe-g2 does not name it')
+  const rightGeneration = await listMembers(call(fakeCtx(), table, { dataDir, archived: true, archivedTarget: 'scribe' }))
+  assert.equal(rightGeneration.archived_returned, 1, 'while the bare name answers generation one')
+})
