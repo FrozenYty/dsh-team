@@ -65,6 +65,7 @@ A design subject is its own document rather than a section of `architecture-`: a
 | Why is a member's lifetime declared on the call, why can an open task veto a sweep, and why does a standing member need the person's words? | `docs/adr/0026-declared-member-lifetime.md` | English |
 | Why does the roster live in a file under the workspace, and what is the storage domain for now? | `docs/adr/0027-roster-file-under-the-workspace.md` | English |
 | Why does a tombstone record a directory name, and how does the cap match one? | `docs/adr/0028-trash-directory-name-not-path.md` | English |
+| Why is a member definition read from a chain, and why do the shipped templates lose to a workspace file? | `docs/adr/0029-definition-chain.md` | English |
 | What member lifecycle is missing upstream, in a form to paste into an issue? | `docs/upstream-lifecycle-gap-en.md` | pair |
 | How do we branch, commit and merge? | `CONTRIBUTING.md` | English |
 | What are an assistant's rules here? | `AGENTS.md` | English |
@@ -95,7 +96,7 @@ Harness disagree, the repository is wrong.
 | a member's lifetime, what may veto a sweep, or what a retirement must carry | `docs/member-lifecycle-en.md` §2, `roster.js`, `actions.js`, the tool schemas in `index.js`, `README.md` + `README-zh.md`, ADR 0026 |
 | the transfer rule — what happens to a member's open tasks on replace, retire or restore | the transfer matrix in `docs/task-board-en.md` §2, `actions.js`, `README.md` + `README-zh.md`, ADR 0017 |
 | a task row's `body`, or how a board write is built from the stored record | `roster.js`, `actions.js`, the tool schema in `index.js`, `docs/task-board-en.md` §1 and §3, `README.md` + `README-zh.md`, ADR 0020 |
-| the member-definition format, the accepted frontmatter subset or the `team/` path | `definitions.js`, `docs/architecture-en.md` §6, `README.md` + `README-zh.md`, ADR 0018 |
+| the member-definition format, the accepted frontmatter subset or the definition chain | `definitions.js`, `docs/architecture-en.md` §6, `README.md` + `README-zh.md`, ADR 0018, ADR 0029 |
 | the team-file format, the reserved `team.md` name, the three template sources or the write refusal | `definitions.js`, `actions.js`, `index.js`, `docs/handoff-en.md` §1 and §2, `README.md` + `README-zh.md`, ADR 0021 |
 | which source wins for a definition field on a replace, or what a file may declare about a member's lifetime | the definition matrix in `docs/architecture-en.md` §6.1, `actions.js`, `index.js`, ADR 0019, ADR 0026 |
 | a bundle config key or patch row | `README.md` + `README-zh.md`, `docs/architecture-en.md` §1 |

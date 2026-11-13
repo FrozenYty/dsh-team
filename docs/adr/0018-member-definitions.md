@@ -7,6 +7,10 @@
   assignment recorded on the predecessor outranks the file's, and the result reports which source won.
   The rest of this ADR stands: the path, the frontmatter subset and its refusals, the caps, the typed
   refusal and the one-parameter surface.
+- **Superseded by [0029](0029-definition-chain.md) for point 1 only** — a definition is read from a chain
+  of three directories now (`.agents/team/definitions`, then `team/`, then the shipped
+  `templates/definitions`), so the path below is the second leg rather than the only one. The frontmatter
+  subset and its refusals, the caps, the typed refusal and the one-parameter surface stand unchanged.
 
 ## Context
 
