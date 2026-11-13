@@ -2728,3 +2728,49 @@
   appearing in a root whose seed path was mistyped), and removing the `none` branch.
 - **Version.** `0.30.0`: a new environment variable and a new source in `list_members`, on top of a stored
   behaviour that no longer exists.
+
+## 2026-11-13 — every Session has a root, and the storage domain stops serving anything (v0.31.0)
+
+- **The last write path, closed by giving every Session a home.** Root resolution gains a third leg after
+  the override and the workspace: **the frozen `<home>/.dsh/team-roster`** — the directory this plugin
+  already owns, whose `trash/` every artifact chain already treats as a leg, and which was the default
+  before the workspace root replaced it in v0.27.0. `createRootBinder` no longer answers `undefined`, so
+  `table.put` and `table.update` can never fall through to the storage domain again: a write with no bound
+  root now throws naming that invariant instead of silently landing somewhere nobody looks.
+- **The real defect this removed was on the read side, not the write side.** While the domain remained a
+  fallback, `table.get` answered from it for a Lead this process had not bound, so a reader could be served
+  records **its own file did not have** — two sources of one fact, exactly what ADR 0028 rejected for the
+  trash path. Now the store consults files only; an unbound Lead reads as nothing, and the domain is the
+  last leg of the *import* order (`seed → domain → nothing) rather than an answer to a read.
+- **`storage.source` loses `'storage-domain'`, and `'none'` stays for a reason.** The enum is now
+  `['file', 'none']` because serving an answer from the domain has become impossible — keeping a value that
+  cannot occur would be lying in the schema the host publishes. `'none'` still covers a Lead this process
+  has never bound: reachable through the storage API, unreachable in production because the plugin binds
+  before it installs. It is **not** the "frozen directory could not be created" case: that one resolves a
+  root, fails to write, and reports `source: 'file'` with a `read_problem`, which is the honest answer and
+  has its own test.
+- **The test scaffolding had to change, and it re-ran a constraint this session met live.** Every Lead now
+  has a root, so a fake Session with no working directory writes its roster into the **real home** — and the
+  sandbox refused with `EPERM` before a single assertion ran. That is the same wall the live migration hit
+  at 15:44, reproduced by the suite. The tests now give each Lead an isolated temporary workspace, and the
+  entry suite reads records back through a file-shaped view instead of the domain's memory table, because
+  the bytes are in a file now. One assertion also moved for a subtler reason: the second-writer test now
+  patches before the next **write**, because the store merges a foreign change on write and not on read.
+- **Verification.** 276 tests pass, six new, one per acceptance line, and the three probes that matter were
+  each shown to fail by name: removing the frozen leg, removing the import's absorption of a write error
+  (a bare `ENOTDIR` escaped `readyFor`), and removing the legacy leg from the source order.
+- **What keeps the deletion from being permanent yet, and what it would take.** `openRosterStore` still
+  opens the domain and runs `migrateLegacyRoster`, which is the **only remaining write** to it. It cannot
+  fire on this machine — there is no `team_control.json` — but **if one with records ever appeared while
+  `team_roster` were empty, the migration would copy it back and recreate the file.** Removing the
+  migration and the open together is what makes the deletion permanent, and they must go in one change,
+  because the copy needs a target.
+  The legacy *import* leg is a different matter: it is doing exactly one release of useful work, which is
+  how a profile that has never bound a workspace gets its records into its new frozen root on first load.
+  Removing it in the same release would strand precisely those profiles.
+- **What is not observed yet.** Whether the host's `storageDomain.open()` recreates a deleted domain file
+  by itself is unmeasured — the earlier evidence (a file whose mtime predated a load) says opening does not
+  touch an existing file, but not what it does when the file is gone. The next live load answers it, and if
+  it does recreate one, that is the argument for removing the open rather than waiting.
+- **Version.** `0.31.0`: a resolution rule gained a leg, a tool's output schema lost a value it can no
+  longer produce, and the storage domain stopped being able to answer anything.
