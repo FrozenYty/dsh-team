@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.36.3] - 2026-11-13
+
+- Three limits are decided rather than left, and the two fixes that were rejected are on record.
+
 ## [0.36.2] - 2026-11-13
 
 - The gate rule survives its own first misreading: an exit code does not travel between processes.
