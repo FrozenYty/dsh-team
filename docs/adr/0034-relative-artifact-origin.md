@@ -80,6 +80,14 @@ longer path made it cost more.
   (a single-member Lead, where no sibling can reveal the root), and **`trashRelPath` still uses platform
   separators while this field uses forward slashes** — a recorded follow-up of the same class, to be
   settled the next time ADR 0028's shape is touched, where a reader of that ADR will find it.
+- **The hole stands, and two alternatives were weighed and rejected before it did**, so a later reader does
+  not rebuild them: a **frozen sessions-root leg** (`<home>/.dsh/sessions`) does not work, because the
+  artifact's original location is gone by definition once it has been moved, so the only evidence that leg
+  could offer is that the root directory exists — and on a seeded roster that resolves a **wrong
+  destination silently** instead of refusing. A **per-Lead root field** would close it for every member at
+  about thirty bytes, but it is a new stored field for a case nobody has observed. So the rule the hole
+  rests on is the one ADR 0028 gives for the trash chain: **a leg that can be wrong silently is worse than
+  a refusal that says which leg is missing.**
 - **The loader gained refusals**, so a hand-edited roster with a backslash now fails by name at load
   instead of resolving oddly later.
 - **`originalPath` is now legacy**, and a reader of the record shape has to be told which of the two fields
