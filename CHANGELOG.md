@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.28.5] - 2026-11-13
+
+- The import marker is named after what it is, and the file on disk keeps the record.
+
 ## [0.28.4] - 2026-11-13
 
 - The Host's own validator accepts every schema, and the one keyword outside its subset is explained.
