@@ -1155,6 +1155,9 @@ function install(agent, ctx, store, hooks, dataDir, trashLimit) {
           leadSessionId: leadSessionIdOf(caller),
           target: args.target,
           hooks,
+          // The data directory in effect, so a tombstone written from this release resolves without an
+          // absolute path and an older one still finds its artifact.
+          dataDir,
         })
       },
     })))

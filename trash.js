@@ -21,12 +21,12 @@ import { basename, dirname, join, resolve } from 'node:path'
  * Environment override for the plugin data directory; tests use it too.
  *
  * The variable and the directory it guards keep the pre-rename `TEAM_ROSTER` spelling on purpose
- * (ADR 0014). Every tombstone already on disk records an absolute `trashPath` under
- * `~/.dsh/team-roster`, and `pruneLeadTrash` lists that same root: renaming either the default
- * directory or the variable would leave every recorded path outside the root the plugin scans, so the
- * trash would look empty, the retention cap would stop seeing those artifacts, and `restore_member`
- * would move a file back from a directory nothing writes to any more. The package name changed; the
- * place durable bytes already live did not.
+ * (ADR 0014). Every tombstone written before this field existed records an absolute `trashPath` under
+ * `~/.dsh/team-roster`, and that directory is still the last leg of the read-time fallback chain
+ * `trashPathCandidates` below describes: renaming either the default directory or the variable would
+ * leave those recorded paths outside every root the plugin looks in, so the retention cap would stop
+ * seeing those artifacts and `restore_member` would move a file back from a directory nothing writes to
+ * any more. The package name changed; the place durable bytes already live did not.
  */
 const DATA_DIR_ENV = 'DSH_TEAM_DATA_DIR'
 /** The pre-rename name of the same variable; still honoured so an existing profile keeps working. */
@@ -50,6 +50,19 @@ export const TRASH_LIMIT_FIELD = 'trashLimit'
 export const TRASH_LIMIT_MINIMUM = 1
 
 /**
+ * The data directory every earlier release wrote into, under the frozen name ADR 0014 protects.
+ *
+ * It is the last leg of the read-time fallback chain: an artifact that is not under the directory in
+ * effect is still looked for here, which is what keeps a trash a Lead already has restorable after the
+ * configured root moves.
+ * @param {string} home - user home directory.
+ * @returns {string} the frozen default data directory.
+ */
+export function frozenDataDir(home = homedir()) {
+  return join(home, '.dsh', 'team-roster')
+}
+
+/**
  * Resolve the plugin data directory.
  * @param {NodeJS.ProcessEnv} env - process environment.
  * @param {string} home - user home directory.
@@ -60,7 +73,7 @@ export function resolveDataDir(env = process.env, home = homedir()) {
     const override = env[variable]
     if (typeof override === 'string' && override.trim() !== '') return override.trim()
   }
-  return join(home, '.dsh', 'team-roster')
+  return frozenDataDir(home)
 }
 
 /** Render one rejected value so the message distinguishes `'20'` from `20` and shows `NaN` and `null`. */
@@ -186,7 +199,7 @@ export async function moveSessionArtifact({
  * @param {object} ctx - host plugin context.
  * @param {{leadSessionId: string, memberId: string, dataDir: string, now?: number}} request
  * @returns {Promise<
- *   {planned: true, trashPath: string, originalPath: string, kind: 'directory'|'file',
+ *   {planned: true, trashPath: string, trashRelPath: string, originalPath: string, kind: 'directory'|'file',
  *    source: {path: string, isDirectory: boolean}, trashRoot: string, dirName: string}
  *   | {planned: false, reason: string}>}
  */
@@ -214,6 +227,9 @@ export async function planMemberTrash(ctx, request) {
   return {
     planned: true,
     trashPath: join(trashRoot, dirName),
+    // What the tombstone stores: the directory this retirement gave the artifact, and where it sits
+    // under the data root. Both are stable when the root moves; an absolute path is not.
+    trashRelPath: join('trash', leadSessionId, dirName),
     originalPath: source.path,
     kind: source.isDirectory ? 'directory' : 'file',
     source,
@@ -267,6 +283,92 @@ export async function trashMemberSession(ctx, request) {
  */
 export async function pathExists(path) {
   return (await lstat(path).catch(() => undefined)) !== undefined
+}
+
+/**
+ * The trash directory name a tombstone records, from either stored shape.
+ *
+ * A record written from this release carries `trashDir` — the name retirement gave the directory — and
+ * `trashRelPath`, where that directory sits under the data root. One written before it carries the
+ * absolute `trashPath` the move used, and its name is the last segment of that path. The name is the
+ * part of a trash location that survives the root moving, so both readers — restore and the retention
+ * cap — go through it instead of through a recorded absolute path.
+ * @param {object} record - one roster member record.
+ * @returns {string|undefined} the directory name, or undefined when the tombstone names no destination.
+ */
+export function recordedTrashDir(record) {
+  const named = record?.trashDir
+  if (typeof named === 'string' && named !== '') return named
+  const relative = record?.trashRelPath
+  if (typeof relative === 'string' && relative !== '') return basename(relative)
+  const absolute = record?.trashPath
+  if (typeof absolute === 'string' && absolute !== '') return basename(absolute)
+  return undefined
+}
+
+/**
+ * The paths one tombstone's artifact may be at, in the order the design fixed.
+ *
+ *   1. the data directory in effect — the recorded root-relative path, or the trash layout rebuilt from
+ *      the directory name when the record carries a name but no relative path;
+ *   2. the absolute path the record itself carries, which is what every tombstone written before this
+ *      field has and what keeps those records restorable with no migration at all;
+ *   3. the frozen default directory, where an artifact nothing has moved yet still sits.
+ *
+ * Duplicates are dropped, so the ordinary case — where the recorded relative path and the rebuilt
+ * layout describe one directory — yields one candidate for that leg rather than two.
+ * @param {{record: object, leadSessionId: string, dataDir?: string, home?: string}} request
+ * @returns {Array<{path: string, leg: 'root'|'legacy'|'frozen'}>} absolute paths, tried in order.
+ */
+export function trashPathCandidates({ record, leadSessionId, dataDir, home = homedir() }) {
+  const candidates = []
+  const add = (path, leg) => {
+    if (typeof path !== 'string' || path === '') return
+    const absolute = resolve(path)
+    if (candidates.some((candidate) => candidate.path === absolute)) return
+    candidates.push({ path: absolute, leg })
+  }
+  const usableRoot = typeof dataDir === 'string' && dataDir !== ''
+  const relative = record?.trashRelPath
+  if (usableRoot && typeof relative === 'string' && relative !== '') add(resolve(dataDir, relative), 'root')
+  const named = recordedTrashDir(record)
+  if (usableRoot && named !== undefined) add(join(dataDir, 'trash', leadSessionId, named), 'root')
+  add(record?.trashPath, 'legacy')
+  if (named !== undefined) add(join(frozenDataDir(home), 'trash', leadSessionId, named), 'frozen')
+  return candidates
+}
+
+/**
+ * The absolute path a tombstone says its artifact went to, without touching the filesystem.
+ *
+ * A tool result prints a path, so a record written from this release — which carries no absolute path — is
+ * resolved through the same chain restore uses and reported at its first candidate. A recorded absolute
+ * path wins when the record has one: "where it went" is a fact about the move, not about the root in
+ * effect now.
+ * @param {{record: object, leadSessionId: string, dataDir?: string, home?: string}} request
+ * @returns {string|undefined} an absolute path, or undefined when no destination was recorded.
+ */
+export function recordedTrashPath({ record, leadSessionId, dataDir, home = homedir() }) {
+  const absolute = record?.trashPath
+  if (typeof absolute === 'string' && absolute !== '') return resolve(absolute)
+  return trashPathCandidates({ record, leadSessionId, dataDir, home })[0]?.path
+}
+
+/**
+ * Find where a tombstone's artifact actually is: the first candidate of the fallback chain that exists.
+ *
+ * Nothing is thrown and nothing is guessed. `undefined` means every leg was tried and none holds the
+ * artifact — the normal state of a `pruned` tombstone, and also of a `done` one whose directory an
+ * operator removed. Both callers report that as `trash-missing`, exactly as they did when a single
+ * recorded absolute path was the only place they looked.
+ * @param {{record: object, leadSessionId: string, dataDir?: string, home?: string}} request
+ * @returns {Promise<{path: string, leg: 'root'|'legacy'|'frozen'}|undefined>} the first path that exists.
+ */
+export async function locateTrashedArtifact({ record, leadSessionId, dataDir, home = homedir() }) {
+  for (const candidate of trashPathCandidates({ record, leadSessionId, dataDir, home })) {
+    if (await pathExists(candidate.path)) return candidate
+  }
+  return undefined
 }
 
 /**
@@ -372,7 +474,7 @@ export function parseTrashDirName(name) {
  *
  *   - only direct children of this one Lead's trash directory are considered;
  *   - only names shaped `<memberId>-<ms>` with a plausible member id and a numeric stamp qualify, and
- *     only when a member record points at that exact path — a foreign name, a file, or an entry no
+ *     only when a member record names that exact directory — a foreign name, a file, or an entry no
  *     tombstone accounts for is left where it is;
  *   - only a `trashState: 'done'` record may be removed. A `pending` move may or may not have landed,
  *     so its entry is counted against the cap but never deleted.
@@ -393,16 +495,19 @@ export async function pruneLeadTrash({ trashRoot, limit = DEFAULT_TRASH_LIMIT, m
   if (entries === undefined) return none
 
   // The tombstone is the authority: an artifact is a candidate only when a record says the move
-  // landed (or is still in flight) and that this is where it went.
+  // landed (or is still in flight) and that this is where it went. The match is by directory name, not
+  // by an absolute path: the name is what a tombstone keeps across a root change, and it is what both
+  // stored shapes carry — `trashDir`, or the last segment of an older `trashPath`.
   //
   // `trashState` arrived with the cap in 0.7.0, so every tombstone written before it carries a
   // `trashPath` and no state at all. A record with a path but no state has completed its move — the
   // field simply did not exist yet — and treating it as anything else leaves the whole legacy trash
   // permanently exempt, which is exactly what the first live run of the cap did.
-  const byPath = new Map()
+  const byDir = new Map()
   for (const member of members) {
-    if (typeof member?.trashPath !== 'string' || member.trashPath === '') continue
-    byPath.set(resolve(member.trashPath), { ...member, trashState: member.trashState ?? 'done' })
+    const dir = recordedTrashDir(member)
+    if (dir === undefined) continue
+    byDir.set(dir, { ...member, trashState: member.trashState ?? 'done' })
   }
 
   const candidates = []
@@ -411,7 +516,7 @@ export async function pruneLeadTrash({ trashRoot, limit = DEFAULT_TRASH_LIMIT, m
     const parsed = parseTrashDirName(entry.name)
     if (parsed === undefined) continue
     const trashPath = join(trashRoot, entry.name)
-    const member = byPath.get(resolve(trashPath))
+    const member = byDir.get(entry.name)
     if (member === undefined) continue
     if (member.trashState !== 'done' && member.trashState !== 'pending') continue
     candidates.push({ ...parsed, name: entry.name, trashPath, trashState: member.trashState })

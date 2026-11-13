@@ -39,9 +39,9 @@ export const PHASE = {
  * How far a retirement's artifact move got.
  *
  * `pruned` means the move landed and the artifact was later removed by the per-Lead retention cap
- * (ADR 0011): the tombstone keeps `trashPath` — it still says where the artifact went — and differs
- * from `done` in that the bytes are gone, so `restore_member` answers `pruned` instead of moving
- * anything back.
+ * (ADR 0011): the tombstone keeps the trash directory it recorded — it still says where the artifact
+ * went — and differs from `done` in that the bytes are gone, so `restore_member` answers `pruned`
+ * instead of moving anything back.
  */
 export const TRASH_STATE = {
   pending: 'pending',
