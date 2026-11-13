@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.38.3] - 2026-11-14
+
+- The spend field's three sources are decided, and the one sentence they replace is named.
+
 ## [0.38.2] - 2026-11-14
 
 - A limit is stated before the row that would have raised the question, not after it.
