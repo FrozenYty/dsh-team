@@ -624,20 +624,21 @@ async function migrateLegacyRoster(ctx, table) {
 }
 
 /**
- * Open the roster store for this process: the storage domain as the import source and rollback path,
- * plus this plugin's own file at each Lead's bound root.
+ * Open the roster store for this process: each Lead's own file at its bound root, seeded for a new root
+ * from the file the user named, with the storage domain as the legacy import source behind it.
  * @param ctx - plugin context, with `storageDomain` injected.
- * @param binder - the root binder from `trash.js`; `undefined` leaves every Lead on the domain.
- * @param {{trashLimit?: number}} options - `trashLimit` is the effective retention cap the tombstone window
- *   is derived from, so the window cannot drift out of step with the cap that empties the trash.
+ * @param binder - the root binder from `trash.js`; `undefined` leaves every Lead on the legacy legs.
+ * @param {{trashLimit?: number, seed?: string}} options - `trashLimit` is the effective retention cap the
+ *   tombstone window is derived from, so the window cannot drift out of step with the cap that empties the
+ *   trash; `seed` is `DSH_TEAM_SEED`, the file a new root reads its records from.
  * @returns the roster source: `{ table, bind, ready, readyFor, report }`.
  */
-export async function openRosterStore(ctx, binder, { trashLimit } = {}) {
+export async function openRosterStore(ctx, binder, { trashLimit, seed = process.env[SEED_ENV] } = {}) {
   const domain = await ctx.storageDomain.open(ROSTER_SPEC)
   ctx.effect(() => () => domain.close(), 'team-roster.domainClose()')
   const domainTable = domain.table('rosters')
   await migrateLegacyRoster(ctx, domainTable)
-  return createRosterSource({ domainTable, binder, trashLimit })
+  return createRosterSource({ domainTable, binder, trashLimit, seed })
 }
 
 /** The one file a workspace's rosters live in, under the bound root. */
@@ -793,6 +794,51 @@ export async function findArchived(dataDir, target) {
 }
 
 /**
+ * The seed file the user names, for a root that has no roster yet.
+ *
+ * `DSH_TEAM_SEED` is a path to one file, read once per new root and never written. It is what replaced the
+ * storage domain's second role: a Lead that binds a different workspace — a moved project, a second
+ * workspace — needs its records, and without them a new root starts empty, which means no tombstones,
+ * which means `ensureAdopted` gives every child of that Lead a fresh live row. It accepts both shapes,
+ * because the record of a roster is worth carrying between machines and a storage-domain dump is what some
+ * users already have:
+ *
+ *   - this plugin's own `roster.json` — `{version, serial, rosters}`;
+ *   - a storage-domain dump — `{unit, global, tables: {rosters}}`.
+ *
+ * A seed that is configured and unusable is a **problem, not a fallback**: a typo in a path must not read
+ * someone else's records and look like success. The root stays empty and `list_members` says why.
+ */
+const SEED_ENV = 'DSH_TEAM_SEED'
+
+/**
+ * Read a seed file into `{rosters}` or a refusal.
+ * @param {string} path - the file the user named.
+ * @returns {Promise<{rosters: object, path: string}|{problem: string}>}
+ */
+async function readSeed(path) {
+  const reading = await readJsonFile(path)
+  if (reading.value === undefined) {
+    return reading.exists === false
+      ? { problem: `the seed ${path} does not exist` }
+      : { problem: `the seed ${path} could not be read (${reading.problem ?? 'unknown reason'})` }
+  }
+  // Both shapes, told apart by the top-level keys rather than by a guess or a flag.
+  const rosters = reading.value.rosters ?? reading.value.tables?.rosters
+  if (rosters === null || typeof rosters !== 'object' || Array.isArray(rosters)) {
+    return { problem: `the seed ${path} holds no roster table: expected this plugin's {version, serial, rosters} or a storage-domain dump's {tables: {rosters}}` }
+  }
+  for (const [leadSessionId, record] of Object.entries(rosters)) {
+    try {
+      parseRoster(record)
+    } catch (error) {
+      return { problem: `the seed ${path} holds a record this plugin refuses ("${leadSessionId}": ${describeError(error)})` }
+    }
+  }
+  return { rosters, path }
+}
+
+/**
  * The rosters this process serves, and the one place that decides where their bytes go.
  *
  * **One writer per workspace.** The rosters of one workspace live in one file, and nothing serializes
@@ -812,11 +858,11 @@ export async function findArchived(dataDir, target) {
  *     root exists, and it is never deleted, so deleting `roster.json` puts a workspace back on it.
  *
  * @param {{domainTable?: object, binder?: object, renameFn?: Function, now?: () => string,
- *   trashLimit?: number, home?: string}} options -
- *   `domainTable` is the storage domain's roster table (import source and fallback), `binder` answers
- *   which root a Lead is bound to, `renameFn` is the atomic-replacement seam, `trashLimit` is the
- *   effective retention cap the tombstone window is derived from, and `home` is the account directory the
- *   artifact chain's frozen leg resolves under.
+ *   trashLimit?: number, home?: string, seed?: string}} options -
+ *   `domainTable` is the storage domain's roster table (the legacy import source), `binder` answers which
+ *   root a Lead is bound to, `renameFn` is the atomic-replacement seam, `trashLimit` is the effective
+ *   retention cap the tombstone window is derived from, `home` is the account directory the artifact
+ *   chain's frozen leg resolves under, and `seed` is the file a new root is seeded from.
  * @returns {{table: object, bind: Function, ready: Function, readyFor: Function, report: Function}}
  */
 export function createRosterSource({
@@ -826,6 +872,7 @@ export function createRosterSource({
   now = () => new Date().toISOString(),
   trashLimit = DEFAULT_TRASH_LIMIT,
   home = homedir(),
+  seed,
 } = {}) {
   /** One state per root this process has touched. */
   const states = new Map()
@@ -844,6 +891,11 @@ export function createRosterSource({
         problem: undefined,
         importedAt: undefined,
         foreignWriteAt: undefined,
+        // Whether a roster file was already here when this root was first loaded. The seed applies only to
+        // a root without one: an existing file is the truth, and a seed must never touch it.
+        existed: false,
+        // The seed reading, memoized per root: one file read however many Leads bind here.
+        seed: undefined,
         // The file serial this process last wrote. `0` means "never written here", which is why it is
         // also the guard that stops the first load from reporting a writer that does not exist.
         lastSerial: 0,
@@ -860,10 +912,12 @@ export function createRosterSource({
     return result
   }
 
-  /** Read the root's file into memory. A file that cannot be used leaves the root on the domain. */
+  /** Read the root's file into memory. A file that cannot be used leaves the root on the legacy legs. */
   const load = async (state) => {
     if (state.loaded) return
     const reading = await readJsonFile(state.file)
+    // Whether a file is already here, whatever its state: the seed is for a root that has no roster at all.
+    state.existed = reading.value !== undefined || reading.exists === true
     if (reading.value !== undefined) {
       const decoded = decodeRosterFile(reading)
       if (decoded.rosters !== undefined) {
@@ -912,8 +966,14 @@ export function createRosterSource({
     return next
   }
 
-  /** Record one import beside the file, so a reader can tell where the records came from. */
-  const writeMarker = async (state, leadSessionId, record) => {
+  /**
+   * Record one import beside the file, so a reader can tell where the records came from.
+   * @param {object} state - the root's state.
+   * @param {string} leadSessionId - the Lead that was seeded.
+   * @param {object} record - the record as it came across.
+   * @param {{source: string, path?: string}} origin - where it came from, as the reader must see it.
+   */
+  const writeMarker = async (state, leadSessionId, record, origin) => {
     const reading = await readJsonFile(state.marker)
     const leads = { ...(reading.value?.leads ?? {}) }
     leads[leadSessionId] = {
@@ -923,13 +983,42 @@ export function createRosterSource({
     }
     await replaceFileAtomic(
       state.marker,
-      `${JSON.stringify({ version: 1, source: ROSTER_SPEC.name, leads }, null, 2)}\n`,
+      `${JSON.stringify({ version: 1, source: origin.source, ...(origin.path === undefined ? {} : { path: origin.path }), leads }, null, 2)}\n`,
       renameFn,
     )
   }
 
   /**
-   * Import one Lead's record from the storage domain, once, into this root.
+   * Seed one Lead's record into a new root, or read the legacy legs when there is no seed.
+   *
+   * The order is the seed, then the storage domain, then nothing:
+   *
+   *   - the **seed** is an explicit act by the user, so it wins, and it is read once per root;
+   *   - the **domain** is the legacy leg, read only, kept so a profile that has not set a seed keeps
+   *     working — including the case where the domain file has since been deleted, which simply leaves it
+   *     with nothing to offer;
+   *   - **nothing** is a legitimate answer, and `report` says so with the two ways out.
+   *
+   * A seed that is configured and unusable is a problem rather than a fallback to the domain: a typo in a
+   * path must be loud, because the alternative is quietly serving someone else's records. The root stays
+   * empty and `list_members` reports the reason.
+   * @returns {Promise<{record: object, origin: object}|{broken: true}|undefined>} the seeded record, the
+   *   refusal that stops the fallback, or nothing at all — in which case the legacy legs may be read.
+   */
+  const seedFor = async (state, leadSessionId) => {
+    if (state.existed === true) return undefined
+    if (state.seed === undefined) state.seed = seed === undefined || seed === '' ? { absent: true } : await readSeed(seed)
+    if (state.seed.problem !== undefined) {
+      state.problem = state.seed.problem
+      return { broken: true }
+    }
+    if (state.seed.rosters === undefined) return undefined
+    const record = state.seed.rosters[leadSessionId]
+    return record === undefined ? undefined : { record, origin: { source: 'seed', path: state.seed.path } }
+  }
+
+  /**
+   * Import one Lead's record into this root, once, from the seed or the storage domain.
    *
    * This is the one write a load can make, and it is deliberately best-effort: the imported content is
    * served whether or not it reaches the disk, so a read-only workspace still answers with the Lead's
@@ -938,8 +1027,12 @@ export function createRosterSource({
   const importLead = async (state, leadSessionId) => {
     await enqueue(state, async () => {
       if (state.content.rosters[leadSessionId] !== undefined) return
-      const record = domainTable?.get?.(leadSessionId)
+      const seeded = await seedFor(state, leadSessionId)
+      // The seed wins and the domain is not even asked; a broken seed stops here rather than falling
+      // through, so a typo in the path cannot look like a successful import of someone else's records.
+      const record = seeded?.record ?? (seeded?.broken === true ? undefined : domainTable?.get?.(leadSessionId))
       if (record === undefined) return
+      const origin = seeded?.origin ?? { source: ROSTER_SPEC.name }
       state.content = {
         ...state.content,
         rosters: { ...state.content.rosters, [leadSessionId]: record },
@@ -954,7 +1047,7 @@ export function createRosterSource({
           rosters: { ...state.content.rosters, [leadSessionId]: await bound(state, leadSessionId, undefined, record) },
         }
         await persist(state, state.content)
-        await writeMarker(state, leadSessionId, record)
+        await writeMarker(state, leadSessionId, record, origin)
       } catch (error) {
         state.problem = `the imported roster could not be written (${describeError(error)})`
       }
@@ -1112,9 +1205,18 @@ export function createRosterSource({
     report(leadSessionId) {
       const root = binder?.rootOf?.(leadSessionId)
       if (root === undefined) {
+        // No workspace to own bytes in. The legacy domain may still hold this Lead's records; if it does
+        // not — a fresh profile, or a domain file that has been deleted — an empty roster is the true
+        // answer, and the tool says so instead of serving someone else's records.
+        if (domainTable?.get?.(leadSessionId) === undefined) {
+          return {
+            source: 'none',
+            message: 'This Session has no workspace to own bytes in, and there are no records to serve it: it is a new Lead with an empty roster. Give the Session a working directory, so its roster lives under <workspace>/.agents/team/, or set DSH_TEAM_DATA_DIR to name that directory. Set DSH_TEAM_SEED to a roster file to carry records into a new root from another machine.',
+          }
+        }
         return {
           source: 'storage-domain',
-          message: 'This Session has no workspace to own bytes in, so its roster is still served from the storage domain — the rollback path. Give the Session a working directory, or set DSH_TEAM_DATA_DIR, to move it under the workspace.',
+          message: 'This Session has no workspace to own bytes in, so its roster is still served from the storage domain — the legacy leg. Give the Session a working directory, or set DSH_TEAM_DATA_DIR, to move it under the workspace.',
         }
       }
       const state = states.get(root)
@@ -1127,7 +1229,7 @@ export function createRosterSource({
       }
       if (state?.problem !== undefined) {
         value.read_problem = state.problem
-        notes.push(`the roster file could not be used (${state.problem}), so this Lead's records are being served from the storage domain until the next successful write`)
+        notes.push(`the roster file could not be used for this Lead (${state.problem}); its records come from what the seed or the legacy domain holds, and the next successful write repairs the file`)
       }
       if (notes.length > 0) value.message = `${notes.join('; ')}.`
       return value

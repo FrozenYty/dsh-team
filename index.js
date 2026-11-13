@@ -574,17 +574,19 @@ const HOST_HOOKS_VALUE = {
 /**
  * Where this Lead's roster lives, and what a reader has to know about it.
  *
- * `file` is this plugin's own `roster.json` under the bound workspace root. `storage-domain` means no
- * workspace could be resolved, so the roster is still served from the domain — the rollback path.
- * `foreign_write_at` is a writer this process did not expect: the workspace is expected to have exactly
- * one, and a second one is reported rather than locked out.
+ * `file` is this plugin's own `roster.json` under the bound workspace root. `storage-domain` is the legacy
+ * leg: a Session with no workspace whose records the domain still holds. `none` is a Session with no
+ * workspace and no records at all — a new Lead whose roster is genuinely empty, which the message explains
+ * rather than hiding behind someone else's records. `foreign_write_at` is a writer this process did not
+ * expect: the workspace is expected to have exactly one, and a second one is reported rather than locked
+ * out.
  */
 const STORAGE_VALUE = {
   type: 'object',
   additionalProperties: false,
   required: ['source'],
   properties: {
-    source: { type: 'string', enum: ['file', 'storage-domain'] },
+    source: { type: 'string', enum: ['file', 'storage-domain', 'none'] },
     path: { type: 'string' },
     imported_at: { type: 'string' },
     foreign_write_at: { type: 'string' },

@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.30.0] - 2026-11-13
+
+- A new root is seeded from a file the user names, not from the storage domain.
+
 ## [0.29.1] - 2026-11-13
 
 - The decision that a tombstone must stay is superseded by the record that it may leave.
