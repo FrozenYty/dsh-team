@@ -3425,3 +3425,33 @@
   is honest only to a reader who knows a cache read and an output token differ by orders of magnitude. The
   Lead's own spend is not read. And it has not been live-tested.
 - **Version.** `0.38.0`: one row field, one optional service read, and a sum that refuses to be invented.
+
+## 2026-11-14 — the spend field's decision is recorded, and a description that would have misled a model was reported (v0.38.1)
+
+- **ADR 0037 is written in the order a reader needs it**, starting with why the obvious path is wrong:
+  `tokenMeter` owns the usage projection and discards its handle, and `measure()` answers the **same units as
+  a different number** — pressure rather than spend. Then the rule that outlives this field: the registry is
+  read with `ctx.get` and **not** added to `inject`, because an optional capability turned into a hard
+  requirement is how a plugin stops loading in a profile that lacks it.
+- **The description defect is the release's real find, and it was reported rather than fixed — which is what
+  the lane rule is for.** `list_members` qualifies *pressure* with residency and says the spend field is
+  absent when the projection cannot be read, but it never said that **only a mounted member has a spend**.
+  A model would therefore expect the field on every row, meet a non-resident member without one, and find
+  **no sentence telling it why** — an absence with no stated reason, which is the failure this repository has
+  spent the day removing everywhere else. The fix is one clause in a shipped file and belongs to the next
+  code change, with a test pinning the sentence so it cannot be quietly dropped again.
+- **Where a row field is documented was read, not assumed**: the architecture pair already described
+  `list_members`' rows (route, route_stale, route_note), so the spend joined them there rather than creating
+  a third home for one field. The architecture pair also carries the three things a reader cannot guess from
+  the name — **unweighted, can fall between reads, resident-only** — so the document matches the field.
+- **Check 10 exists and has never run**, with its precondition inside the check rather than in context (a
+  mounted member with committed requests behind it) and its interesting half named: a non-resident row
+  carries **no** `spend_tokens` rather than a zero, and **a fall between two reads is explicitly not a
+  failure**. Three checks are now pending, and check 8's line was corrected from "one of two" to "one of
+  three" in the same commit — a total that stops being true the moment the next check arrives.
+- **The gate caught the scribe's own citation error**: ADR 0037 first linked `0024-route-inheritance-and-staleness.md`,
+  which does not exist — the real file is `0024-forward-the-lead-route.md` — and nothing was committed until
+  the reference resolved. The citation resolver cannot check whether a sentence is right, but it never misses
+  a file that is not there.
+- **Version.** `0.38.1`: one ADR, two pairs touched, and a defect found in a file the author was not allowed
+  to edit.

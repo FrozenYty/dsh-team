@@ -110,7 +110,7 @@ resolved.
 
 ## 8. Two Leads in one data root see only their own archived records
 
-**Status: not yet run — one of two pending checks.** The archive is one file per data root and the
+**Status: not yet run — one of three pending checks.** The archive is one file per data root and the
 reader must answer one Lead only (ADR 0035). Today's profile has a single Lead Session, so the rule is
 covered by the suite and by no live observation.
 **Precondition:** two Lead Sessions sharing a data root, each with at least one archived tombstone.
@@ -136,6 +136,24 @@ not that record's identity (a partial name is not a match, by design) or the sca
 which is the defect this check exists for. `archived_scanned` missing on a miss, or equal to the returned
 count: the answer is not reporting its cost, so a miss can no longer be told from a failed read. A hit on
 prose such as `"Replaced by reviewer-g2"`: text matching came back, and identity stopped being identity.
+## 10. A mounted member reports what it has spent
+
+**Status: not yet run.**
+**Precondition, and it is sharper than the others:** a member that is **mounted** — the plugin holds its live
+Agent — **with committed requests behind it**. A member that never ran is mounted with nothing to sum, and a
+member that is not mounted has no Agent at all, so its row can never carry the field however much it spent.
+**Call** `list_members` while that member is running.
+**Correct looks like** `spend_tokens` on its row as the sum of the four counters in its durable log, a
+number larger than zero that does **not** change shape between two reads in the same turn, and — the part
+that has to be read rather than trusted — the row of a **non-resident** member carrying **no** `spend_tokens`
+at all rather than `0`. A total that falls between two reads is not a failure: a retry adds an attempt while
+a streaming sample replaced by its final one subtracts.
+**If it does not match** — the field on a row whose member is not mounted: the number is not this plugin's
+(only `ctx.agents.get(childId)` gives a handle, and an unloaded child has no Agent). `0` where nothing could
+be measured: the field is being used as a stand-in, which is the one thing it must never be. The same total
+on every row: the read is returning one projection for all members, so check which Session it was asked
+about. A number that never moves across a turn that clearly spent tokens: the unit was not asked for, and
+`['tokenUsage']` is what makes the read cheap enough to run per row.
 ## Recording a round
 
 Write the Host version, the date, each check's observed values, and any check that could not be run and
