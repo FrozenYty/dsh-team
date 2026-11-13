@@ -30,7 +30,8 @@
     "host-hooks.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "templates/"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

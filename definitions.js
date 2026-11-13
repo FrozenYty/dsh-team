@@ -1,12 +1,15 @@
 /**
- * Member definitions: one markdown file per member, under `team/` in the Lead's working directory.
+ * Member definitions: one markdown file per member, read from a chain of directories.
  *
- * A member was improvised in a tool call until this module existed: the prompt, the label and the
- * assignment lived only in that call and in the Lead's roster record, so a team could not be reviewed,
- * versioned or shared. A definition is the other half of that split — the member is a file on disk that
- * is committed with the project, and the roster stays runtime state. This module reads those files for
- * `spawn_member`; it never writes one, because version control and an editor are what make a file
- * better than a create/update tool (ADR 0018).
+ * The canonical location is `<workspace>/.agents/team/definitions/`, beside the roster file this plugin
+ * owns; then `<workspace>/team/`, where every profile before that kept them; then the templates this
+ * bundle ships, which are a starting point that any workspace file of the same name outranks. A member
+ * was improvised in a tool call until this module existed: the prompt, the label and the assignment lived
+ * only in that call and in the Lead's roster record, so a team could not be reviewed, versioned or shared.
+ * A definition is the other half of that split — the member is a file on disk that is committed with the
+ * project, and the roster stays runtime state. This module reads those files for `spawn_member`; it never
+ * writes one, because version control and an editor are what make a file better than a create/update tool
+ * (ADR 0018).
  *
  * The frontmatter is parsed here, without a YAML library: a profile-linked bundle cannot resolve
  * `@deepseek-ai/*` or `js-yaml` (ADR 0002). The accepted subset is therefore small and written down
@@ -23,7 +26,8 @@
  */
 
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { checkAssignment, checkLabel, checkMemberName, handoffTemplateProblem } from './roster.js'
 
@@ -35,6 +39,26 @@ import { checkAssignment, checkLabel, checkMemberName, handoffTemplateProblem } 
  * wrong `team/` or none at all (ADR 0018).
  */
 export const DEFINITION_DIR = 'team'
+
+/**
+ * The canonical definitions directory inside a workspace, beside the roster file this plugin owns.
+ *
+ * A project that wants its own roles writes them here, next to `.agents/team/roster.json`, so the roles
+ * are versioned with the project and travel with it. The older `<workspace>/team/` is still read, as a
+ * second leg, and is described in `definitionDirectories`.
+ */
+export const WORKSPACE_DEFINITION_DIR = join('.agents', 'team', 'definitions')
+
+/**
+ * The templates this bundle ships, as the last leg of the chain.
+ *
+ * They are read from the installed bundle rather than copied into the workspace, so upgrading the plugin
+ * upgrades the starting points — and a workspace file of the same name keeps winning, which is what makes
+ * them a starting point rather than a cage. The directory must stay published (`package.json`'s `files`),
+ * or an installed bundle has none: `scripts/check.mjs` enforces that, and that a shipped template declares
+ * only `name`, `label` and `assignment`, because the route belongs to whoever starts the member.
+ */
+const SHIPPED_DEFINITION_DIR = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'definitions')
 
 /**
  * The one team-scope file, beside the member definitions in the same `team/` directory.
@@ -356,15 +380,42 @@ export function parseTeamFile(text, path) {
 }
 
 /**
+ * The name a refused file was trying to declare.
+ *
+ * This is not a second parser: it reads the one key the chain needs to know about, tolerates the quoting
+ * the real parser would strip, and a miss costs nothing — the file simply does not block the name, and a
+ * less specific directory may answer with it. It exists because a directory that *tried* to declare a
+ * name and got it wrong must not have that name quietly filled in from the shipped templates: the author
+ * would be editing a file that is not in effect.
+ * @param {string} text - the file's contents.
+ * @returns {string|undefined} the declared name, as written.
+ */
+function claimedName(text) {
+  const lines = text.split(/\r?\n/)
+  if (lines[0] !== FENCE) return undefined
+  const close = lines.indexOf(FENCE, 1)
+  for (const line of lines.slice(1, close === -1 ? lines.length : close)) {
+    const match = /^name:\s*(.+)$/.exec(line)
+    if (match === null) continue
+    const raw = match[1].trim()
+    const quoted = raw.length > 1 && (raw.startsWith('"') || raw.startsWith('\'')) && raw.endsWith(raw[0])
+    return quoted ? raw.slice(1, -1) : raw
+  }
+  return undefined
+}
+
+/**
  * Read every definition in one directory.
  *
  * A file that cannot be read, is past the size cap, or fails to parse becomes one problem row and the
  * scan continues; a name declared by two files refuses both, because a lookup that silently picked one
- * of them would make the other file's edits invisible.
- * @param {string} dir - the `team` directory of the Lead's working directory.
- * @returns {Promise<{definitions: Map<string, object>, problems: object[], over?: object}>} what the
- *   directory holds. `over` is present when the directory is past `DEFINITION_LIMIT`, in which case
- *   nothing was read at all.
+ * of them would make the other file's edits invisible. `claims` names what the refused files were trying
+ * to declare, which is what `scanDefinitionLayers` uses to keep a less specific directory from answering
+ * for them.
+ * @param {string} dir - one directory of the chain.
+ * @returns {Promise<{definitions: Map<string, object>, problems: object[], claims: Set<string>, over?: object}>}
+ *   what the directory holds. `over` is present when the directory is past `DEFINITION_LIMIT`, in which
+ *   case nothing was read at all.
  */
 export async function scanDefinitions(dir) {
   let entries
@@ -374,8 +425,8 @@ export async function scanDefinitions(dir) {
     // A missing directory is not an error: it is a Lead that keeps no definitions, and the caller
     // reports it as a definition that was not found.
     return error?.code === 'ENOENT'
-      ? { definitions: new Map(), problems: [] }
-      : { definitions: new Map(), problems: [problem(dir, error instanceof Error ? error.message : String(error))] }
+      ? { definitions: new Map(), problems: [], claims: new Set() }
+      : { definitions: new Map(), problems: [problem(dir, error instanceof Error ? error.message : String(error))], claims: new Set() }
   }
   const files = entries
     // `team.md` is the team-scope file, not a member definition, so the reservation is enforced here:
@@ -389,11 +440,13 @@ export async function scanDefinitions(dir) {
     return {
       definitions: new Map(),
       problems: [],
+      claims: new Set(),
       over: { count: files.length, limit: DEFINITION_LIMIT },
     }
   }
   const definitions = new Map()
   const refused = new Set()
+  const claims = new Set()
   const problems = []
   for (const file of files) {
     const path = join(dir, file)
@@ -411,11 +464,15 @@ export async function scanDefinitions(dir) {
     }
     if (text.length > DEFINITION_FILE_MAX) {
       problems.push(problem(path, `the file is ${text.length} characters; the cap is ${DEFINITION_FILE_MAX}, refused rather than truncated`))
+      const claim = claimedName(text)
+      if (claim !== undefined) claims.add(claim)
       continue
     }
     const parsed = parseDefinition(text, path)
     if (parsed.problem !== undefined) {
       problems.push(parsed.problem)
+      const claim = claimedName(text)
+      if (claim !== undefined) claims.add(claim)
       continue
     }
     const { name } = parsed.definition
@@ -429,9 +486,42 @@ export async function scanDefinitions(dir) {
       ))
       definitions.delete(name)
       refused.add(name)
+      claims.add(name)
       continue
     }
     definitions.set(name, parsed.definition)
+  }
+  return { definitions, problems, claims }
+}
+
+/**
+ * Scan the chain and merge it by precedence: the first directory that declares a name supplies it.
+ *
+ * Each layer is scanned exactly as one directory always was — one bad file never hides the others, and a
+ * name declared twice in the same directory refuses both — and the layers are then merged by order. A name
+ * a more specific directory *tried* to declare and got wrong is blocked from the less specific ones
+ * (`claims`), so a broken local file is never quietly replaced by a shipped template of the same name: the
+ * spawn is refused, and the problem row says which file and line. An over-limit directory still refuses
+ * the whole lookup rather than serving a partial set, because a name missing from a partial set is
+ * indistinguishable from a name somebody deleted.
+ * @param {string[]} dirs - the chain, most specific first.
+ * @returns {Promise<{definitions: Map<string, object>, problems: object[], over?: object, dir?: string}>}
+ *   the merged set, the problems of every layer, and the directory that was over its limit, if any.
+ */
+export async function scanDefinitionLayers(dirs) {
+  const definitions = new Map()
+  const claims = new Set()
+  const problems = []
+  for (const dir of dirs) {
+    const scanned = await scanDefinitions(dir)
+    if (scanned.over !== undefined) {
+      return { definitions: new Map(), problems: [...problems, ...scanned.problems], over: scanned.over, dir }
+    }
+    problems.push(...scanned.problems)
+    for (const [name, definition] of scanned.definitions) {
+      if (!definitions.has(name) && !claims.has(name)) definitions.set(name, definition)
+    }
+    for (const claim of scanned.claims) claims.add(claim)
   }
   return { definitions, problems }
 }
@@ -441,7 +531,7 @@ export async function scanDefinitions(dir) {
  *
  * The service is `workingDirectory` and the method is `ensure`, which is the one the Harness's own spawn
  * path uses to resolve a child's directory: it validates the directory and repairs a vanished project,
- * so the `team/` a definition is read from is the same directory a relative `spawn_options.cwd` resolves
+ * so the directory a definition is read from is the same directory a relative `spawn_options.cwd` resolves
  * against. `ensure` is called on the *Lead* Agent, not on a child, because the definition belongs to the
  * Lead's project. The service is optional and read with `ctx.get`, exactly like `compaction`: a profile
  * without it must still activate this plugin, and a definition spawn in that profile is a typed refusal
@@ -449,10 +539,10 @@ export async function scanDefinitions(dir) {
  * @param {object} ctx - plugin context.
  * @param {object} agent - the live Lead Agent.
  * @param {AbortSignal|undefined} signal - cancellation for the service's filesystem check.
- * @returns {Promise<{dir: string}|{reason: string, message: string}>} the resolved `team` directory, or a
+ * @returns {Promise<{cwd: string}|{reason: string, message: string}>} the resolved directory, or a
  *   refusal. The path is never guessed: an absent service and an unresolvable directory are both refused.
  */
-export async function definitionDirectory(ctx, agent, signal) {
+async function resolveWorkingDirectory(ctx, agent, signal) {
   const service = ctx.get?.('workingDirectory')
   if (service === undefined || service === null || typeof service.ensure !== 'function') {
     return {
@@ -475,7 +565,55 @@ export async function definitionDirectory(ctx, agent, signal) {
       message: `The workingDirectory service answered ${JSON.stringify(cwd)}, which is not an absolute directory, so no definition directory can be derived from it.`,
     }
   }
-  return { dir: join(cwd, DEFINITION_DIR) }
+  return { cwd }
+}
+
+/**
+ * The one directory the team-scope file lives in: `<workspace>/team`.
+ *
+ * The team file is not a member definition and has no shipped counterpart, so it is deliberately not part
+ * of the chain `definitionDirectories` builds: a profile that keeps its handoff template where it has
+ * always kept it keeps working, and moving it beside the roster is a decision nobody has made yet.
+ * @param {object} ctx - plugin context.
+ * @param {object} agent - the live Lead Agent.
+ * @param {AbortSignal|undefined} signal - cancellation for the service's filesystem check.
+ * @returns {Promise<{dir: string}|{reason: string, message: string}>} the resolved `team` directory, or a
+ *   refusal.
+ */
+export async function definitionDirectory(ctx, agent, signal) {
+  const resolved = await resolveWorkingDirectory(ctx, agent, signal)
+  if (resolved.reason !== undefined) return resolved
+  return { dir: join(resolved.cwd, DEFINITION_DIR) }
+}
+
+/**
+ * Every directory a member definition is read from, most specific first.
+ *
+ *   1. `<workspace>/.agents/team/definitions` — the canonical location, beside the roster file;
+ *   2. `<workspace>/team` — where every profile before this release kept them. It outranks the shipped
+ *      templates too, because a user's own file must never be quietly replaced by a bundled one of the
+ *      same name, which is exactly what a shipped `reviewer.md` would otherwise do to a project that has
+ *      been carrying its own for a year;
+ *   3. the templates this bundle ships — the starting points, losing to any file the workspace has.
+ *
+ * A name declared by two files in the *same* directory is still refused, because that is an ambiguity no
+ * precedence rule can resolve; a name declared in two different directories is simply the more specific
+ * file winning, which is the point of the chain.
+ * @param {object} ctx - plugin context.
+ * @param {object} agent - the live Lead Agent.
+ * @param {AbortSignal|undefined} signal - cancellation for the service's filesystem check.
+ * @returns {Promise<{dirs: string[]}|{reason: string, message: string}>} the chain, or the refusal.
+ */
+export async function definitionDirectories(ctx, agent, signal) {
+  const resolved = await resolveWorkingDirectory(ctx, agent, signal)
+  if (resolved.reason !== undefined) return resolved
+  return {
+    dirs: [
+      join(resolved.cwd, WORKSPACE_DEFINITION_DIR),
+      join(resolved.cwd, DEFINITION_DIR),
+      SHIPPED_DEFINITION_DIR,
+    ],
+  }
 }
 
 /**
@@ -526,23 +664,23 @@ export async function loadTeamTemplate({ ctx, agent, signal }) {
 }
 
 /**
- * Read the one definition a spawn named.
+ * Read the one definition a spawn named, from the chain `definitionDirectories` builds.
  *
  * Every refusal is one shape — a reason, a sentence, and whatever the caller can act on — so the spawn
  * tool can answer it as a typed result instead of a thrown host error, which is the rule ADR 0016
- * already applies to a start the Harness refuses. `available` lists the names the same scan could
- * use, so a misspelled name is a refusal the model can correct without a second call to look the
- * directory up.
+ * already applies to a start the Harness refuses. `available` lists the names every layer could supply,
+ * so a misspelled name is a refusal the model can correct without a second call to look the directories
+ * up, and the shipped templates are in that list even when the workspace has never seen them.
  * @param {{ctx: object, agent: object, name: string, signal?: AbortSignal}} request - the caller, the
  *   live Lead Agent and the definition name as the model wrote it.
  * @returns {Promise<{definition: object, dir: string, problems: object[]}|{refusal: object}>} the
- *   definition with the scan's other problems, or a typed refusal.
+ *   definition with every layer's other problems, or a typed refusal.
  */
 export async function loadDefinition({ ctx, agent, name, signal }) {
-  const resolved = await definitionDirectory(ctx, agent, signal)
+  const resolved = await definitionDirectories(ctx, agent, signal)
   if (resolved.reason !== undefined) return { refusal: { reason: resolved.reason, message: resolved.message } }
-  const { dir } = resolved
-  const { definitions, problems, over } = await scanDefinitions(dir)
+  const { dirs } = resolved
+  const { definitions, problems, over, dir } = await scanDefinitionLayers(dirs)
   if (over !== undefined) {
     return {
       refusal: {
@@ -557,9 +695,10 @@ export async function loadDefinition({ ctx, agent, name, signal }) {
   const found = definitions.get(name)
   if (found === undefined) {
     // Two answers, and the difference is what the model should do next. A refused file is something to
-    // fix, so the scan's problems decide: with a broken file in the directory the name may be declared
-    // in the file that was refused, or the name may simply not exist — the sentence says both, and the
-    // rows name the files and lines. Without one, the directory read cleanly and the name is a typo.
+    // fix, so the scans' problems decide: with a broken file in one of the directories the name may be
+    // declared in the file that was refused, or the name may simply not exist — the sentence says both,
+    // and the rows name the files and lines. Without one, every directory read cleanly and the name is a
+    // typo.
     const reason = problems.length === 0 ? 'definition-not-found' : 'definition-invalid'
     const declared = definitions.size === 0
       ? 'no definition is declared'
@@ -567,16 +706,17 @@ export async function loadDefinition({ ctx, agent, name, signal }) {
     const refused = problems.length === 0
       ? ''
       : ` ${problems.length} file${problems.length === 1 ? ' was' : 's were'} refused; problems names the file and the line.`
+    const searched = dirs.map((each) => JSON.stringify(each)).join(', ')
     return {
       refusal: {
         reason,
         definition: name,
-        path: dir,
+        path: dirs[0],
         problems,
         available: [...definitions.keys()].sort(),
-        message: `No usable member definition named "${name}" in ${JSON.stringify(dir)}; ${declared}.${refused} A definition is a markdown file with frontmatter in that directory, and each one declares its own name.`,
+        message: `No usable member definition named "${name}" in ${searched}; ${declared}.${refused} A definition is a markdown file with frontmatter in one of those directories, and each one declares its own name.`,
       },
     }
   }
-  return { definition: found, dir, problems }
+  return { definition: found, dir: dirname(found.path), problems }
 }

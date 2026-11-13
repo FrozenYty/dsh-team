@@ -1,14 +1,28 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { listMembers, messageMember, spawnMember, taskBoard } from '../actions.js'
 import { DEFINITION_DIR, DEFINITION_FILE_MAX, DEFINITION_LIMIT, parseDefinition } from '../definitions.js'
 import { apply } from '../index.js'
 import { readRoster } from '../roster.js'
 import { memoryTable } from './memory-table.mjs'
+
+/**
+ * The names the bundle ships, read from the directory and parsed rather than pinned here, so a template
+ * added later is covered by every assertion that mentions the chain.
+ */
+async function shippedNames() {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'definitions')
+  const names = []
+  for (const file of (await readdir(dir)).filter((name) => name.endsWith('.md')).sort()) {
+    names.push(parseDefinition(await readFile(join(dir, file), 'utf8'), file).definition.name)
+  }
+  return names
+}
 
 /**
  * A context fake carrying what a definition spawn reads, plus the `workingDirectory` service the
@@ -270,7 +284,9 @@ test('two files declaring one name are refused naming both, so neither is used',
   assert.ok(duplicate.path.endsWith('b-second.md'))
   assert.match(duplicate.problem, /a-first\.md:2/)
   assert.equal(duplicate.line, 2)
-  assert.deepEqual(result.available, [], 'a name two files claim is usable from neither')
+  // The rest of the shipped starting points are still available; the ambiguous name is not, from either
+  // directory, because the workspace's two files claimed it and got it wrong.
+  assert.deepEqual(result.available, (await shippedNames()).filter((name) => name !== 'reviewer'))
   assert.equal(ctx.started.length, 0, 'nothing is started from an ambiguous name')
 })
 
@@ -306,7 +322,7 @@ test('the file-size and file-count caps refuse rather than truncate', async () =
   // The oversized definition is never half-read: asking for it by name finds nothing usable.
   const refused = await spawnMember(call(sizedCtx, memoryTable(), { definition: 'huge' }))
   assert.equal(refused.started, false)
-  assert.deepEqual(refused.available, ['small'])
+  assert.deepEqual(refused.available, [...await shippedNames(), 'small'].sort())
 
   // The count cap is on the directory: a partial set is never served, so the whole scan is refused.
   const crowded = await workspace()
@@ -372,15 +388,18 @@ test('a definition that is not declared lists the names that are', async () => {
   assert.equal(result.started, false)
   assert.equal(result.reason, 'definition-not-found')
   assert.equal(result.definition, 'reviewr')
-  assert.deepEqual(result.available, ['auditor', 'reviewer'])
+  // The workspace's `reviewer.md` wins over the shipped one of the same name; the auditor is the
+  // workspace's alone, and the rest are the bundle's.
+  assert.deepEqual(result.available, [...new Set([...await shippedNames(), 'auditor', 'reviewer'])].sort())
   assert.match(result.message, /No usable member definition named "reviewr"/)
   assert.equal(ctx.started.length, 0)
 
-  // An absent team directory is the same answer rather than an error: a Lead that keeps no definitions.
+  // An absent team directory is not an error: a Lead that keeps no definitions still gets the shipped
+  // starting points, which is the whole reason they ship.
   const bare = await mkdtemp(join(tmpdir(), 'dsh-team-definitions-empty-'))
-  const missing = await spawnMember(call(fakeCtx({ cwd: bare }), memoryTable(), { definition: 'reviewer' }))
+  const missing = await spawnMember(call(fakeCtx({ cwd: bare }), memoryTable(), { definition: 'reviewr' }))
   assert.equal(missing.reason, 'definition-not-found')
-  assert.deepEqual(missing.available, [])
+  assert.deepEqual(missing.available, await shippedNames())
 })
 
 /**

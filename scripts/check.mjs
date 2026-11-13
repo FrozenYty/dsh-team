@@ -419,6 +419,39 @@ for (const file of referenceSources) {
   }
 }
 
+// 8. Shipped templates: published with the bundle, and describing the role rather than the route.
+//    A template that named a provider, a model or a preset would pin every profile that starts that role
+//    to whatever was current the day the file was written, so the rule is structural: a shipped template
+//    declares `name`, `label` and `assignment`, and any other frontmatter key is refused by name. A
+//    workspace definition may declare the route — that is the user's bill to choose (ADR 0018).
+const TEMPLATE_DIR = 'templates/definitions'
+const TEMPLATE_FIELDS = ['assignment', 'label', 'name']
+const templateFiles = existsSync(join(root, TEMPLATE_DIR))
+  ? readdirSync(join(root, TEMPLATE_DIR)).filter((name) => name.endsWith('.md')).sort()
+  : []
+if (templateFiles.length === 0) fail(`${TEMPLATE_DIR}: ships no template`)
+for (const name of templateFiles) {
+  const relative = `${TEMPLATE_DIR}/${name}`
+  // Published, or an installed bundle loses the file it ships. npm reads a bare directory entry as
+  // "everything under it", so `templates/` is what publishes this file; nothing smaller does.
+  const published = (manifest?.files ?? []).some((entry) => {
+    const cleaned = entry.replace(/^\.\//, '').replace(/\/+$/, '')
+    return relative === cleaned || relative.startsWith(`${cleaned}/`)
+  })
+  if (!published) fail(`package.json: files must publish "${relative}"`)
+  const lines = (read(relative) ?? '').split(/\r?\n/)
+  if (lines[0] !== '---') {
+    fail(`${relative}: must open with "---" on line 1, as the definition parser requires`)
+    continue
+  }
+  const close = lines.indexOf('---', 1)
+  for (const line of lines.slice(1, close === -1 ? lines.length : close)) {
+    const match = /^([A-Za-z][A-Za-z0-9_]*): /.exec(line)
+    if (match === null || TEMPLATE_FIELDS.includes(match[1])) continue
+    fail(`${relative}: declares "${match[1]}"; a shipped template describes the role — its frontmatter is ${TEMPLATE_FIELDS.join(', ')} and nothing else, because the route belongs to whoever starts the member`)
+  }
+}
+
 if (failures.length > 0) {
   console.error(`check failed: ${failures.length} problem(s)`)
   for (const failure of failures) console.error(`  - ${failure}`)

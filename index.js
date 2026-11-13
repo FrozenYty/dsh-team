@@ -37,9 +37,10 @@
  * (a member spawned through `ctx.subagents` is not in that service's journal).
  *
  * A member's *definition* can live on disk instead of in the call: `spawn_member.definition` reads the
- * flat-frontmatter markdown files under `team/` in the Lead's working directory, and every field the
- * call also passes wins over the file's, which the result reports field by field (`definitions.js`,
- * ADR 0018). One field has a third source: on a `replace` the predecessor's recorded assignment
+ * flat-frontmatter markdown files found through a chain — `.agents/team/definitions/` in the workspace,
+ * then `team/`, then the five templates this bundle ships — and every field the call also passes wins
+ * over the file's, which the result reports field by field (`definitions.js`, ADR 0018). One field has a
+ * third source: on a `replace` the predecessor's recorded assignment
  * outranks the file's, so a successor is briefed with the work rather than the role's standing sentence
  * (ADR 0009, ADR 0019). The *team* scope has a file too: `team/team.md`, whose body is the handoff
  * template. It wins over the template stored with `handoff_template` and over the built-in shape, the
@@ -55,7 +56,9 @@
  * objects, which is exactly the `ToolDefinition` shape the registry consumes (`ctx.tools.register`
  * checks `output.schema` + `output.render` and projects `parameters` straight to the model).
  *
- * The plugin writes no session events. Its durable state lives in one storage domain (ADR 0003).
+ * The plugin writes no session events. Its durable state is the plugin's own `roster.json` under the
+ * workspace root the Lead bound (`docs/roster-storage-en.md` §4); the `team_roster` storage domain is the
+ * one-time import source and the rollback path, not the record (ADR 0003, superseded by ADR 0027).
  *
  * CONFIGURATION
  * The one tunable is the per-Lead session-trash cap, carried by the `trashLimit` field of this bundle's
@@ -932,7 +935,7 @@ function install(agent, ctx, source, hooks, dataDirFor, trashLimit) {
           },
           definition: {
             type: 'string',
-            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under team/ in your working directory, with a flat frontmatter block declaring name and label and optionally assignment, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Write and version them with your own file tools. Those are exactly the accepted fields: a definition cannot declare a lifetime, because a file describes the role and a successor must not inherit one — a frontmatter \'lifetime\' or \'ephemeral\' is refused by name with the reason. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. One field has a third source: on a replace, the assignment recorded on the member being replaced outranks the file\'s, because a successor inherits the work and not the role\'s standing sentence; the file\'s assignment applies only when the predecessor recorded none, and definition.assignment in the result says which won (call, predecessor or file). A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
+            description: 'Name of a member definition to start from, instead of describing the member here. Definitions are the Lead\'s files, not this tool\'s: each one is a markdown file under .agents/team/definitions/ in your working directory — older profiles keep them in team/, and both are read — with a flat frontmatter block declaring name and label and optionally assignment, cwd, provider, model, reasoning_effort, max_tokens and agent_preset; the body below the frontmatter is the member\'s prompt. Five roles ship with this plugin — implementer, reviewer, researcher, scribe and verifier — and any file of your own with the same name outranks the shipped one, so they are a starting point rather than a cage. Write and version your own definitions with your own file tools. Those are exactly the accepted fields: a definition cannot declare a lifetime, because a file describes the role and a successor must not inherit one — a frontmatter \'lifetime\' or \'ephemeral\' is refused by name with the reason. Any field you also pass to this call overrides the file\'s, and the definition field of the result says which came from the file and which you overrode. One field has a third source: on a replace, the assignment recorded on the member being replaced outranks the file\'s, because a successor inherits the work and not the role\'s standing sentence; the file\'s assignment applies only when the predecessor recorded none, and definition.assignment in the result says which won (call, predecessor or file). A definition that is missing or malformed is answered as started: false with the file and the line, and it does not stop a valid definition beside it. Caps, refused rather than truncated: 16 KiB per file, 64 files per scan.',
           },
           spawn_options: {
             type: 'object',
