@@ -2091,3 +2091,45 @@
   the bundle was not installed for this release.
 - **Version.** `0.26.0`: a stored record shape changed. Nothing a user does behaves differently today, and
   the old shape keeps loading, but a file on disk now carries different fields, which is not a patch.
+
+## 2026-11-13 — the lifecycle-gap statement becomes a pair, and the pair rule loses its last exception (v0.26.1)
+
+- **The owner read the inventory and spotted it; the rule said it was legal, and that was the problem.** He
+  said the filename did not match the convention. It did: `CONTRIBUTING.md` documents `docs/name.md` as one
+  of four legitimate shapes — deliberately single-language, listed in `SINGLE_LANGUAGE_DOCS` with its reason —
+  and this file was listed. What was actually wrong is that it was the **only** file using that shape, and
+  `docs/INDEX-en.md` advertises it: the `Language` column read `pair` on eight rows and `English` on this
+  one. `docs/` is defined as design documents, English as the source of truth, and this document's own
+  second and third sections are statements about *this repository's* design — so the exception was keeping a
+  document a Chinese reader needs out of reach, for a reason (its audience is the upstream tracker) that is
+  about who reads it rather than what it is.
+- **So the exception was removed rather than renamed around.** `git mv` to `-en.md` (the commit records the
+  rename at 100% similarity, so history follows), a new `-zh.md` written as Chinese prose with the same six
+  headings and its citations pointing at the Chinese pair members, and `SINGLE_LANGUAGE_DOCS` is now empty.
+  **The mechanism stays**: the shape is still documented as legal, and an escape hatch that carries its
+  reason is what makes the next exception visible in review. Both indexes moved their row to the new
+  filename and their language cell from `English` to `pair`.
+- **The rule was proved able to fail, and then the proof was proved.** Moving the `-zh` half aside exits 1
+  with exactly `docs/upstream-lifecycle-gap-en.md: has no docs/upstream-lifecycle-gap-zh.md (bilingual pair)`
+  and `docs/INDEX-zh.md: cites docs/upstream-lifecycle-gap-zh.md, which does not exist`; restoring it returns
+  `check passed`. **The first attempt at that probe did nothing at all** — its scratch directory did not
+  exist, so the move failed silently and the check passed for the wrong reason. The implementer caught it and
+  ran it again against a real directory, which is the whole reason a probe has to be seen to fail.
+- **My brief was wrong and the PR says so in two lines of `PLAN.md`.** I told the scribe not to touch
+  `PLAN.md`, but `scripts/check.mjs` scans it, so the rename made `check passed` impossible: `PLAN.md: cites
+  docs/upstream-lifecycle-gap.md, which does not exist`. Rather than hand over a red PR it corrected the two
+  lines that were forced — the path, and the sentence that said the allow-list had one entry — and changed
+  no task text, no checkbox and no other wording. A prohibition that contradicts the gate is my error, not
+  its deviation.
+- **Two comments in `scripts/check.mjs` still named the old path as if it were current**, which the scribe
+  reported rather than fixed because they read as statements about the past. That is a fair reading, and
+  they were still a dead reference: the Lead made them explicit at merge — "the one unpaired document that
+  existed then, `docs/upstream-lifecycle-gap.md` — a real pair now" — so a search for the old path finds the
+  explanation instead of nothing.
+- **Verification.** `node scripts/check.mjs` prints `check passed` with the pair rule now applying to this
+  document in both directions, and `node --test --test-isolation=none tests/*.test.mjs` is 220 tests, 220
+  passing, with no test file touched.
+- **What is left undone.** `PROGRESS.md`'s own six references to the old filename stay exactly as they are:
+  this file is append-only, an entry that cited a path before it moved is correct as of the commit that
+  wrote it, and the citation check deliberately does not scan this file or `CHANGELOG.md` for that reason.
+- **Version.** `0.26.1`: a document was paired and an exception retired. No behaviour, no shipped file.

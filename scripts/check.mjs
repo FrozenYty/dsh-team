@@ -180,26 +180,26 @@ if (patchText !== undefined) {
  * This is the only way out of the pair rule below, and it is deliberately a list you have to edit: an
  * unpaired document that is not named here fails the check by name. That is what makes the exception
  * visible in review instead of silent — which is exactly what the hardcoded list of pairs allowed, and why
- * `docs/upstream-lifecycle-gap.md` could not be told apart from an oversight.
+ * the one unpaired document that existed then, `docs/upstream-lifecycle-gap.md` — a real pair now — could not
+ * be told apart from an oversight.
  *
  * A naming convention was the alternative (no language suffix means "single-language by choice"). It was
  * rejected because it records the fact and not the reason: the next reader still could not tell whether
  * somebody meant it, and dropping a suffix would be a way to pass the check without deciding anything.
  */
 const SINGLE_LANGUAGE_DOCS = new Map([
-  [
-    'upstream-lifecycle-gap.md',
-    'the issue-ready statement of the gap dsh-team fills, addressed to the English-language upstream '
-    + 'tracker; a Chinese copy would be a second document to keep in step, not a translation of this one',
-  ],
+  // Empty on purpose: the last entry, `upstream-lifecycle-gap.md`, is a real pair now. The mechanism stays
+  // because CONTRIBUTING.md still documents `docs/name.md` as a legal shape, and a declared exception that
+  // carries its reason is what makes the next one visible in review.
 ])
 
 // 5. Bilingual pairs — a rule over docs/, not a list of pairs.
 //
 // What this replaced was three hardcoded pairs, and a list is not a rule: a new docs/foo-en.md whose
-// -zh.md was never written was simply not in the list, so the check said nothing. docs/upstream-lifecycle-gap.md
-// sat there unexamined for exactly that reason, with no way to tell a deliberate single-language document
-// from an oversight. Now every file at the top level of docs/ is classified below, and one the rule cannot
+// -zh.md was never written was simply not in the list, so the check said nothing. The one unpaired file that
+// existed then, docs/upstream-lifecycle-gap.md, sat there unexamined for exactly that reason, with no way to
+// tell a deliberate single-language document from an oversight. Now every file at the top level of docs/ is
+// classified below, and one the rule cannot
 // classify fails by name.
 //
 // The four legitimate shapes, and no others:
