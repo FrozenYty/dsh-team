@@ -3124,3 +3124,32 @@
   The lesson is not PowerShell's: it is that **a check and the commit that follows it must not be one
   command**, because the failure signal is read by the human rather than by the shell.
 - **Version.** `0.35.2`: one document, and a plan that now describes a project that is still running.
+
+## 2026-11-13 — the gate runs as its own step, written where a contributor reads it — without the count I invented (v0.35.3)
+
+- **The rule landed where the reader stands, and that was verified rather than assumed.** `CONTRIBUTING.md`
+  §4, immediately after the check's own description and the schema paragraph, with one cross-reference in
+  §7's definition-of-done checklist — and a grep for "exit code", "own command", "own step" and "non-zero"
+  confirmed **no part of it was written down already**, so this is one rule in one place rather than a second
+  copy of one.
+- **What it says is the mechanism, not the carelessness.** The shell does not stop on a non-zero exit, so
+  `check; git add; git commit; git push` reads as one action while it is really two decisions; the repair is
+  to run the gate as its own step or to gate every later step on its exit code. It ends on the failure mode
+  rather than the rule: **a contributor who thinks of the check as a step *inside* the publish will keep
+  publishing red.**
+- **And the number in it was mine, and it was wrong.** My brief said the trap "earned its place three times
+  today", and the document repeated it. Checked against the day: **one** red commit reached the remote (PR
+  #80); PR #77's force-push was a mis-staged file rather than a red commit; the rest were CI-side reds that
+  never involved a local failure being pushed. Corrected before the merge, and the sentence now states the
+  fact without a count — **a number asserted in a brief became a claim in a shared document without anyone
+  measuring it, for the third time today** (after the 8.5 KB estimate and the "content, not infrastructure"
+  misdiagnosis), and each time the person who caused it is the one who has to catch it.
+- **The first place the rule was kept was the commit that added it**: gate on its own, read `check passed`,
+  suite on its own, then stage, commit, publish. A rule whose first application is its own commit needs no
+  argument about whether it can be followed.
+- **What enforces it: nothing, and that was declined for a good reason.** A pre-push hook would stop the
+  bundled list, and a hook is a decision about installing something on someone else's machine — not one to
+  take unasked. That makes it the **fourth rule today recorded with evidence and no enforcement**, and the
+  first where the enforcement was refused deliberately rather than unavailable.
+- **Version.** `0.35.3`: one section of `CONTRIBUTING.md`, one cross-reference, and a false count removed
+  before it shipped.
