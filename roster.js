@@ -574,6 +574,31 @@ function parseRoster(value) {
         throw new Error(`roster member route select_reason "${String(route.select_reason)}" is unknown`)
       }
     }
+    // The two halves of the succession link, checked on load like `route` above: a replacement writes the
+    // forward half on the successor it starts and the reverse half on the tombstone it leaves, both in the
+    // mutation that creates the record, so a chain reads from either end (ADR 0032). Structure only — an
+    // edge names a member id, and the record that id names may legitimately be absent, because a tombstone
+    // past the retention window leaves the roster for the archive (ADR 0030). That is why this refuses a
+    // malformed edge but never an edge that "names nothing": the second is exactly what a correct record
+    // looks like once its predecessor has been archived, and a check that cannot tell the two apart would
+    // refuse good data.
+    if (member.predecessor !== undefined) {
+      if (typeof member.predecessor !== 'string' || member.predecessor.length === 0) {
+        throw new Error('roster member predecessor must be a non-empty member id')
+      }
+    }
+    if (member.successor !== undefined) {
+      const successor = member.successor
+      if (successor === null || typeof successor !== 'object' || Array.isArray(successor)) {
+        throw new Error('roster member successor must be an object')
+      }
+      if (typeof successor.target !== 'string' || successor.target.length === 0) {
+        throw new Error('roster member successor needs a target')
+      }
+      if (typeof successor.member_id !== 'string' || successor.member_id.length === 0) {
+        throw new Error('roster member successor needs a member_id')
+      }
+    }
     // Every tool selects a member by its target, and the lookup takes the first match. A record that
     // holds one target twice would resolve silently to whichever member was written first, so it is
     // refused when the record is loaded rather than guessed at when it is used.

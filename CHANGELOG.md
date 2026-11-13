@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.32.0] - 2026-11-13
+
+- A succession is recorded in both directions, in the write that makes the tombstone.
+
 ## [0.31.1] - 2026-11-13
 
 - The state is files only, the domain retires, and the version now checks itself.
