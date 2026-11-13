@@ -3241,3 +3241,31 @@
   enforcement is a hook on somebody else's machine rather than something a check could do.
 - **Version.** `0.36.2`: seven lines of `CONTRIBUTING.md`, and one rule that no longer depends on being read
   correctly the first time.
+
+## 2026-11-13 — three limits are decided rather than left, and the two fixes that were rejected are on record (v0.36.3)
+
+- **A limit that was never considered and a limit that was chosen look identical in a document**, and only one
+  of them should be argued with later. So each of the three now says which it is: the cap *"stays a constant,
+  decided rather than left"* on the repository's own terms — nobody has needed more than 50, `archived_total`
+  tells every caller when there is more, and a knob would be configurability nobody asked for.
+- **One limit read as missing work, and the correction is the useful part.** "An archived record's tasks are
+  in no answer" looked like data loss to anyone who had not read ADR 0017; it now says **it is not a loss** —
+  the work lives on the Lead's own board, handed to a successor or left unowned and named, with finished work
+  staying there too — so the archive's copy is history for someone reading the file rather than the only place
+  the work exists. **A limit without its reassurance is a defect report waiting to be filed.**
+- **The single-member hole stands, and the two alternatives that were weighed are on record** so a later
+  reader does not rebuild them: a frozen sessions-root leg fails because the artifact's original location is
+  gone by definition once it has moved, leaving "the root directory exists" as its only evidence — which on a
+  seeded roster resolves a **wrong destination silently** instead of refusing; and a per-Lead root field would
+  close it for every member at about thirty bytes, but that is a new stored field for a case nobody has
+  observed. It closes on ADR 0028's rule: **a leg that can be wrong silently is worse than a refusal that says
+  which leg is missing.**
+- **The failed search is the thing worth keeping.** A hole with a reason is a decision; a hole without one is
+  the next person's project — and the reason a fix was *rejected* is exactly what a reader cannot recover from
+  the code, because the code only shows what was built.
+- **All three landed in the ADRs that decided them, not in the design pair**, and the reasoning is the
+  repository's own: each is a limit *of a decision*, `roster-storage` describes behaviour rather than limits,
+  and the board facts in the second item are already stated in the task-board document — so repeating them
+  there would be a second copy of one rule. The numbers in both additions came from the brief and the member
+  said so rather than presenting them as its own measurement.
+- **Version.** `0.36.3`: fourteen lines across two accepted ADRs, and three limits that are now decisions.
