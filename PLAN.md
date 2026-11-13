@@ -484,3 +484,153 @@ One owner: @FrozenYty. Lanes say where an agent may write, not who owns the repo
   `E728A7F5E7C9565EAA1EFDA0E836B688AB14814600F8A30E22F1927035E68268` before and after the proofs, and 212
   tests pass with no test file touched. Renumbered from P4-16 and 0.25.4 when the README task took both.
 
+### P5 — The storage move, and what it made portable (v0.25.6 – v0.35.1)
+
+Phase entry: every box in P4 is ticked and `Gate P2` stands. This phase is the work that followed the
+document split: the plugin's durable state moved out of the host's storage domain and into files it owns,
+the records it writes grew portable for a roster that travels, and each move was recorded as a decision
+before the documents were corrected to match. **Every task below is delivered except the last**, which is in
+flight; `Gate P5` is the only open box.
+
+- [x] **P5-01** The architecture pair's §2.5 points at the document that holds the routes statement (v0.25.6).
+  Done when the sentence names `docs/routes-{en,zh}.md` rather than the README, the README no longer states
+  the costs, and `node scripts/check.mjs` passes on both sides.
+  Delivered: the clause now cites `docs/routes-en.md` and `docs/routes-zh.md`; the finding was manual, and the
+  proof is that the grep for a costs statement in the README pair returns nothing while both §§ resolve.
+
+- [x] **P5-02** A retirement tombstone records where its artifact went as a name relative to the data root
+  (v0.26.0). Done when a tombstone carries `trashDir` and `trashRelPath`, the absolute path is computed at
+  read time through the three legs, the cap matches a tombstone by directory name, and a record written
+  before the change still restores with no migration.
+  Delivered: `trash.js`'s `trashPathCandidates` and `recordedTrashDir`, with the tests *a tombstone carrying
+  only the old absolute path still restores, with nothing migrated* and *the artifact is found on whichever
+  leg of the chain still holds it*.
+
+- [x] **P5-03** The lifecycle-gap statement is a bilingual pair, and the pair rule has no exception (v0.26.1).
+  Done when `docs/upstream-lifecycle-gap-{en,zh}.md` exists with equal heading sets, `SINGLE_LANGUAGE_DOCS`
+  is empty, and renaming one half aside fails the check by name.
+  Delivered: the rename, the Chinese side, and the removal of the allow-list entry with the mechanism kept;
+  the failure text is in the PR that delivered it.
+
+- [x] **P5-04** The roster is a file the plugin owns under the workspace, with the storage domain demoted to
+  import source and rollback (v0.27.0). Done when a Lead's records are read and written at
+  `<workspace>/.agents/team/roster.json`, the domain is imported once and never written, the root is bound
+  in-process, and a Session with no workspace still gets an answer.
+  Delivered: `roster.js`'s `createRosterSource`, with *the real domain imports once, and the marker records
+  what came across* and *a Lead keeps the root it bound when its working directory changes mid-session*.
+
+- [x] **P5-05** The retention cap flips the record it emptied rather than an id parsed from the directory name
+  (v0.27.1). Done when the flip compares the record's own `memberId`, and a spawned member — whose name
+  carries the child Session id — is marked `pruned` rather than left `done`.
+  Delivered: `pruneLeadTrash`'s report, with *the cap flips the record of a spawned member, whose memberId is
+  not its child id*; the defect had left 46 of 63 measured tombstones `done` with their bytes gone.
+
+- [x] **P5-06** The decisions that moved the data are recorded, and the statements they disproved are gone
+  (v0.27.2). Done when ADR 0027 and ADR 0028 exist with clause-scoped `Superseded by` pointers on the ADRs
+  they supersede, the four ADR mentions of `<memberId>-<ms>` are corrected by a new ADR rather than edited,
+  and every in-repository citation resolves.
+  Delivered: the two ADRs, the pointers, and `node scripts/check.mjs` proving the section-citation rule by failing by name on a planted
+  non-existent section.
+
+- [x] **P5-07** Five role templates ship, and a definition is read from a chain of directories (v0.28.0).
+  Done when `templates/definitions/` is in the bundle's `files`, a definition resolves from
+  `.agents/team/definitions` then `team/` then the templates with the first declaration winning, a
+  same-directory duplicate is refused by name, a malformed file blocks only the name it claims, and no
+  template declares a route or a lifetime.
+  Delivered: `definitions.js`'s `definitionDirectories` and `scanDefinitionLayers`, with *a workspace
+  definition wins over the shipped one of the same name*, *a profile that keeps its definitions in team/ still
+  finds them* and *every shipped template parses, and declares the role rather than the route*.
+
+- [x] **P5-08** The definition chain is a recorded decision, and the team file's path is documented as a
+  decision rather than an unfinished move (v0.28.1). Done when ADR 0029 supersedes ADR 0018's path point
+  only, ADR 0021 carries an amendment pointer, and the documents describing the chain also say `team.md`
+  keeps one home with no bundled counterpart.
+  Delivered: ADR 0029 plus the two pointers, with the architecture pair's definitions, limits and substrate sections, the README pair and the handoff pair corrected;
+  `node scripts/check.mjs` passes and heading parity is unchanged on every pair.
+
+- [x] **P5-09** A roster and a trash can be migrated into the workspace, dry-run first (v0.28.2). Done when
+  `scripts/migrate-roster.mjs` plans by default, refuses `--apply` until the roster file exists, writes both
+  backups and a manifest before touching anything, verifies a cross-volume copy by file count and byte size,
+  and is idempotent.
+  Delivered: the script and nine tests, three of them each shown to fail on their own assertion; the real
+  plan measured 110 records — 20 to move, 46 to reconcile, 44 left alone, 0 refused.
+
+- [x] **P5-10** The README presents what a reader can weigh, and the migration's run is recorded (v0.28.3).
+  Done when the badge row carries only provable badges, `Status` states what was exercised live, what is
+  checked with something stronger than a reading, and what is not covered, and every number in it names its
+  source.
+  Delivered: the badge row, the three-part `Status`, and the numbers checked against the backup manifests and
+  the destination directory rather than against an estimate.
+
+- [x] **P5-11** The Host's own validator accepts every schema, and the one keyword outside its subset is
+  explained (v0.28.4). Done when `scripts/schema-check.mjs` loads the validator out of the installed asar and
+  every tool's input and result schema passes it, with the one parameter keyword outside the subset reported
+  as a note rather than a failure.
+  Delivered: the script, run against `@deepseek-ai/dsh-tools 0.2.2-rc.1`, and the note in `CONTRIBUTING.md`
+  testing section that explains the split between that check and the bundle-shaped one.
+
+- [x] **P5-12** A tombstone stays on the roster only while its artifact could still exist (v0.29.0 – v0.29.1).
+  Done when the window is the effective `trashLimit`, a tombstone leaves only when it names a destination, is
+  not `pending`, and its artifact is on no leg of the resolve chain, its child id stays in `retiredChildIds`,
+  the bound runs on every write with no migration, and ADR 0030 supersedes ADR 0011's rejection.
+  Delivered: `roster.js`'s `bound` and `archive.jsonl`, with *the window follows the configured cap rather
+  than a fixed count*, *a tombstone whose artifact still exists stays, whatever the window says* and *a child
+  whose tombstone is archived is not adopted back as a live member*; v0.29.1 is the ADR and the pointer, not
+  a second task.
+
+- [x] **P5-13** A new root is seeded from a file the person names (v0.30.0). Done when `DSH_TEAM_SEED` names
+  one file, both this plugin's roster shape and a storage-domain dump are accepted, a root with a roster file
+  is untouched, and an unusable seed is reported as a problem rather than falling back.
+  Delivered: the seed leg of `roster.js`, with *a seed that cannot be used is loud, and the root stays empty*
+  and *a storage-domain dump works as a seed too, because that is what some users have*.
+
+- [x] **P5-14** Every Session has a root, and the storage domain stops serving anything (v0.31.0 – v0.31.1).
+  Done when a root resolves for every Session through the override, the workspace, or the frozen directory,
+  `table.get` returns nothing for an unbound Lead, `storage.source` is `'file'` or `'none'`, and a write with
+  no bound root throws naming the invariant.
+  Delivered: `createRootBinder`, with *a Session with no workspace and no override writes its roster into the
+  frozen directory* and *an unbound Lead reports none, with both ways out*; v0.31.1 is ADR 0031 plus the
+  version check, not a second task.
+
+- [x] **P5-15** A succession is recorded in both directions, in the write that makes the tombstone (v0.32.0).
+  Done when the successor row carries `predecessor` and the tombstone carries `successor`, each naming a
+  `target` and a `member_id`, both in the mutation that writes the tombstone, load-time validation checks
+  structure and not references, and a walk reaching an id no longer in the roster reports the id without a
+  target.
+  Delivered: ADR 0032 and the row fields, with *one replacement writes both directions, and never one without
+  the other*, *a base name reused by a later generation never confuses the ids* and *a walk that reaches an
+  archived tombstone stops with the id*.
+
+- [x] **P5-16** The host storage domain is out of the bundle, and a missing file is a missing file on every
+  platform (v0.33.0 – v0.33.1). Done when the bundle neither opens nor writes the domain, `PROVENANCE_SOURCE`
+  keeps the domain value with nothing branching on it, `migrate-roster.mjs --domain` is how a seed is
+  produced, and a path whose ancestor is a file answers "no file" on every platform.
+  Delivered: ADR 0033, `PROVENANCE_SOURCE`, and the `ENOTDIR`-or-`ENOENT` rule in `roster.js`; v0.33.1 is the
+  ADR pair, not a second task.
+
+- [x] **P5-17** An artifact's origin is stored relative to the sessions root (v0.34.0 – v0.34.1). Done when a
+  new tombstone carries `originalRelPath` as `<slug>/<leaf>` with forward slashes and stores nothing when the
+  artifact is not in a directory named after the member, the read order resolves it against the root in
+  effect before falling back to the stored absolute, and the loader refuses an absolute path, a drive letter,
+  a backslash, an empty segment, `.` or `..` by name.
+  Delivered: ADR 0034 and `originalRelPathOf`/`originalPathFor`, with *a roster seeded into another home
+  restores under that home's sessions root, not the one recorded*; v0.34.1 is the ADR and the tie rule in
+  `CONTRIBUTING.md`'s testing section, not a second task.
+
+- [x] **P5-18** The schema check's harness half runs on every push, and a travelling path is written one way
+  (v0.35.0 – v0.35.1). Done when `node --test` drives the harness half, `trashRelPath` is written with forward
+  slashes and read on either separator, the migration script compares that field by segment rather than by
+  character, and `CONTRIBUTING.md`'s testing section states which half CI runs and which one it cannot.
+  Delivered: the test, `relativeSegments`, `isMigrated`, and the testing paragraph; v0.35.1 is the separator paragraph and
+  ADR 0034's pointer, not a second task.
+
+- [ ] **P5-19** The archive can be read on request, and the hot path still never touches it (v0.36.0).
+  Done when a Lead can ask `list_members` for the archived tombstones and see them, the archive is read only
+  on that request, and ADR 0030's rule that the hot path never opens it is unchanged.
+  In flight: the acceptance above is the shape, and its measured numbers land with the PR.
+
+- [ ] **Gate P5** — the archive is readable on request, or the next phase starts knowing it is not.
+  Not a hard stop for the storage move, which is delivered: it is the stop for treating this plugin's history
+  as write-only, and it is the one box P4's successors would otherwise inherit unticked.
+
+
