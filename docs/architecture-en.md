@@ -242,7 +242,7 @@ that reason, and let the Harness inherit exactly as it did before this release. 
 because the two fallbacks are different operational facts, and only one of them is about this profile's
 configuration.
 
-The member's route is recorded at spawn and compared at read time: `list_members` reports each row's
+A row also carries what the member has spent: `spend_tokens` is the four token counters of its durable log summed, read through the projections registry rather than the meter `tokenMeter` discards (ADR 0037). It is unweighted — no price table exists in this bundle — and it can fall between two reads, because a retry adds an attempt while a streaming sample replaced by its final one subtracts. It is omitted, never zero, when nothing can be measured, and **only a resident member shows one**: the handle is the member's live Agent, so an unloaded child has no spend at all. The member's route is recorded at spawn and compared at read time: `list_members` reports each row's
 `route` and marks `route_stale: true` with a `route_note` when the member's route is not the Lead's
 current one. Nothing re-routes a live member — its route lives in its own recorded `request/header`
 — so the remedy is a replacement, which starts a successor on the current route and hands over its
