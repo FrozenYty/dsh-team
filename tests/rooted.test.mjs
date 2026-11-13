@@ -1,15 +1,17 @@
 /**
- * Every Session has a root, so the storage domain is never written again.
+ * Every Session has a root, so no host storage domain is written, read or opened at all.
  *
  * The plugin used to answer `undefined` for a Session whose workspace could not be known, and everything
  * without a root fell through to the storage domain — which is why deleting that domain's file was not
  * stable: the next write from a rootless Session recreated it. Root resolution now ends at the frozen
  * `<home>/.dsh/team-roster`, the directory the plugin already owns and whose `trash/` every artifact chain
  * already treats as a leg. It is a real directory, a real file, and a person can open it — which the
- * storage domain never was. The domain survives only as the last leg of the source order.
+ * storage domain never was.
  *
- * These tests measure the domain's *calls*, not just the presence of a file: "the domain was not written"
- * is the claim, and a file on disk does not prove it.
+ * With a root always resolved the domain has no job left, so it is gone from the bundle entirely: the
+ * source order is a seed, then nothing, and a root that cannot be created is a reported problem rather
+ * than a fallback. A profile whose records lived only in a domain file points `DSH_TEAM_SEED` at it, which
+ * accepts that shape (see `tests/seed.test.mjs` and `tests/store.test.mjs`).
  */
 
 import assert from 'node:assert/strict'
@@ -19,9 +21,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
+import { spawnMember, retireMember } from '../actions.js'
 import { PHASE, PROVENANCE_FILE_NAME, ROSTER_FILE_NAME, createRosterSource, readRoster } from '../roster.js'
 import { TEAM_DIR, createRootBinder, frozenDataDir, resolveDataDir } from '../trash.js'
-import { memoryTable } from './memory-table.mjs'
 
 const LEAD = 'session-00000000-0000-4000-8000-00000000000b'
 const scratch = () => mkdtemp(join(tmpdir(), 'dsh-team-rooted-'))
@@ -40,21 +42,20 @@ const record = (name = 'reviewer') => ({
   }],
 })
 
-/** A domain fake that records every call, so "not consulted" and "not written" are both checkable. */
-function domainWith(records = {}) {
-  const rows = new Map(Object.entries(records))
-  const writes = []
-  const asked = []
+/** The host-side effects a retirement refreshes, and the child a spawn starts. */
+const hooks = () => ({ filter: { invalidate() {} }, slots: { refresh: async () => {} } })
+function fakeCtx() {
+  const lead = { id: LEAD, status: 'idle', session: { id: LEAD, header: {} } }
   return {
-    writes,
-    asked,
-    get: (key) => {
-      asked.push(key)
-      return rows.get(key)
+    agentTeams: { listMembers: () => [], tryMembership: () => undefined },
+    subagents: {
+      listDescendants: async () => [],
+      startActivation: async (spec) => ({ childId: spec.childId }),
+      drainChildren: async () => {},
     },
-    put: async (key, value) => { writes.push(['put', key]); rows.set(key, value) },
-    update: async (key, mutate) => { writes.push(['update', key]); const next = mutate(rows.get(key)); rows.set(key, next); return next },
-    entries: () => rows.entries(),
+    agents: { get: () => undefined },
+    get: () => undefined,
+    lead,
   }
 }
 
@@ -68,8 +69,7 @@ async function homeOnly() {
 
 test('a Session with no workspace and no override writes its roster into the frozen directory', async () => {
   const { home, frozen } = await homeOnly()
-  const domain = domainWith({})
-  const source = createRosterSource({ domainTable: domain, binder: createRootBinder({ env: {}, home }), home })
+  const source = createRosterSource({ binder: createRootBinder({ env: {}, home }), home })
 
   assert.equal(resolveDataDir({}, home, undefined), frozen, 'the frozen directory is the last leg of resolution')
   assert.equal(source.bind(LEAD, undefined), frozen, 'and the root every Session gets when its workspace is unknown')
@@ -77,27 +77,53 @@ test('a Session with no workspace and no override writes its roster into the fro
   await source.table.put(LEAD, record())
 
   assert.equal(existsSync(join(frozen, ROSTER_FILE_NAME)), true, 'the roster is a file a person can open')
-  assert.deepEqual(domain.writes, [], 'and the domain was not written')
-  assert.deepEqual(domain.asked, [LEAD], 'the source order checks the legacy leg once, finds nothing, and moves on')
   assert.equal(source.report(LEAD).source, 'file')
   assert.equal(source.report(LEAD).path, join(frozen, ROSTER_FILE_NAME), 'the report names the frozen path')
 })
 
-test('that file is the record on the next load, so nothing is re-imported', async () => {
+test('a root with no seed starts empty and stays usable: a spawn and a retirement work', async () => {
   const { home, frozen } = await homeOnly()
-  const first = createRosterSource({ domainTable: domainWith({}), binder: createRootBinder({ env: {}, home }), home })
+  const source = createRosterSource({ binder: createRootBinder({ env: {}, home }), home })
+  const ctx = fakeCtx()
+  const call = (extra = {}) => ({
+    ctx,
+    table: source.table,
+    leadSessionId: LEAD,
+    leadAgent: ctx.lead,
+    dataDir: frozen,
+    hooks: hooks(),
+    ...extra,
+  })
+  source.bind(LEAD, undefined)
+  await source.readyFor(LEAD)
+
+  assert.deepEqual(readRoster(source.table, LEAD).members, [], 'no seed, no domain: the root starts empty')
+
+  const born = await spawnMember(call({ name: 'reviewer', label: 'Reviewer', prompt: 'Start.' }))
+  assert.equal(born.phase, PHASE.active, 'a spawn works on an empty root')
+  const retired = await retireMember(call({ target: 'reviewer' }))
+  assert.equal(retired.retired, true, 'and so does a retirement')
+  assert.equal(readRoster(source.table, LEAD).members[0].phase, PHASE.retired)
+  assert.equal(existsSync(join(frozen, ROSTER_FILE_NAME)), true, 'the file was written the first time anything was')
+})
+
+test('a root that already has a file is the truth, and a seed does not touch it', async () => {
+  const { root, home, frozen } = await homeOnly()
+  const first = createRosterSource({ binder: createRootBinder({ env: {}, home }), home })
   first.bind(LEAD, undefined)
   await first.readyFor(LEAD)
   await first.table.put(LEAD, record('keeper'))
 
-  // A second process on the same account: same root, and the file it finds is the truth.
-  const domain = domainWith({ [LEAD]: record('from-the-domain') })
-  const second = createRosterSource({ domainTable: domain, binder: createRootBinder({ env: {}, home }), home })
+  // A second process on the same account, with a seed naming a different member: the file it finds wins.
+  const seedPath = join(root, 'carried.json')
+  await writeFile(seedPath, JSON.stringify({ version: 1, serial: 1, rosters: { [LEAD]: record('carried') } }, null, 2), 'utf8')
+  const second = createRosterSource({ binder: createRootBinder({ env: {}, home }), home, seed: seedPath })
   second.bind(LEAD, undefined)
   await second.readyFor(LEAD)
 
-  assert.deepEqual(readRoster(second.table, LEAD).members.map((member) => member.name), ['keeper'], 'read from the file, not re-imported')
-  assert.deepEqual(domain.asked, [], 'and the domain was not even asked')
+  assert.deepEqual(readRoster(second.table, LEAD).members.map((member) => member.name), ['keeper'], 'read from the file, never re-seeded')
+  assert.equal(second.report(LEAD).imported_at, undefined, 'nothing was imported')
+  assert.equal(existsSync(join(frozen, PROVENANCE_FILE_NAME)), false, 'so no provenance was written')
   assert.equal(JSON.parse(await readFile(join(frozen, ROSTER_FILE_NAME), 'utf8')).rosters[LEAD].members[0].name, 'keeper')
 })
 
@@ -122,9 +148,8 @@ test('the seed still applies to the frozen root, and the provenance records it',
   const { root, home, frozen } = await homeOnly()
   const seedPath = join(root, 'carried.json')
   await writeFile(seedPath, JSON.stringify({ version: 1, serial: 1, rosters: { [LEAD]: record('carried') } }, null, 2), 'utf8')
-  const domain = domainWith({})
 
-  const source = createRosterSource({ domainTable: domain, binder: createRootBinder({ env: {}, home }), home, seed: seedPath })
+  const source = createRosterSource({ binder: createRootBinder({ env: {}, home }), home, seed: seedPath })
   source.bind(LEAD, undefined)
   await source.readyFor(LEAD)
 
@@ -132,31 +157,18 @@ test('the seed still applies to the frozen root, and the provenance records it',
   const provenance = JSON.parse(await readFile(join(frozen, PROVENANCE_FILE_NAME), 'utf8'))
   assert.equal(provenance.source, 'seed')
   assert.equal(provenance.path, seedPath)
-  assert.deepEqual(domain.asked, [], 'and the seed meant the domain was never asked')
-})
-
-test('the source order still reads a domain that has records, with no seed set', async () => {
-  const { home, frozen } = await homeOnly()
-  const domain = domainWith({ [LEAD]: record('legacy') })
-  const source = createRosterSource({ domainTable: domain, binder: createRootBinder({ env: {}, home }), home })
-
-  source.bind(LEAD, undefined)
-  await source.readyFor(LEAD)
-
-  assert.deepEqual(readRoster(source.table, LEAD).members.map((member) => member.name), ['legacy'], 'the legacy leg is demoted, not deleted')
-  assert.deepEqual(domain.asked, [LEAD], 'it is read once, for the import')
-  assert.deepEqual(domain.writes, [], 'and written never')
-  assert.equal(JSON.parse(await readFile(join(frozen, PROVENANCE_FILE_NAME), 'utf8')).source, 'team_roster', 'the provenance names the domain')
 })
 
 test('a frozen directory that cannot be created is a reported problem, not a throw', async () => {
   const root = await scratch()
   // `home` is a file, so `<home>/.dsh/team-roster` cannot be created: ENOTDIR, the shape of a read-only or
-  // badly mounted account directory.
+  // badly mounted account directory. The seed still has records to serve, so what is tested is that the
+  // failure to keep them is reported rather than thrown, and that the root is not abandoned for it.
   const home = join(root, 'home')
   await writeFile(home, 'not a directory\n', 'utf8')
-  const domain = domainWith({ [LEAD]: record('legacy') })
-  const source = createRosterSource({ domainTable: domain, binder: createRootBinder({ env: {}, home }), home })
+  const seedPath = join(root, 'carried.json')
+  await writeFile(seedPath, JSON.stringify({ version: 1, serial: 1, rosters: { [LEAD]: record('carried') } }, null, 2), 'utf8')
+  const source = createRosterSource({ binder: createRootBinder({ env: {}, home }), home, seed: seedPath })
 
   source.bind(LEAD, undefined)
   await source.readyFor(LEAD)
@@ -165,6 +177,5 @@ test('a frozen directory that cannot be created is a reported problem, not a thr
   assert.equal(report.source, 'file', 'the root is still resolved and named')
   assert.equal(report.path, join(frozenDataDir(home), ROSTER_FILE_NAME))
   assert.match(report.read_problem, /could not be written/, 'the failure is reported')
-  assert.deepEqual(readRoster(source.table, LEAD).members.map((member) => member.name), ['legacy'], 'and the records are still served')
-  assert.deepEqual(domain.writes, [], 'the domain did not become the destination just because the file could not be written')
+  assert.deepEqual(readRoster(source.table, LEAD).members.map((member) => member.name), ['carried'], 'and the records are still served')
 })

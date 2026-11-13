@@ -61,22 +61,6 @@ const carried = () => ({
   ],
 })
 
-/** A domain fake that counts what was asked of it, so "did not consult the domain" is checkable. */
-function domainWith(records = {}) {
-  const rows = new Map(Object.entries(records))
-  const asked = []
-  return {
-    asked,
-    get: (key) => {
-      asked.push(key)
-      return rows.get(key)
-    },
-    put: async (key, value) => { rows.set(key, value) },
-    update: async (key, mutate) => { const next = mutate(rows.get(key)); rows.set(key, next); return next },
-    entries: () => rows.entries(),
-  }
-}
-
 /** A context fake carrying what a roster read and a retirement touch. */
 function fakeCtx() {
   const lead = { id: LEAD, status: 'idle', session: { id: LEAD, header: {} } }
@@ -123,14 +107,12 @@ async function present({ shape, records = carried(), seed = true } = {}) {
 
 test('a new root is seeded from a carried roster file, and the provenance says so', async () => {
   const f = await present({ shape: 'roster' })
-  const domain = domainWith({})
-  const source = createRosterSource({ domainTable: domain, binder: f.binder, seed: f.seedPath, home: f.home })
+  const source = createRosterSource({ binder: f.binder, seed: f.seedPath, home: f.home })
   source.bind(LEAD, f.workspace)
   await source.readyFor(LEAD)
 
   const roster = readRoster(source.table, LEAD)
   assert.deepEqual(roster.members.map((member) => member.name), ['reviewer', 'scribe'], 'the carried records arrived')
-  assert.deepEqual(domain.asked, [], 'and the legacy domain was not asked at all')
 
   const provenance = JSON.parse(await readFile(f.provenanceFile, 'utf8'))
   assert.equal(provenance.source, 'seed', 'the provenance names the seed as the source')
@@ -142,7 +124,7 @@ test('a new root is seeded from a carried roster file, and the provenance says s
 
 test('a storage-domain dump works as a seed too, because that is what some users have', async () => {
   const f = await present({ shape: 'domain' })
-  const source = createRosterSource({ domainTable: domainWith({}), binder: f.binder, seed: f.seedPath, home: f.home })
+  const source = createRosterSource({ binder: f.binder, seed: f.seedPath, home: f.home })
   source.bind(LEAD, f.workspace)
   await source.readyFor(LEAD)
 
@@ -158,7 +140,7 @@ test('a root that already has a roster is not touched by a seed', async () => {
   await writeFile(f.rosterFile, JSON.stringify(own, null, 2), 'utf8')
   const before = await readFile(f.rosterFile, 'utf8')
 
-  const source = createRosterSource({ domainTable: domainWith({}), binder: f.binder, seed: f.seedPath, home: f.home })
+  const source = createRosterSource({ binder: f.binder, seed: f.seedPath, home: f.home })
   source.bind(LEAD, f.workspace)
   await source.readyFor(LEAD)
 
@@ -171,30 +153,29 @@ test('a root that already has a roster is not touched by a seed', async () => {
   const other = await present({ shape: 'roster' })
   await mkdir(other.dataDir, { recursive: true })
   await writeFile(other.rosterFile, JSON.stringify({ version: 1, serial: 2, updatedAt: 'x', rosters: { 'session-other': { leadSessionId: 'session-other', members: [] } } }, null, 2), 'utf8')
-  const second = createRosterSource({ domainTable: domainWith({}), binder: other.binder, seed: other.seedPath, home: other.home })
+  const second = createRosterSource({ binder: other.binder, seed: other.seedPath, home: other.home })
   second.bind(LEAD, other.workspace)
   await second.readyFor(LEAD)
   assert.deepEqual(readRoster(second.table, LEAD).members, [], 'a root that has a file is established; the seed is for a new one')
   assert.equal(existsSync(other.provenanceFile), false)
 })
 
-test('a seed that cannot be used is loud, and does not fall back to the domain', async () => {
+test('a seed that cannot be used is loud, and the root stays empty', async () => {
   const f = await present({ seed: false })
-  const domain = domainWith({ [LEAD]: carried() })
-  const source = createRosterSource({ domainTable: domain, binder: f.binder, seed: join(f.root, 'missing.json'), home: f.home })
+  const source = createRosterSource({ binder: f.binder, seed: join(f.root, 'missing.json'), home: f.home })
   source.bind(LEAD, f.workspace)
   await source.readyFor(LEAD)
 
   const report = source.report(LEAD)
   assert.match(report.read_problem, /does not exist/, 'the problem names the seed')
   assert.deepEqual(readRoster(source.table, LEAD).members, [], 'the root stays empty rather than borrowing records')
-  assert.deepEqual(domain.asked, [], 'and the domain — which does hold this Lead — was never asked')
+  assert.equal(existsSync(f.provenanceFile), false, 'and nothing claims an import that did not happen')
 })
 
 test('a seed whose records the loader refuses is a problem rather than a silent skip', async () => {
   const f = await present({ shape: 'roster' })
   await writeFile(f.seedPath, JSON.stringify({ version: 1, serial: 1, rosters: { [LEAD]: { leadSessionId: LEAD, members: 'not an array' } } }), 'utf8')
-  const source = createRosterSource({ domainTable: domainWith({}), binder: f.binder, seed: f.seedPath, home: f.home })
+  const source = createRosterSource({ binder: f.binder, seed: f.seedPath, home: f.home })
   source.bind(LEAD, f.workspace)
   await source.readyFor(LEAD)
 
@@ -206,7 +187,7 @@ test('an unbound Lead reports none, with both ways out, instead of an empty file
   const f = await present({ seed: false })
   // Never bound: this process has no root for the Lead. `storage` is the block the tool wrapper copies out
   // of `report`, which is where the source is decided.
-  const source = createRosterSource({ domainTable: domainWith({}), binder: f.binder, home: f.home })
+  const source = createRosterSource({ binder: f.binder, home: f.home })
   const { ctx, lead } = fakeCtx()
   const listed = await listMembers({ ctx, table: source.table, leadSessionId: LEAD, leadAgent: lead, dataDir: f.dataDir, hooks: hooks() })
   const storage = source.report(LEAD)
@@ -215,13 +196,11 @@ test('an unbound Lead reports none, with both ways out, instead of an empty file
   assert.match(storage.message, /working directory/)
   assert.match(storage.message, /DSH_TEAM_DATA_DIR/)
   assert.deepEqual(listed.members, [])
-  // A bound Lead is never in that state — the legacy leg's records reach a file through the import, which
-  // `tests/rooted.test.mjs` covers — so `none` is the answer for a read that arrived before the binding.
 })
 
 test('a seeded root runs the ordinary lifecycle: the member retires and comes back', async () => {
   const f = await present({ shape: 'roster' })
-  const source = createRosterSource({ domainTable: domainWith({}), binder: f.binder, seed: f.seedPath, home: f.home })
+  const source = createRosterSource({ binder: f.binder, seed: f.seedPath, home: f.home })
   source.bind(LEAD, f.workspace)
   await source.readyFor(LEAD)
   const { ctx, lead } = fakeCtx()

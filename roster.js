@@ -24,17 +24,18 @@ import { dirname, join } from 'node:path'
 import { DEFAULT_TRASH_LIMIT, locateTrashedArtifact, recordedTrashDir } from './trash.js'
 
 /**
- * Domain name: /^[a-z][a-z0-9_]*$/ per the storage facility.
+ * The two values `provenance.json`'s `source` has ever held.
  *
- * FROZEN at `team_roster` (ADR 0014). Do not rename it with the package: this string names where every
- * roster record and every tombstone already lives, and `restore_member` depends on tombstones. A new
- * domain name would be an empty domain, so a running profile would see no members and every retired
- * member would lose the tombstone that makes `restore_member` possible. Moving it needs a migration that
- * copies the old domain first, exactly as `LEGACY_DOMAIN_NAME` below did once; it is not a rename.
+ * `seed` is the file the user named with `DSH_TEAM_SEED`. `domain` is the name of the host domain records
+ * used to be imported from, FROZEN at `team_roster` (ADR 0014): nothing opens that domain any more
+ * (ADR 0031), so no new file can say it, but a `provenance.json` written by an earlier release does, and a
+ * reader must still be able to name what it says. It is a *value* — the frozen name of a facility the
+ * plugin no longer opens, injects or reads.
  */
-const DOMAIN_NAME = 'team_roster'
-/** The domain this plugin used before it was renamed; read once so an existing roster is not orphaned. */
-const LEGACY_DOMAIN_NAME = 'team_control'
+export const PROVENANCE_SOURCE = {
+  seed: 'seed',
+  domain: 'team_roster',
+}
 
 /** Lifecycle phases. `dormant` is deliberately absent: P4-01 needed no new phase, because an ephemeral
  * member keeps its phase and is retired by a lazy sweep once it has run and stopped (ADR 0013). */
@@ -464,8 +465,15 @@ export function reownerTasks(roster, from, to) {
   return { roster: { ...roster, tasks }, moved }
 }
 
-/** Validate one roster record. Throws on anything the roster cannot represent. */
-function parseRoster(value) {
+/**
+ * Validate one roster record. Throws on anything the roster cannot represent.
+ * Exported since the storage domain went: the domain's `valueSchema` used to be the only way a caller
+ * could reach this validator, and a test that writes a record straight into a file needs the same rule the
+ * loader applies — otherwise it asserts against a file the plugin would refuse.
+ * @param {unknown} value - one stored record.
+ * @returns {object} the same value, validated.
+ */
+export function parseRoster(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('roster must be an object')
   }
@@ -611,65 +619,28 @@ function parseRoster(value) {
   return value
 }
 
-/** The hand-built domain specification. `ROSTER_SPEC.name` is the frozen `team_roster` domain (ADR 0014). */
-export const ROSTER_SPEC = domainSpec(DOMAIN_NAME)
-
-/** Build the domain spec for one domain name; the shape is identical for the legacy domain. */
-function domainSpec(name) {
-  return {
-    name,
-    version: 1,
-    tables: {
-      rosters: { valueSchema: { parse: parseRoster } },
-    },
-  }
-}
-
-/**
- * Copy a roster from the pre-rename domain the first time the new domain is opened.
- * The legacy domain is left in place: if this copy is ever wrong, the source is still there.
- * @param ctx - plugin context, with `storageDomain` injected.
- * @param table - the new domain's roster table.
- */
-async function migrateLegacyRoster(ctx, table) {
-  for (const _existing of table.entries()) return
-  let legacy
-  try {
-    legacy = await ctx.storageDomain.open(domainSpec(LEGACY_DOMAIN_NAME))
-  } catch (error) {
-    return
-  }
-  try {
-    for (const [leadSessionId, roster] of legacy.table('rosters').entries()) {
-      await table.put(leadSessionId, roster)
-    }
-  } finally {
-    await legacy.close()
-  }
-}
-
 /**
  * Open the roster store for this process: each Lead's own file at its bound root, seeded for a new root
- * from the file the user named, with the storage domain as the legacy import source behind it.
- * @param ctx - plugin context, with `storageDomain` injected.
- * @param binder - the root binder from `trash.js`; `undefined` leaves every Lead on the legacy legs.
+ * from the file the user named.
+ *
+ * No host storage domain is opened, read or written. That facility was the import source and the rollback
+ * path while the records lived in it; they have lived in files since ADR 0027 and every Session has a root
+ * since ADR 0031, so the import leg's job is finished: a profile that still has a domain file left on disk
+ * can point `DSH_TEAM_SEED` at it, because a seed accepts a domain dump's shape as well as this plugin's.
+ * @param binder - the root binder from `trash.js`; every Lead is bound, so this is never undefined.
  * @param {{trashLimit?: number, seed?: string}} options - `trashLimit` is the effective retention cap the
  *   tombstone window is derived from, so the window cannot drift out of step with the cap that empties the
  *   trash; `seed` is `DSH_TEAM_SEED`, the file a new root reads its records from.
  * @returns the roster source: `{ table, bind, ready, readyFor, report }`.
  */
-export async function openRosterStore(ctx, binder, { trashLimit, seed = process.env[SEED_ENV] } = {}) {
-  const domain = await ctx.storageDomain.open(ROSTER_SPEC)
-  ctx.effect(() => () => domain.close(), 'team-roster.domainClose()')
-  const domainTable = domain.table('rosters')
-  await migrateLegacyRoster(ctx, domainTable)
-  return createRosterSource({ domainTable, binder, trashLimit, seed })
+export async function openRosterStore(binder, { trashLimit, seed = process.env[SEED_ENV] } = {}) {
+  return createRosterSource({ binder, trashLimit, seed })
 }
 
 /** The one file a workspace's rosters live in, under the bound root. */
 export const ROSTER_FILE_NAME = 'roster.json'
 
-/** The record of the one-time import from the storage domain: which Lead came across, and when. */
+/** The record of the one-time import into a root: which Lead came across, what it came from, and when. */
 export const PROVENANCE_FILE_NAME = 'provenance.json'
 
 /**
@@ -704,7 +675,13 @@ async function readJsonFile(file) {
   try {
     text = await readFile(file, 'utf8')
   } catch (error) {
-    if (error?.code === 'ENOENT') return { exists: false }
+    // `ENOENT` and `ENOTDIR` are both "there is no such file": the first is a missing component, the
+    // second a component that is not a directory — a data root whose parent is a file. Linux reports the
+    // two cases differently from Windows for the same input (a path under a file is ENOTDIR there and
+    // ENOENT here), and the caller must not get two different answers about whether a roster file exists:
+    // it decides from this whether a new root is seeded, so a platform difference here would mean a
+    // different roster. A path that is *there* and unreadable is still `exists: true`.
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false }
     return { exists: true, problem: `unreadable (${describeError(error)})` }
   }
   let value
@@ -882,16 +859,15 @@ async function readSeed(path) {
  *     file is absent and has just been imported from the domain. The domain is never written to once a
  *     root exists, and it is never deleted, so deleting `roster.json` puts a workspace back on it.
  *
- * @param {{domainTable?: object, binder?: object, renameFn?: Function, now?: () => string,
+ * @param {{binder?: object, renameFn?: Function, now?: () => string,
  *   trashLimit?: number, home?: string, seed?: string}} options -
- *   `domainTable` is the storage domain's roster table (the legacy import source), `binder` answers which
- *   root a Lead is bound to, `renameFn` is the atomic-replacement seam, `trashLimit` is the effective
- *   retention cap the tombstone window is derived from, `home` is the account directory the artifact
- *   chain's frozen leg resolves under, and `seed` is the file a new root is seeded from.
+ *   `binder` answers which root a Lead is bound to, `renameFn` is the atomic-replacement seam,
+ *   `trashLimit` is the effective retention cap the tombstone window is derived from, `home` is the
+ *   account directory the artifact chain's frozen leg resolves under, and `seed` is the file a new root is
+ *   seeded from.
  * @returns {{table: object, bind: Function, ready: Function, readyFor: Function, report: Function}}
  */
 export function createRosterSource({
-  domainTable,
   binder,
   renameFn = rename,
   now = () => new Date().toISOString(),
@@ -1014,36 +990,32 @@ export function createRosterSource({
   }
 
   /**
-   * Seed one Lead's record into a new root, or read the legacy legs when there is no seed.
+   * Seed one Lead's record into a new root.
    *
-   * The order is the seed, then the storage domain, then nothing:
+   * The source order is the seed, then nothing. There is no host storage domain behind it any more
+   * (ADR 0031): every Session has a root, so the domain's records reach a file on the first load of a
+   * release that still reads it, and a profile that skipped those releases points `DSH_TEAM_SEED` at the
+   * domain file it still has — a seed accepts that shape.
    *
-   *   - the **seed** is an explicit act by the user, so it wins, and it is read once per root;
-   *   - the **domain** is the legacy leg, read only, kept so a profile that has not set a seed keeps
-   *     working — including the case where the domain file has since been deleted, which simply leaves it
-   *     with nothing to offer;
-   *   - **nothing** is a legitimate answer, and `report` says so with the two ways out.
-   *
-   * A seed that is configured and unusable is a problem rather than a fallback to the domain: a typo in a
-   * path must be loud, because the alternative is quietly serving someone else's records. The root stays
-   * empty and `list_members` reports the reason.
-   * @returns {Promise<{record: object, origin: object}|{broken: true}|undefined>} the seeded record, the
-   *   refusal that stops the fallback, or nothing at all — in which case the legacy legs may be read.
+   * A seed that is configured and unusable is a problem, not a silent empty root: a typo in a path is the
+   * one failure a person cannot see from the outside. The root stays empty and `list_members` reports the
+   * reason.
+   * @returns {Promise<{record: object, origin: object}|undefined>} the seeded record, or nothing to import.
    */
   const seedFor = async (state, leadSessionId) => {
     if (state.existed === true) return undefined
     if (state.seed === undefined) state.seed = seed === undefined || seed === '' ? { absent: true } : await readSeed(seed)
     if (state.seed.problem !== undefined) {
       state.problem = state.seed.problem
-      return { broken: true }
+      return undefined
     }
     if (state.seed.rosters === undefined) return undefined
     const record = state.seed.rosters[leadSessionId]
-    return record === undefined ? undefined : { record, origin: { source: 'seed', path: state.seed.path } }
+    return record === undefined ? undefined : { record, origin: { source: PROVENANCE_SOURCE.seed, path: state.seed.path } }
   }
 
   /**
-   * Import one Lead's record into this root, once, from the seed or the storage domain.
+   * Import one Lead's record into this root, once, from the seed.
    *
    * This is the one write a load can make, and it is deliberately best-effort: the imported content is
    * served whether or not it reaches the disk, so a read-only workspace still answers with the Lead's
@@ -1053,11 +1025,8 @@ export function createRosterSource({
     await enqueue(state, async () => {
       if (state.content.rosters[leadSessionId] !== undefined) return
       const seeded = await seedFor(state, leadSessionId)
-      // The seed wins and the domain is not even asked; a broken seed stops here rather than falling
-      // through, so a typo in the path cannot look like a successful import of someone else's records.
-      const record = seeded?.record ?? (seeded?.broken === true ? undefined : domainTable?.get?.(leadSessionId))
-      if (record === undefined) return
-      const origin = seeded?.origin ?? { source: ROSTER_SPEC.name }
+      if (seeded === undefined) return
+      const { record, origin } = seeded
       state.content = {
         ...state.content,
         rosters: { ...state.content.rosters, [leadSessionId]: record },

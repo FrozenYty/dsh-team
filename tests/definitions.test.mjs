@@ -104,7 +104,6 @@ function toolHarness(ctx = fakeCtx()) {
     agents: { list: () => [scoped], get: () => scoped },
     agentTeams: { tryMembership: () => undefined, listMembers: () => [] },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
-    storageDomain: { open: async () => ({ table: () => memoryTable(), close: async () => {} }) },
     on: () => () => {},
     effect: (install) => {
       const dispose = install()

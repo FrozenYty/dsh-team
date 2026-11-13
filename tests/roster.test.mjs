@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { PHASE, ROSTER_SPEC, adoptMember, checkLabel, findAnyTarget, findByTarget, planMember, targetOf, withMember } from '../roster.js'
+import { PHASE, adoptMember, checkLabel, findAnyTarget, findByTarget, parseRoster, planMember, targetOf, withMember } from '../roster.js'
 
 const emptyRoster = () => ({ leadSessionId: 'lead-1', members: [] })
 
@@ -95,7 +95,7 @@ test('an addressable lookup skips a failed member that the any-phase lookup stil
 })
 
 test('a record that gives one target to two members is refused when it is loaded', () => {
-  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const parse = parseRoster
   const record = {
     leadSessionId: 'lead-1',
     members: [

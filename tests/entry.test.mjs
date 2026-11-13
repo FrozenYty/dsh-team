@@ -10,7 +10,6 @@ import { apply } from '../index.js'
 import { WAIT_TIMEOUT_MAX } from '../actions.js'
 import { ROSTER_FILE_NAME } from '../roster.js'
 import { TEAM_DIR } from '../trash.js'
-import { memoryTable } from './memory-table.mjs'
 
 /**
  * A minimal Host context that lets `apply` install the Lead-scoped tools, plus the tool definitions it
@@ -57,7 +56,6 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
   // is a fresh temporary workspace per harness, so two tests never share a roster file either.
   const workspace = join(tmpdir(), `dsh-team-entry-${randomUUID()}`)
   const table = rosterFile(workspace)
-  const domain = memoryTable()
   const leadSession = route === undefined
     ? { id: 'lead-1', header: { cwd: workspace } }
     : { id: 'lead-1', header: { cwd: workspace }, requestHeader: () => ({ config: route }) }
@@ -109,7 +107,6 @@ function harness({ tryMembership = () => undefined, listMembers = () => [], conf
         : undefined),
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
-    storageDomain: { open: async () => ({ table: () => domain, close: async () => {} }) },
     get: (name) => {
       if (name === 'workingDirectory' && cwd !== undefined) return { ensure: async () => cwd }
       // The service the plugin already declares as a hard dependency. `sessionController` is

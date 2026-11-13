@@ -4,10 +4,10 @@ import { test } from 'node:test'
 import { spawnMember, taskBoard } from '../actions.js'
 import {
   PHASE,
-  ROSTER_SPEC,
   TASK_BODY_MAX,
   TASK_STATUS,
   checkTaskBody,
+  parseRoster,
   readRoster,
   reownerTasks,
   tasksOf,
@@ -232,7 +232,7 @@ test('a stored body that no longer passes the read rules is reported and still s
   }))
   const record = readRoster(table, 'lead-1')
   assert.equal(
-    ROSTER_SPEC.tables.rosters.valueSchema.parse(record),
+    parseRoster(record),
     record,
     'the cap is a read rule, not a load rule: one Lead\'s long body still loads',
   )

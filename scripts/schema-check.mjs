@@ -303,15 +303,13 @@ export function checkSchemas({ validator, tools, results }) {
  * tools actually produced. The same shape the entry tests use; the calls are chosen to return, not throw.
  */
 async function collectFromBundle() {
-  const { memoryTable } = await import('../tests/memory-table.mjs')
   const { ROSTER_FILE_NAME } = await import('../roster.js')
   const { TEAM_DIR } = await import('../trash.js')
-  const table = memoryTable()
   const tools = new Map()
   const childTools = new Map()
-  // Every Session is bound to a data root now (ADR 0031), so the harness gives its Lead a workspace: a
-  // Session with no working directory would write its roster under the operator's real home directory, and
-  // the store would not be the thing this script drives.
+  // Every Session is bound to a data root (ADR 0031), so the harness gives its Lead a workspace: a Session
+  // with no working directory would write its roster under the operator's real home directory, and the store
+  // would not be the thing this script drives. Nothing here needs a storage domain — the bundle opens none.
   const workspace = await mkdtemp(join(tmpdir(), 'dsh-team-schema-'))
   const lead = {
     id: 'lead-1',
@@ -337,7 +335,6 @@ async function collectFromBundle() {
       getProvider: (name) => (name === 'spawn' ? { name, capabilities: { agentOptions: true, agentPreset: true } } : undefined),
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
-    storageDomain: { open: async () => ({ table: () => table, close: async () => {} }) },
     get: (name) => {
       if (name === 'agentTeams') return { tryMembership: () => undefined, listMembers: () => [] }
       // `compact_member` refuses without a backend; an empty one is enough for the "not resident" answer
@@ -376,9 +373,9 @@ async function collectFromBundle() {
     }
   }
   // The member-scoped read is its own declared shape: point the spawned row at the member Agent first. The
-  // records live in the roster file the tools just wrote (ADR 0027), not in the domain `table` above, so
-  // the patch is a second writer touching that file — and the store merges a change it did not write at its
-  // next write, which is why a write follows it here before the member read.
+  // records live in the roster file the tools just wrote, so the patch is a second writer touching that
+  // file — and the store merges a change it did not write at its next write, which is why a write follows
+  // it here before the member read.
   const rosterFile = join(workspace, TEAM_DIR, ROSTER_FILE_NAME)
   const stored = JSON.parse(await readFile(rosterFile, 'utf8'))
   const own = stored.rosters['lead-1']
