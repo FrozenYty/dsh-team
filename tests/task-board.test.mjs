@@ -11,13 +11,13 @@ import {
 } from '../actions.js'
 import {
   PHASE,
-  ROSTER_SPEC,
   TASK_LIMIT,
   TASK_STATUS,
   TASK_TITLE_MAX,
   checkTaskTitle,
   findAnyTarget,
   openTasksOf,
+  parseRoster,
   planTask,
   readRoster,
   tasksOf,
@@ -229,7 +229,7 @@ test('a task_board call refuses what it cannot act on instead of guessing', asyn
 })
 
 test('a stored task that no longer passes the read rules is reported, and never hides the roster', () => {
-  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const parse = parseRoster
   const oversized = { id: 't1', title: 'z'.repeat(TASK_TITLE_MAX + 40), status: TASK_STATUS.open }
   const record = { leadSessionId: 'lead-1', members: [], tasks: [oversized] }
   // The storage facility validates every record when it opens the domain, so a content rule here would

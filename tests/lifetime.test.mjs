@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { listMembers, messageMember, retireMember, spawnMember, taskBoard } from '../actions.js'
-import { LIFETIME, PHASE, ROSTER_SPEC, declaredLifetime, lifetimeOf, planMember, readRoster, updateRoster } from '../roster.js'
+import { LIFETIME, PHASE, declaredLifetime, lifetimeOf, parseRoster, planMember, readRoster, updateRoster } from '../roster.js'
 import { memoryTable } from './memory-table.mjs'
 
 /**
@@ -661,7 +661,7 @@ test('a re-tasked one-shot member is flagged as probably standing, and is never 
 // ---------------------------------------------------------------------------------------------
 
 test('the lifetime fields are validated when a record is loaded, and older records still load', () => {
-  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const parse = parseRoster
   const record = { leadSessionId: 'lead-1', members: [] }
   assert.equal(parse(record), record, 'a record written before v0.9 loads unchanged')
   for (const [field, value, message] of [

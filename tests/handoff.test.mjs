@@ -11,7 +11,7 @@ import {
   HANDOFF_TEMPLATE_MAX,
   LABEL_MAX,
   PHASE,
-  ROSTER_SPEC,
+  parseRoster,
   checkAssignment,
   findAnyTarget,
   planMember,
@@ -102,7 +102,7 @@ test('an assignment is stored on the record and capped', () => {
       assignment: 'y'.repeat(ASSIGNMENT_MAX),
     }],
   }
-  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const parse = parseRoster
   assert.equal(parse(record), record)
   record.members[0].assignment = 'y'.repeat(ASSIGNMENT_MAX + 1)
   assert.throws(() => parse(record), /exceeds/)
@@ -356,7 +356,7 @@ test('clearing the template returns that Lead to the built-in brief', async () =
 })
 
 test('a stored template must be a string for the record to load', () => {
-  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const parse = parseRoster
   const record = { leadSessionId: 'lead-1', members: [], handoffTemplate: 'You are {successor}: {assignment}' }
   assert.equal(parse(record), record)
   record.handoffTemplate = 42

@@ -6,7 +6,7 @@ import { basename, isAbsolute, join } from 'node:path'
 import { test } from 'node:test'
 
 import { retireMember, restoreMember } from '../actions.js'
-import { PHASE, ROSTER_SPEC, TRASH_STATE, planMember, readRoster, updateRoster } from '../roster.js'
+import { PHASE, TRASH_STATE, parseRoster, planMember, readRoster, updateRoster } from '../roster.js'
 import { DEFAULT_TRASH_LIMIT, TRASH_LIMIT_MINIMUM, parseTrashDirName, pruneLeadTrash, resolveTrashLimit } from '../trash.js'
 import { memoryTable } from './memory-table.mjs'
 
@@ -475,7 +475,7 @@ test('a pruned tombstone refuses restore and the workspace is never called', asy
 })
 
 test('a pruned tombstone is a legal stored record and an unknown trash state is not', () => {
-  const parse = ROSTER_SPEC.tables.rosters.valueSchema.parse
+  const parse = parseRoster
   const stored = {
     leadSessionId: 'lead-1',
     members: [record({

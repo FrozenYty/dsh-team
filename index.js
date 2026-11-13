@@ -56,9 +56,10 @@
  * objects, which is exactly the `ToolDefinition` shape the registry consumes (`ctx.tools.register`
  * checks `output.schema` + `output.render` and projects `parameters` straight to the model).
  *
- * The plugin writes no session events. Its durable state is the plugin's own `roster.json` under the
- * workspace root the Lead bound (`docs/roster-storage-en.md` §4); the `team_roster` storage domain is the
- * one-time import source and the rollback path, not the record (ADR 0003, superseded by ADR 0027).
+ * The plugin writes no session events. Its durable state is the plugin's own `roster.json` under the root
+ * the Lead bound — its workspace, an override, or the frozen `<home>/.dsh/team-roster` — and nothing else:
+ * no host storage domain is opened, read or written (ADR 0031). A profile that still has a domain file on
+ * disk points `DSH_TEAM_SEED` at it, which is what the seed's second accepted shape is for.
  *
  * CONFIGURATION
  * The one tunable is the per-Lead session-trash cap, carried by the `trashLimit` field of this bundle's
@@ -103,7 +104,7 @@ import { createRootBinder, resolveDataDir, resolveTrashLimit } from './trash.js'
 
 export const name = 'dsh-team'
 
-export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'storageDomain', 'subagents']
+export const inject = ['agents', 'agentTeams', 'tools', 'tokenMeter', 'subagents']
 
 /** The stand-in for a hook that is not installed: calls the same shape, does nothing. */
 const NOOP = () => {}
@@ -1463,7 +1464,7 @@ export function apply(ctx, config) {
   const binder = createRootBinder()
   // The storage facility is the import source and the rollback path; a rejected open surfaces as a tool
   // error on first use instead of an unhandled rejection at load.
-  const source = openRosterStore(ctx, binder, { trashLimit })
+  const source = openRosterStore(binder, { trashLimit })
   source.catch(() => undefined)
   // The panel overlay reads the roster synchronously at each outgoing frame, so it takes whatever is
   // loaded at that moment rather than suspending a host stream on a promise this plugin does not own.

@@ -1,10 +1,11 @@
 /**
  * The roster file this plugin owns.
  *
- * The storage domain is the import source and the rollback path; the bytes live at the workspace root
- * the Lead is bound to. Every test here is one acceptance statement of T2, and the import test runs on a
- * verbatim copy of the real domain file (`tests/fixtures/team_roster.json`) rather than on a fixture
- * invented for the purpose — the numbers it asserts are the ones the plan measured on the live data.
+ * The bytes live at the root the Lead is bound to. There is no host storage domain behind them any more
+ * (ADR 0031), so nothing here passes a fake domain table: a profile whose records lived only in a domain
+ * file points `DSH_TEAM_SEED` at it, and the strongest test this file has is that the real dump — the
+ * verbatim copy of what the domain held, `tests/fixtures/team_roster.json` — seeds a new root through that
+ * escape hatch, with the numbers the plan measured on the live data.
  */
 
 import assert from 'node:assert/strict'
@@ -13,12 +14,14 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   ARCHIVE_FILE_NAME,
   ARCHIVE_REASON,
   PHASE,
   PROVENANCE_FILE_NAME,
+  PROVENANCE_SOURCE,
   ROSTER_FILE_NAME,
   createRosterSource,
   planMember,
@@ -29,41 +32,10 @@ import { TEAM_DIR, createRootBinder } from '../trash.js'
 
 const scratch = () => mkdtemp(join(tmpdir(), 'dsh-team-store-'))
 
-/** The real domain, copied verbatim: 2 Leads, 110 records, 94 of them carrying a trash path. */
+/** The real domain's contents, copied verbatim: 2 Leads, 110 records, 94 of them carrying a trash path. */
 const FIXTURE = new URL('./fixtures/team_roster.json', import.meta.url)
 const REAL_LEAD = 'session-83a0217f-450d-41db-9fb1-b78e4ff9ecc4'
 const OTHER_LEAD = 'session-bb909ae6-0d64-415a-ac99-510dff3b74c2'
-
-/**
- * A storage-domain fake with the table methods the store may reach, and a count of the writes, because
- * half of these tests are about the domain *not* being written to.
- */
-function domainTable(records = {}) {
-  const rows = new Map(Object.entries(records))
-  const writes = { put: 0, update: 0 }
-  return {
-    writes,
-    get: (key) => rows.get(key),
-    put: async (key, value) => {
-      writes.put += 1
-      rows.set(key, value)
-    },
-    update: async (key, mutate) => {
-      if (!rows.has(key)) throw new Error(`no record "${key}" to update`)
-      writes.update += 1
-      const next = mutate(rows.get(key))
-      rows.set(key, next)
-      return next
-    },
-    entries: () => rows.entries(),
-  }
-}
-
-/** The copied real domain as a domain table. */
-async function realDomain() {
-  const parsed = JSON.parse(await readFile(FIXTURE, 'utf8'))
-  return domainTable(parsed.tables.rosters)
-}
 
 /** One valid member record, shaped by the same planner a spawn uses. */
 function member(overrides = {}) {
@@ -77,7 +49,7 @@ test('a new Lead\'s data lands under the workspace and nothing new is written un
   const root = await scratch()
   const workspace = join(root, 'workspace')
   const home = join(root, 'home')
-  const source = createRosterSource({ domainTable: domainTable(), binder: workspaceBinder(home) })
+  const source = createRosterSource({ binder: workspaceBinder(home) })
 
   assert.equal(source.bind('lead-1', workspace), join(workspace, TEAM_DIR), 'the root is the workspace\'s own directory')
   await source.readyFor('lead-1')
@@ -90,7 +62,7 @@ test('a new Lead\'s data lands under the workspace and nothing new is written un
   assert.deepEqual(source.report('lead-1'), { source: 'file', path: file })
 })
 
-test('the real domain imports once, and the marker records what came across', async () => {
+test('the real domain dump seeds a new root through the escape hatch, and the marker records what came across', async () => {
   const parsed = JSON.parse(await readFile(FIXTURE, 'utf8'))
   const rosters = parsed.tables.rosters
   // The fixture is the live file, so these are the measured numbers of the plan's §1 and §2, not invented.
@@ -103,10 +75,10 @@ test('the real domain imports once, and the marker records what came across', as
   const root = await scratch()
   const workspace = join(root, 'workspace')
   const home = join(root, 'home')
-  const domain = await realDomain()
+  // The domain's own shape, read as a seed: the file the user still has is not stranded data.
   // `home` is passed so the artifact chain's frozen leg reads this fixture, not the machine's real trash
   // directory: the fixture's records carry absolute paths from the live machine.
-  const source = createRosterSource({ domainTable: domain, binder: workspaceBinder(home), home })
+  const source = createRosterSource({ binder: workspaceBinder(home), home, seed: fileURLToPath(FIXTURE) })
   source.bind(REAL_LEAD, workspace)
   await source.readyFor(REAL_LEAD)
 
@@ -117,7 +89,6 @@ test('the real domain imports once, and the marker records what came across', as
   assert.equal(imported.members.filter((entry) => entry.phase === PHASE.retired).length, 21)
   assert.equal(imported.tasks.length, 3)
   assert.equal(imported.retiredChildIds.length, 95, 'every retired id is kept, archived or not')
-  assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'the domain is the source, never the destination')
 
   const archived = (await readFile(join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME), 'utf8')).trim().split('\n')
   assert.equal(archived.length, 74, 'the 74 tombstones past the window are in the archive')
@@ -126,43 +97,45 @@ test('the real domain imports once, and the marker records what came across', as
   assert.equal(JSON.parse(archived[0]).member.phase, PHASE.retired, 'each line is the full tombstone')
 
   const marker = JSON.parse(await readFile(join(workspace, TEAM_DIR, PROVENANCE_FILE_NAME), 'utf8'))
-  assert.equal(marker.source, 'team_roster', 'the marker names the domain it came from')
+  assert.equal(marker.source, PROVENANCE_SOURCE.seed, 'the marker names the seed it came from')
+  assert.equal(marker.path, fileURLToPath(FIXTURE), 'and the path, because that is what a reader needs to check')
   assert.equal(marker.leads[REAL_LEAD].members, 100, 'and records what came across, not what the window kept')
   assert.equal(marker.leads[REAL_LEAD].tasks, 3)
   assert.equal(typeof marker.leads[REAL_LEAD].importedAt, 'string', 'and when it was imported')
   assert.equal(source.report(REAL_LEAD).imported_at, marker.leads[REAL_LEAD].importedAt)
 
-  // The import is one-time because the file is now the record: a second load with an empty domain still
+  // The import is one-time because the file is now the record: a second load with no seed at all still
   // serves the Lead, which is only possible if the records came from the file.
-  const second = createRosterSource({ domainTable: domainTable(), binder: workspaceBinder(home), home })
+  const second = createRosterSource({ binder: workspaceBinder(home), home })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
-  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'read from the file, with no domain at all')
+  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'read from the file, with no seed and no domain')
 })
 
-test('with the roster file deleted the domain is the source again, and the plugin keeps working', async () => {
+test('with the roster file deleted the seed refills a new root, and the plugin keeps working', async () => {
   const root = await scratch()
   const workspace = join(root, 'workspace')
   const home = join(root, 'home')
   const file = join(workspace, TEAM_DIR, ROSTER_FILE_NAME)
-  const first = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
+  const seed = fileURLToPath(FIXTURE)
+  const first = createRosterSource({ binder: workspaceBinder(home), home, seed })
   first.bind(REAL_LEAD, workspace)
   await first.readyFor(REAL_LEAD)
   assert.equal(existsSync(file), true)
 
-  // Rollback is one deletion: the domain is never written and never deleted, so it is still the source.
+  // Rollback is one deletion: the seed is read again, so the root is not left empty.
   await rm(file)
-  const second = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
+  const second = createRosterSource({ binder: workspaceBinder(home), home, seed })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
-  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'served from the domain again, bounded again')
+  assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'seeded again, bounded again')
 
   await updateRoster(second.table, REAL_LEAD, (roster) => ({ ...roster, handoffTemplate: '{successor} {predecessor} {label} {assignment} {task_board}' }))
   assert.equal(readRoster(second.table, REAL_LEAD).handoffTemplate, '{successor} {predecessor} {label} {assignment} {task_board}')
   assert.equal(existsSync(file), true, 'and the file is written again from there')
 })
 
-test('a roster file that cannot be used falls back to the domain instead of throwing', async () => {
+test('a roster file that cannot be used is reported, and the root stays usable', async () => {
   const root = await scratch()
   const home = join(root, 'home')
 
@@ -170,18 +143,20 @@ test('a roster file that cannot be used falls back to the domain instead of thro
   const truncated = join(root, 'truncated', TEAM_DIR)
   await mkdir(truncated, { recursive: true })
   await writeFile(join(truncated, ROSTER_FILE_NAME), '{"version":1,"serial":4,"rosters":{"lead-1":')
-  const source = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
+  const source = createRosterSource({ binder: workspaceBinder(home), home, seed: fileURLToPath(FIXTURE) })
   source.bind(REAL_LEAD, join(root, 'truncated'))
   await source.readyFor(REAL_LEAD)
-  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 26, 'the domain answers instead, and the import is bounded')
-  assert.match(source.report(REAL_LEAD).read_problem, /not valid JSON/)
+  assert.match(source.report(REAL_LEAD).read_problem, /not valid JSON/, 'the file is reported rather than ignored')
+  assert.deepEqual(readRoster(source.table, REAL_LEAD).members, [], 'and a file that exists is the root: the seed does not overwrite it')
+  // A write repairs it, so the Lead keeps working from an empty roster rather than being stuck.
+  await updateRoster(source.table, REAL_LEAD, () => ({ leadSessionId: REAL_LEAD, members: [] }))
   assert.deepEqual(
     Object.keys(JSON.parse(await readFile(join(truncated, ROSTER_FILE_NAME), 'utf8')).rosters),
     [REAL_LEAD],
-    'and the file is rebuilt from what the domain served',
+    'and the file is rebuilt by the next write',
   )
 
-  // A complete document holding one record the loader refuses: the domain refuses the whole file rather
+  // A complete document holding one record the loader refuses: the loader refuses the whole file rather
   // than putting a malformed record in front of every tool, and this does the same.
   const invalid = join(root, 'invalid', TEAM_DIR)
   await mkdir(invalid, { recursive: true })
@@ -190,10 +165,10 @@ test('a roster file that cannot be used falls back to the domain instead of thro
     serial: 2,
     rosters: { 'lead-9': { leadSessionId: 'lead-9', members: 'not an array' } },
   }))
-  const other = createRosterSource({ domainTable: await realDomain(), binder: workspaceBinder(home), home })
+  const other = createRosterSource({ binder: workspaceBinder(home), home })
   other.bind(REAL_LEAD, join(root, 'invalid'))
   await other.readyFor(REAL_LEAD)
-  assert.equal(readRoster(other.table, REAL_LEAD).members.length, 26, 'and that import is bounded like any other')
+  assert.deepEqual(readRoster(other.table, REAL_LEAD).members, [], 'the good Lead\'s record is refused with the file, not served beside it')
   assert.match(other.report(REAL_LEAD).read_problem, /record "lead-9" is invalid/)
 })
 
@@ -212,7 +187,6 @@ test('a crash between the temporary write and the rename leaves the previous fil
   await writeFile(file, seeded)
 
   const crashing = createRosterSource({
-    domainTable: domainTable(),
     binder: workspaceBinder(join(root, 'home')),
     renameFn: async () => { throw new Error('crash between the write and the rename') },
   })
@@ -231,7 +205,7 @@ test('a crash between the temporary write and the rename leaves the previous fil
 test('moving the folder and pointing the configured root at it changes no record', async () => {
   const root = await scratch()
   const home = join(root, 'home')
-  const first = createRosterSource({ domainTable: domainTable(), binder: workspaceBinder(home) })
+  const first = createRosterSource({ binder: workspaceBinder(home) })
   first.bind('lead-1', join(root, 'ws-a'))
   await first.readyFor('lead-1')
   await updateRoster(first.table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [member()] }))
@@ -244,7 +218,7 @@ test('moving the folder and pointing the configured root at it changes no record
   // The operator moved the folder and pointed a profile at it. The working directory is now somewhere
   // else entirely; the configured root is the answer, and no record has to be rewritten to follow it.
   const binder = createRootBinder({ env: { DSH_TEAM_DATA_DIR: moved }, home })
-  const moved_ = createRosterSource({ domainTable: domainTable(), binder })
+  const moved_ = createRosterSource({ binder })
   assert.equal(moved_.bind('lead-1', join(root, 'ws-b')), moved, 'the configured root outranks the working directory')
   await moved_.readyFor('lead-1')
   assert.equal(readRoster(moved_.table, 'lead-1').members.length, 1, 'the records came with the folder')
@@ -267,7 +241,7 @@ test('a Lead keeps the root it bound when its working directory changes mid-sess
   assert.equal(binder.bind('lead-1', join(root, 'ws-b')), bound, 'the bound root does not move')
   assert.equal(binder.rootOf('lead-1'), bound)
 
-  const source = createRosterSource({ domainTable: domainTable(), binder })
+  const source = createRosterSource({ binder })
   await source.readyFor('lead-1')
   await updateRoster(source.table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [member()] }))
   assert.equal(readRoster(source.table, 'lead-1').members.length, 1, 'its data is where it bound it')
@@ -281,7 +255,7 @@ test('a change this process did not write is merged, and reported as a second wr
   const root = await scratch()
   const workspace = join(root, 'workspace')
   const home = join(root, 'home')
-  const source = createRosterSource({ domainTable: domainTable(), binder: workspaceBinder(home) })
+  const source = createRosterSource({ binder: workspaceBinder(home) })
   source.bind('lead-1', workspace)
   await source.readyFor('lead-1')
   await updateRoster(source.table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [member()] }))
@@ -305,21 +279,19 @@ test('a change this process did not write is merged, and reported as a second wr
   assert.match(source.report('lead-1').message, /one writer per workspace/)
 })
 
-test('a Session with no workspace gets the frozen directory as its root, and the domain is never written', async () => {
+test('a Session with no workspace gets the frozen directory as its root, and writes there', async () => {
   const root = await scratch()
   const home = join(root, 'home')
   const frozen = join(home, '.dsh', 'team-roster')
-  const domain = await realDomain()
-  const source = createRosterSource({ domainTable: domain, binder: workspaceBinder(home) })
+  const source = createRosterSource({ binder: workspaceBinder(home) })
 
   assert.equal(source.bind(REAL_LEAD, undefined), frozen, 'a Session always has a root: the frozen one, when there is no workspace')
   await source.readyFor(REAL_LEAD)
-  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 26, 'the legacy domain is the source order behind the seed, and lands in that file')
+  await updateRoster(source.table, REAL_LEAD, () => ({ leadSessionId: REAL_LEAD, members: [member()] }))
   assert.equal(source.report(REAL_LEAD).source, 'file')
   assert.equal(source.report(REAL_LEAD).path, join(frozen, ROSTER_FILE_NAME), 'and the report says which file')
-  assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'the domain is history now: nothing was written to it')
+  assert.equal(readRoster(source.table, REAL_LEAD).members.length, 1, 'the record is served from the file it was written to')
 
   await updateRoster(source.table, REAL_LEAD, (roster) => ({ ...roster, handoffTemplate: '{successor} {predecessor} {label} {assignment} {task_board}' }))
   assert.equal(JSON.parse(await readFile(join(frozen, ROSTER_FILE_NAME), 'utf8')).rosters[REAL_LEAD].handoffTemplate, '{successor} {predecessor} {label} {assignment} {task_board}', 'the write went to the frozen file')
-  assert.deepEqual(domain.writes, { put: 0, update: 0 }, 'and still not to the domain')
 })

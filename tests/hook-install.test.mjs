@@ -12,6 +12,7 @@
 
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,7 +21,8 @@ import { test } from 'node:test'
 import { apply } from '../index.js'
 import { restoreMember, retireMember } from '../actions.js'
 import { installRosterFilter } from '../host-hooks.js'
-import { PHASE, planMember, updateRoster } from '../roster.js'
+import { PHASE, ROSTER_FILE_NAME, planMember, updateRoster } from '../roster.js'
+import { TEAM_DIR } from '../trash.js'
 import { memoryTable } from './memory-table.mjs'
 
 const teamPayload = () => ({
@@ -32,8 +34,7 @@ const teamPayload = () => ({
 })
 
 /** One tombstoned member of this Lead, whose recorded child id is the one the payloads carry. */
-function seededTable() {
-  const table = memoryTable()
+function seededRoster() {
   const retired = {
     ...planMember({ leadSessionId: 'lead-1', members: [] }, 'probe', 'Probe'),
     childId: 'gone',
@@ -41,8 +42,7 @@ function seededTable() {
     retiredAt: new Date(0).toISOString(),
     archived: false,
   }
-  table.put('lead-1', { leadSessionId: 'lead-1', members: [retired] })
-  return table
+  return { 'lead-1': { leadSessionId: 'lead-1', members: [retired] } }
 }
 
 /**
@@ -51,8 +51,11 @@ function seededTable() {
  * `inject` mirrors the real contract: the callback runs when every named service is provided, and the
  * returned disposer runs when the gate unloads. It activates synchronously where Cordis activates a
  * microtask later — nothing observes that difference — so a test reads the result without a sleep.
+ *
+ * `seed` is the roster the Lead already has: the store serves files, so it is written into the workspace's
+ * own `roster.json` before `apply` runs. There is no storage domain to seed any more.
  */
-function fakeHost({ agentTeams, sessionController, table = seededTable() } = {}) {
+function fakeHost({ agentTeams, sessionController, seed = seededRoster() } = {}) {
   const services = new Map()
   const subscriptions = []
   const tools = new Map()
@@ -61,6 +64,12 @@ function fakeHost({ agentTeams, sessionController, table = seededTable() } = {})
   // real home directory — which a test must never touch. A production session always has one; here it is a
   // fresh temporary workspace per host, so two tests never share a roster file either.
   const workspace = join(tmpdir(), `dsh-team-hook-${randomUUID()}`)
+  mkdirSync(join(workspace, TEAM_DIR), { recursive: true })
+  writeFileSync(
+    join(workspace, TEAM_DIR, ROSTER_FILE_NAME),
+    `${JSON.stringify({ version: 1, serial: 1, updatedAt: new Date(0).toISOString(), rosters: seed }, null, 2)}\n`,
+    'utf8',
+  )
   const lead = {
     id: 'lead-1',
     status: 'idle',
@@ -91,7 +100,6 @@ function fakeHost({ agentTeams, sessionController, table = seededTable() } = {})
       getProvider: (name) => ({ name, capabilities: { agentOptions: true, agentPreset: true } }),
     },
     tokenMeter: { contextPressure: () => ({ pressureTokens: 0, contextWindow: 0 }) },
-    storageDomain: { open: async () => ({ table: () => table, close: async () => {} }) },
     get: (name) => services.get(name),
     inject: (names, callback) => {
       const entry = { names, callback, ran: false, dispose: undefined }
@@ -113,7 +121,7 @@ function fakeHost({ agentTeams, sessionController, table = seededTable() } = {})
   services.set('agentTeams', agentTeams)
   const host = {
     ctx,
-    table,
+    workspace,
     tools,
     lead,
     child,
@@ -173,7 +181,7 @@ test('a hook whose service is absent at load installs when the service appears, 
 test('a hook whose service never appears reports absent, and every tool keeps working', async () => {
   // The shape a host without the Web layer presents: `agentTeams` is there because this plugin requires
   // it, but it carries neither the roster read nor the member budget.
-  const host = fakeHost({ agentTeams: { tryMembership: () => undefined }, table: memoryTable() })
+  const host = fakeHost({ agentTeams: { tryMembership: () => undefined }, seed: {} })
   apply(host.ctx, {})
 
   const listed = await host.list()
