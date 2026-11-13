@@ -75,6 +75,8 @@ import {
   restoreSessionArtifact,
   sessionsRootFromReport,
   sessionsRootFromSibling,
+  measureLeadTrash,
+  trashHorizon,
 } from './trash.js'
 
 /**
@@ -1081,6 +1083,7 @@ export async function listMembers({
   const archivedRecords = archivedCount(roster)
   // The archive is opened only here, only under the flag, and only one of the two ways (ADR 0030, 0036): a
   // lookup by identity scans the whole history for one record, a plain flagged read takes the newest window.
+  const trash = await measureLeadTrash({ trashRoot: join(dataDir ?? resolveDataDir(), 'trash', leadSessionId), limit: trashLimit })
   let read
   if (archived) {
     read = archivedTarget === undefined
@@ -1131,6 +1134,11 @@ export async function listMembers({
     // two are read from the file and the record respectively, which is why they are two numbers. A lookup
     // adds the scan's own cost, because reading a whole file to answer with one row is what the lookup
     // spends and `archived_scanned` is where it says so (ADR 0036).
+    // What the trash costs, so the cap can be chosen rather than inherited (ADR 0039). A zero here is a
+    // measurement — this Lead has no trash yet — which is why the fields are always present, unlike a spend.
+    trash_count: trash.count,
+    trash_bytes: trash.bytes,
+    trash_limit: trashLimit,
     ...(read === undefined ? {} : {
       archived_returned: foundRecords.length,
       archived_total: read.total,
@@ -2221,6 +2229,9 @@ export async function retireMember({
   if (pruned > 0) {
     value.message += ` Retention removed ${pruned} older ${pruned === 1 ? 'artifact' : 'artifacts'} from this Lead's trash: it keeps at most ${trashLimit}, oldest first, because the platform offers no Session deletion of its own (ADR 0011, ADR 0012).`
   }
+  // The window, stated at the moment the decision is made rather than after the bytes are gone (ADR 0039).
+  value.message += ` ${trashHorizon(trashLimit)}`
+  value.trash_limit = trashLimit
   // The result still reports one absolute path: where the artifact went is what a reader acts on, and
   // for a record written from this release that path is computed here rather than stored.
   const trashPath = recordedTrashPath({ record, leadSessionId, dataDir })
@@ -2314,7 +2325,7 @@ export async function restoreMember({ ctx, table, leadSessionId, target, hooks, 
       target: targetOf(member),
       restored: false,
       reason: 'pruned',
-      message: `"${target}" was pruned by the trash retention cap: the artifact at ${where} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue.${notice}`,
+      message: `"${target}" was pruned by the trash retention cap: the artifact at ${where} is gone, so the record stays retired. Start a successor with spawn_member if the work must continue. ${trashHorizon(DEFAULT_TRASH_LIMIT)}${notice}`,
       ...fields,
     }
   }

@@ -3590,3 +3590,39 @@
   read the real function instead of writing from the brief's description of it. **A discrepancy reported is
   worth more than one silently reconciled**, because the second kind cannot be distinguished from a mistake.
 - **Version.** `0.39.1`: one clause, one check rewritten, and a document corrected by the person it misled.
+
+## 2026-11-14 — the trash keeps 200 by default, its cost is reported, and the window arrives with the decision (v0.40.0)
+
+- **The default moved because of a measurement, and the comment carries the reason rather than the number**:
+  twenty trash directories occupy 4.2 MB here — 210 KB average, largest 467 KB — so two hundred is about 41 MB
+  against 616 GB free, while what the cap destroys cannot be undone. **A default belongs on the generous side
+  when the failure is irreversible and the cost is a rounding error.** It is still a default: the patch row's
+  `trashLimit` remains the authority.
+- **The cost is visible and the window arrives with the decision.** `list_members` reports `trash_count`,
+  `trash_bytes` and `trash_limit`, always present — **here a zero is a measurement, the deliberate opposite of
+  the spend field's rule**, and the description says why. `retire_member` and `restore_member` carry the horizon
+  in their answers as well as their descriptions, so the number reaches the person deciding instead of arriving
+  later as a refusal.
+- **The release was sent back once, and that is its real content.** The first version had the behaviour and
+  **four acceptance criteria that existed only as behaviour**: the suite stayed at 322 and not one assertion
+  touched the change. **A behaviour change that does not move the test count is a warning, not a comfort** —
+  and the member named the gap itself before I looked, which is the only reason the round cost one turn instead
+  of shipping an unverified default.
+- **Then the assertions it wrote turned out to be vacuous, and the tell was a probe that passed.** The bytes
+  assertion compared the implementation's sum against a local walk — strong in appearance — but the fixture read
+  `for (const [index, bytes] of [[0, 3], [1, 7]].entries())`, so `bytes` was the array, `'x'.repeat([0, 3])`
+  became `repeat(NaN)` → **0**, and both sides computed zero: `0 === 0`, true whatever the code did. **The
+  member reported "it passed and I could not explain why" instead of quietly accepting the green**, and that
+  sentence is what made it findable. The fix pins an explicit total (`3 + 7 === 10`) beside the independent
+  walk, because **an assertion comparing two computations can go vacuous on both sides at once**, and I ran the
+  probe myself to see `0 !== 10` before believing it.
+- **A test written against what the code says beats one written from a brief's memory of it**: the horizon
+  wording in the *answers* differs from the descriptions, and the new assertion caught that by failing on its
+  first run rather than by someone noticing later.
+- **Named limits, recorded rather than implied**: the measured figures are not re-derived by any test — they are
+  facts about this machine, carried in the constant's comment and in ADR 0039; the walk's **bound has no direct
+  test by decision**, because counting `stat` calls would bind the test to the implementation while the raised-cap
+  test already covers the semantics, and that reason lives in the test file; and `trash_bytes` is verified only in
+  the two-artifact-one-file shape, so nested, empty and unreadable entries contribute zero **without an
+  assertion holding them to it**.
+- **Version.** `0.40.0`: one default, three fields, one horizon, and a round that was worth sending back.

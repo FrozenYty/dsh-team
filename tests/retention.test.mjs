@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
 import { test } from 'node:test'
 
-import { retireMember, restoreMember } from '../actions.js'
+import { listMembers, retireMember, restoreMember } from '../actions.js'
 import { PHASE, TRASH_STATE, parseRoster, planMember, readRoster, updateRoster } from '../roster.js'
 import { DEFAULT_TRASH_LIMIT, TRASH_LIMIT_MINIMUM, parseTrashDirName, pruneLeadTrash, resolveTrashLimit } from '../trash.js'
 import { memoryTable } from './memory-table.mjs'
@@ -94,17 +94,23 @@ test('a tombstone written before the cap existed is still eligible', async () =>
 })
 
 test('a profile that configures nothing keeps the documented default cap, and a smaller trash is untouched', async () => {
+  // Asserted where the default is *used*, not where it is declared: a constant nobody reads proves nothing.
+  // ADR 0039 raised it to 200 because the failure the cap causes is irreversible and the measured cost is a
+  // rounding error, so the generous side is the correct side.
   assert.equal(resolveTrashLimit(undefined), DEFAULT_TRASH_LIMIT)
   assert.equal(resolveTrashLimit({}), DEFAULT_TRASH_LIMIT)
-  assert.equal(DEFAULT_TRASH_LIMIT, 20, 'the documented default is 20; the config, not the constant, is the authority')
+  assert.equal(DEFAULT_TRASH_LIMIT, 200, 'the documented default; the config, not the constant, is the authority')
+  // Two hundred entries would be a slow fixture, so the cap behaviour is exercised at a smaller *explicit*
+  // cap: this test is about the cap' semantics, and the default is pinned by the two assertions above.
   const root = await scratch()
+  const limit = 25
   const entries = []
-  for (let stamp = 1; stamp <= DEFAULT_TRASH_LIMIT; stamp += 1) {
+  for (let stamp = 1; stamp <= limit; stamp += 1) {
     entries.push(await seedEntry(root, { memberId: `member-${stamp}`, stamp }))
   }
-  const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), members: memberRows(entries) })
+  const outcome = await pruneLeadTrash({ trashRoot: trashRootOf(root), limit, members: memberRows(entries) })
   assert.deepEqual(outcome, { pruned: 0, removed: [] })
-  assert.equal((await namesInTrash(root)).length, DEFAULT_TRASH_LIMIT, 'a trash at the cap keeps every artifact')
+  assert.equal((await namesInTrash(root)).length, limit, 'a trash at the cap keeps every artifact')
 })
 
 test('the cap comes from the config, and a value outside the range is refused rather than clamped', () => {
@@ -570,3 +576,139 @@ test('the cap prunes entries that a root-relative tombstone accounts for', async
   assert.deepEqual(outcome.removed.map((entry) => entry.memberId), ['member-1000', 'member-2000'])
   assert.deepEqual(await namesInTrash(root), ['member-3000-3000'])
 })
+
+// ── ADR 0039: the window is stated, and the trash is measured ───────────────────────────────────────────
+
+/** Every file's bytes under one directory, walked here so the expectation cannot drift with the code. */
+async function bytesOnDisk(dir) {
+  let total = 0
+  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const path = join(dir, entry.name)
+    total += entry.isDirectory() ? await bytesOnDisk(path) : (await stat(path)).size
+  }
+  return total
+}
+
+test('a raised cap prunes nothing, and 25 here is a fixture choice rather than a default', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  const members = []
+  for (let index = 0; index < 25; index += 1) {
+    const childId = `child-${index}`
+    const artifact = join(root, 'sessions', childId)
+    await mkdir(artifact, { recursive: true })
+    await writeFile(join(artifact, 'session.jsonl'), `log-${index}`)
+    members.push(record({ memberId: `member-${index}`, name: `member-${index}`, childId }))
+  }
+  // One member more than the cap, with no artifact to move: the cap counts what the trash holds, so 25
+  // artifacts under a cap of 25 are all kept. 25 is chosen to keep the fixture fast — it is not a second
+  // default, and the documented default is pinned by its own test.
+  members.push(record({ memberId: 'member-bare', name: 'member-bare', childId: 'child-bare' }))
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members }))
+  const artifactOf = (id) => (id === 'child-bare' ? undefined : join(root, 'sessions', id))
+
+  let pruned = 0
+  for (const entry of members) {
+    const retired = await retireMember({
+      ctx: retirementCtx({ artifactOf }),
+      table,
+      leadSessionId: 'lead-1',
+      leadAgent: lead,
+      dataDir: root,
+      hooks: hooks(),
+      target: entry.name,
+      reason: 'a fixture retires it',
+      trashLimit: 25,
+    })
+    assert.equal(retired.retired, true, `${entry.name} retired`)
+    pruned += retired.pruned
+  }
+  assert.equal(pruned, 0, 'nothing was pruned: the trash never exceeded its cap')
+  assert.equal((await namesInTrash(root)).length, 25, 'every artifact the fixture moved is still there')
+  const stored = readRoster(table, 'lead-1')
+  assert.equal(stored.members.filter((member) => member.trashState === TRASH_STATE.done).length, 25)
+})
+
+test('the visibility fields report this Lead trash, measured by walking it here', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  const members = []
+  // Written sizes are asserted explicitly below as well as by the walk: a comparison of two computations can
+  // go vacuous on both sides at once, which is exactly what happened here when the destructuring was wrong.
+  for (const [index, bytes] of [[0, 3], [1, 7]]) {
+    const childId = `child-${index}`
+    const artifact = join(root, 'sessions', childId)
+    await mkdir(artifact, { recursive: true })
+    await writeFile(join(artifact, 'session.jsonl'), 'x'.repeat(bytes))
+    members.push(record({ memberId: `member-${index}`, name: `member-${index}`, childId }))
+  }
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members }))
+  const artifactOf = (id) => join(root, 'sessions', id)
+  for (const entry of members) {
+    await retireMember({ ctx: retirementCtx({ artifactOf }), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks(), target: entry.name, reason: 'a fixture retires it' })
+  }
+
+  const listed = await listMembers({ ctx: retirementCtx({ artifactOf }), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks() })
+  const trashRoot = trashRootOf(root)
+  assert.equal(listed.trash_count, 2, 'two artifacts')
+  assert.equal(listed.trash_bytes, 10, 'the two files are three and seven bytes')
+  assert.equal(listed.trash_bytes, await bytesOnDisk(trashRoot), 'and that is what is on disk, walked here independently')
+  assert.equal(listed.trash_limit, DEFAULT_TRASH_LIMIT, 'with the cap in force reported beside them')
+})
+
+test('a Lead with no trash measures zero, present rather than absent', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [] }))
+  const listed = await listMembers({ ctx: retirementCtx({}), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks() })
+  // The opposite of the spend field's rule, and deliberately so: here a zero is a measurement.
+  assert.equal(Object.hasOwn(listed, 'trash_count'), true, 'the field is present')
+  assert.equal(Object.hasOwn(listed, 'trash_bytes'), true, 'and so is its size')
+  assert.equal(listed.trash_count, 0)
+  assert.equal(listed.trash_bytes, 0)
+})
+
+test('trash_limit is the effective cap, not the default', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [] }))
+  const listed = await listMembers({ ctx: retirementCtx({}), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks(), trashLimit: TRASH_LIMIT_MINIMUM })
+  assert.equal(listed.trash_limit, TRASH_LIMIT_MINIMUM, 'the minimum is a legal cap and the answer names it')
+  assert.notEqual(listed.trash_limit, DEFAULT_TRASH_LIMIT)
+})
+
+test('the horizon is in the answers a caller receives, not only in the descriptions', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  const childId = 'child-horizon'
+  const artifact = join(root, 'sessions', childId)
+  await mkdir(artifact, { recursive: true })
+  await writeFile(join(artifact, 'session.jsonl'), 'log')
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [record({ memberId: 'horizon', name: 'horizon', childId })] }))
+  const retired = await retireMember({
+    ctx: retirementCtx({ artifactOf: () => artifact }),
+    table,
+    leadSessionId: 'lead-1',
+    leadAgent: lead,
+    dataDir: root,
+    hooks: hooks(),
+    target: 'horizon',
+    reason: 'a fixture retires it',
+  })
+  assert.match(retired.message, /that is how far back a restore can reach/, 'retire_member states the window it just moved an artifact into')
+  assert.equal(retired.trash_limit, DEFAULT_TRASH_LIMIT)
+
+  // The refusal is the other place a caller meets it: the artifact is already gone by then.
+  await updateRoster(table, 'lead-1', (current) => ({
+    ...current,
+    members: current.members.map((member) => ({ ...member, trashState: TRASH_STATE.pruned })),
+  }))
+  const refused = await restoreMember({ ctx: retirementCtx({ artifactOf: () => artifact }), table, leadSessionId: 'lead-1', target: 'horizon' })
+  assert.equal(refused.reason, 'pruned')
+  assert.match(refused.message, /Raising the limit later restores nothing already pruned/, 'and the refusal says raising it recovers nothing')
+})
+
+// Why the walk's *bound* has no test of its own: counting stat calls would bind this test to how the
+// measurement is implemented, while the semantics are already covered by the raised-cap test above — a
+// trash of 25 artifacts under a cap of 25 is the largest trash the cap allows, so at most 25 entries can
+// be inspected there. A test that binds implementation detail is worth less than this sentence.

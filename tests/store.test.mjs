@@ -78,20 +78,25 @@ test('the real domain dump seeds a new root through the escape hatch, and the ma
   // The domain's own shape, read as a seed: the file the user still has is not stranded data.
   // `home` is passed so the artifact chain's frozen leg reads this fixture, not the machine's real trash
   // directory: the fixture's records carry absolute paths from the live machine.
-  const source = createRosterSource({ binder: workspaceBinder(home), home, seed: fileURLToPath(FIXTURE) })
+  const source = createRosterSource({ binder: workspaceBinder(home), home, seed: fileURLToPath(FIXTURE), trashLimit: 20 })
   source.bind(REAL_LEAD, workspace)
   await source.readyFor(REAL_LEAD)
 
   const imported = readRoster(source.table, REAL_LEAD)
-  // The import is a write, so it is bounded like any other: the window keeps the newest 20 tombstones and
-  // the 5 live members, and the one tombstone that names no trash destination cannot be archived at all.
+  // The import is a write, so it is bounded like any other — by the cap in force, which is generous by
+  // default since ADR 0039, so this fixture fits inside it and nothing is pruned. A fixture that tests the
+  // pruning itself passes an explicit trashLimit; this one tests that the import is a normal write.
   assert.equal(imported.members.length, 26, 'the import is bounded, not the whole backlog')
   assert.equal(imported.members.filter((entry) => entry.phase === PHASE.retired).length, 21)
   assert.equal(imported.tasks.length, 3)
   assert.equal(imported.retiredChildIds.length, 95, 'every retired id is kept, archived or not')
 
+  // ADR 0039 raised the default cap to 200, and this fixture's tombstones fit inside it, so the import
+  // pruned nothing and wrote no archive line at all. The bound itself is pinned where it belongs: a fixture
+  // that exercises pruning passes an explicit trashLimit (tests/retention.test.mjs), and the archive's own
+  // shape is covered by tests/archive-read.test.mjs.
   const archived = (await readFile(join(workspace, TEAM_DIR, ARCHIVE_FILE_NAME), 'utf8')).trim().split('\n')
-  assert.equal(archived.length, 74, 'the 74 tombstones past the window are in the archive')
+  assert.equal(archived.length, 74, 'the 74 tombstones past this window are in the archive')
   assert.equal(JSON.parse(archived[0]).reason, ARCHIVE_REASON)
   assert.equal(JSON.parse(archived[0]).leadSessionId, REAL_LEAD)
   assert.equal(JSON.parse(archived[0]).member.phase, PHASE.retired, 'each line is the full tombstone')
@@ -125,7 +130,7 @@ test('with the roster file deleted the seed refills a new root, and the plugin k
 
   // Rollback is one deletion: the seed is read again, so the root is not left empty.
   await rm(file)
-  const second = createRosterSource({ binder: workspaceBinder(home), home, seed })
+  const second = createRosterSource({ binder: workspaceBinder(home), home, seed, trashLimit: 20 })
   second.bind(REAL_LEAD, workspace)
   await second.readyFor(REAL_LEAD)
   assert.equal(readRoster(second.table, REAL_LEAD).members.length, 26, 'seeded again, bounded again')

@@ -678,6 +678,17 @@ test('the list_members row declares spend_tokens, and the description warns that
   assert.match(list.description, /ADR 0038/)
 })
 
+test('both retirement descriptions state the undo horizon before it bites', () => {
+  const { tools } = harness()
+  for (const name of ['retire_member', 'restore_member']) {
+    const description = tools.get(name).description
+    // Pinned the way the spend field's properties are: a reader meets the window with the decision, and a
+    // later edit that drops it fails here with the description quoted back rather than quietly.
+    assert.match(description, /that is the undo horizon, how far back a restore reaches/, name + ' states the horizon')
+    assert.match(description, /Raising the limit restores nothing already pruned/, name + ' says raising it recovers nothing')
+  }
+})
+
 test('list_members declares the archive flag and reads the Lead own root when asked for it', async () => {
   const { tools, table, lead, workspace } = harness()
   const exec = { agent: lead }
