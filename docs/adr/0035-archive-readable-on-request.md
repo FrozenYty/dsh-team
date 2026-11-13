@@ -67,11 +67,16 @@ mode append-only exists to avoid.
   file by hand.
 - **The cap is fixed at 50 and not configurable.** The honest next step if it is ever too small is another
   parameter, not a larger constant — a cap that silently grows with the file is the thing it prevents.
+  **It stays a constant**, decided rather than left: no caller has needed more than 50, and `archived_total`
+  tells every caller when there is more, so a knob would be configurability nobody asked for.
 - **The flagged shape has not been through the Host's validator**, because `schema-check.mjs` calls
   `list_members` without the flag; the unflagged shape is what that check covers today. Stated rather than
   implied.
 - **An archived record's tasks travel in its line but no tool shows them.** They are in the history and
-  not in an answer, which is better than dropping them from the history and worse than showing them.
+  not in an answer, which is better than dropping them from the history and worse than showing them. **It
+  is not a loss**: the work itself lives on the Lead's own board — a retirement hands a standing member's
+  open tasks to a successor or leaves them unowned and says so, and finished work stays there too — so the
+  archive's copy is history for someone reading the file, not the only place the work exists (ADR 0017).
 
 ## Migration
 
