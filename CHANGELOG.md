@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.38.1] - 2026-11-14
+
+- The spend field's decision is recorded, and a description that would have misled a model was reported.
+
 ## [0.38.0] - 2026-11-14
 
 - A member row says what it has spent, and omits the number rather than inventing a zero.
