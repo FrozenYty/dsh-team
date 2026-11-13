@@ -144,11 +144,12 @@ state matrix, the sweep's three conditions and the consent gate — with the fil
 Five things this bundle does not do, each decided rather than forgotten.
 
 - **One record per Lead, and no cross-process lock.** The roster and this Lead's board live in one JSON
-  document in a `storageDomain` domain keyed by the Lead Session id (ADR 0003). The facility has no
-  cross-process lock (ADR 0010), so two Harness processes over one store are last-writer-wins: if both
-  write the same Lead, the later write replaces the earlier one and the update it never read is lost.
+  document — `roster.json` under `.agents/team/` in the Lead's workspace (ADR 0027). Nothing serializes
+  two processes over it (ADR 0010), so two Harness processes over one workspace are last-writer-wins: if
+  both write the same Lead, the later write replaces the earlier one and the update it never read is lost.
   That is correct for one running Harness, which is how subagents themselves work; the plugin adds no
-  second lock and no merge protocol.
+  lock file, and the second writer is reported as `foreign_write_at` when this process next reads or
+  writes.
 - **No browser half of its own.** There is no plugin panel, HTTP bridge or client bundle.
   v0.3's Settings panel was never rendered in a real profile and its clicks did not work, so v0.4 deleted
   it rather than repairing it (ADR 0008). What the panel shows is overlaid at the host's session-list
@@ -163,9 +164,9 @@ Five things this bundle does not do, each decided rather than forgotten.
   remain in a Lead's tool list. The patch retires the shipped *tool* row (`tool-agent-team`); removing
   those three would take the service, and this plugin's adoption, with them (ADR 0017).
 - **A pruned tombstone cannot be restored.** A retirement that moves an artifact in enforces the
-  per-Lead trash cap and removes the oldest entries past it. The tombstone keeps its `trashPath` and
+  per-Lead trash cap and removes the oldest entries past it. The tombstone keeps its `trashDir` and
   records `trashState: pruned`, but the bytes are gone, so `restore_member` refuses with
-  `reason: "pruned"` and never calls the workspace (ADR 0011). Configure a larger cap before a
+  `reason: "pruned"` and never calls the workspace (ADR 0011, ADR 0028). Configure a larger cap before a
   long-lived team needs more than 20 recoverable sessions.
 - **The task board is a handover channel, not a project tracker.** A task has an id, a title, a bounded
   body, `open`/`done` and an optional owner, and deliberately no priorities, dependencies, comments,
@@ -175,9 +176,12 @@ Five things this bundle does not do, each decided rather than forgotten.
 
 ## Configuration
 
-The plugin's data directory is `~/.dsh/team-roster`, overridable with `DSH_TEAM_DATA_DIR` (the
-pre-rename `DSH_TEAM_ROSTER_DATA_DIR` still works; ADR 0014); its `trash/` holds retired sessions, while
-the roster lives in a `storageDomain` domain (ADR 0003).
+The plugin keeps its data under `.agents/team/` in the Lead's workspace — `roster.json`, and a `trash/`
+holding retired sessions. A profile that sets `DSH_TEAM_DATA_DIR` (or the pre-rename
+`DSH_TEAM_ROSTER_DATA_DIR`) uses that directory instead, and the frozen `~/.dsh/team-roster` is still the
+last place an artifact written by an earlier release is looked for. A Session with no resolvable
+workspace keeps being served from the storage domain, which is the import source and the rollback path
+rather than a second home (ADR 0014, ADR 0027, ADR 0028).
 
 One Lead's trash keeps at most **20** retired sessions. The cap is the `trashLimit` field of the bundle's
 patch row, so a profile changes it in its own `cordis.patch.yml` by id:

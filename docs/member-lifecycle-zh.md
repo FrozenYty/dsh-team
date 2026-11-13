@@ -104,7 +104,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 1. **记下原因**——模型给出的 `reason` 写进墓碑的 `retireReason`。
 2. **排空**——`ctx.subagents.drainChildren(lead, [childId])` 停掉子代理，释放它的激活名额与驻留。从未发布过的、或已经结束的子代理没有可排空的；两种情况都继续退役，因为生命周期事实由记录掌握。
 3. **立碑**——记录转为 `retired`，带上 `retiredAt`、`assignment`、原因，以及下一步准备使用的回收站路径，并标记 `trashState: 'pending'`（没有可移动之物时直接是 `'none'`）；这一步发生在碰文件系统**之前**（§4）。在这里崩溃留下的是“退役记录 + 要么没移动、要么已进回收站的产物”；`pending` 表示无从确定，恢复会先去回收站找，因此两种情况都能收尾。
-4. **移动产物并确认**——持久化会话移入插件的回收站目录，记录随后确认为 `trashState: 'done'`，并写上 `trashPath`、`originalPath` 与 `trashKind`。没有可移动的产物时，改由工作区归档隐藏会话，丢弃计划中的回收站字段，记录与返回结果都会说明这一点（`archived: true`、`trashState: 'none'`）。`archived` 与 `trashPath` 互斥：只有没发生移动时才会走归档分支。
+4. **移动产物并确认**——持久化会话移入插件的回收站目录，记录随后确认为 `trashState: 'done'`，并写上 `trashDir`、`trashRelPath`、`originalPath` 与 `trashKind`。没有可移动的产物时，改由工作区归档隐藏会话，丢弃计划中的回收站字段，记录与返回结果都会说明这一点（`archived: true`、`trashState: 'none'`）。`archived` 与 `trashDir` 互斥：只有没发生移动时才会走归档分支。
 
 5. **只在此时约束回收站**——成功移入过产物的那次退役会在同一次调用里执行本 Lead 的保留上限；上限本身、候选范围与 `pruned` 状态见 `docs/roster-storage-zh.md` `docs/architecture-zh.md` §3（ADR 0011、ADR 0012）。
 
@@ -125,7 +125,7 @@ Harness 通知是任何插件操作都无法阻止的事件：
 
 ## 4. 退役会移走产物
 
-`retire_member` 先立碑、再碰文件系统：墓碑带上即将使用的回收站路径与 `trashState: 'pending'` 标记，随后把持久化会话移入 `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`，最后把记录确认为 `trashState: 'done'`；这些步骤由 §3 负责。顺序是刻意的：两者之间崩溃留下的是“一条 `retired` 记录配一份要么还没移动、要么已经进回收站的产物”——两种情况都可恢复，因为 `pending` 表示“移动可能发生也可能没有”，而恢复会先去回收站找。反过来则会留下“已进回收站的会话 + `active` 记录”，之后任何一次读取都解释不通。
+`retire_member` 先立碑、再碰文件系统：墓碑带上即将使用的回收站目录与 `trashState: 'pending'` 标记，随后把持久化会话移入 `<数据根>/trash/<leadSessionId>/<childId>-<ms>/`，最后把记录确认为 `trashState: 'done'`；这些步骤由 §3 负责。名字里带的是**子会话 id**，不是记录的 `memberId`；记录把它存为 `trashDir` 与 `trashRelPath` 而不是绝对路径，所以数据根移动之后产物仍然找得到（ADR 0028）。顺序是刻意的：两者之间崩溃留下的是“一条 `retired` 记录配一份要么还没移动、要么已经进回收站的产物”——两种情况都可恢复，因为 `pending` 表示“移动可能发生也可能没有”，而恢复会先去回收站找。反过来则会留下“已进回收站的会话 + `active` 记录”，之后任何一次读取都解释不通。
 
 真正让成员从宿主的自有发现里消失的是**移动**——session-query 会摘掉已经不在的文件——而移动本身不删除任何东西：跨设备兜底是这一步里唯一会移除源的分支；产物移不动时改由工作区归档隐藏会话（`archived: true`、`trashState: 'none'`，并丢弃计划中的回收站字段）。恢复是同样明确的逆操作：记录里保留了原始路径和产物类型（`trashKind`——会话目录或单个产物文件），所以 `restore_member` 是**移动**而不是猜测；结果分支与各种拒绝由 `docs/architecture-zh.md` §5 负责。
 

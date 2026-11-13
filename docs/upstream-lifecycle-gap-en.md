@@ -59,7 +59,7 @@ workaround is the lifecycle the shipped roster does not have:
   move, enforce a cap, hide the member from the projection exits, and report what happened
   (`docs/member-lifecycle-en.md` §3).
 - **A move, not an erasure.** The Session moves to
-  `~/.dsh/team-roster/trash/<leadSessionId>/<memberId>-<ms>/`, and recovery is a directory move back
+  `<data root>/trash/<leadSessionId>/<childId>-<ms>/`, and recovery is a directory move back
   (`docs/member-lifecycle-en.md` §4). Because the platform has no deletion API, the retention cap
   deletes only the copies the plugin itself moved into its trash
   (`docs/adr/0011-trash-retention.md:28-30, 44-52`).
