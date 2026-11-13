@@ -80,8 +80,8 @@ drawing, now drawn by the second condition of the four rather than by "never".
 - **The roster stops growing with history.** It holds recent members; the archive holds every retirement.
 - **`retiredChildIds` grows monotonically** and is the only unbounded thing left in the file. It is a list of
   ids, not records, and it is what makes the panels correct.
-- **One more file to back up.** `<data root>/` now holds `roster.json`, its import marker, `provenance.json`
-  and `archive.jsonl`; the trash sits beside them.
+- **One more file to back up.** `<data root>/` now holds `roster.json`, `provenance.json` and
+  `archive.jsonl`; the trash sits beside them.
 - **A reader who wants an old member looks in the archive**, and `list_members` tells them it exists rather
   than leaving them to infer it.
 

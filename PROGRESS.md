@@ -2644,3 +2644,42 @@
   writes, which loses nothing.
 - **Version.** `0.29.0`: a stored shape changed and one documented behaviour changed with it — the roster
   now holds recent history rather than all of it, and says so.
+
+## 2026-11-13 — the decision that a tombstone must stay is superseded by the record that it may leave (v0.29.1)
+
+- **The clause that had to be superseded was not where anyone would look for it: it was a rejected
+  alternative.** ADR 0011 refused "Delete the tombstone along with the artifact" in these words — *"draining
+  a child does not remove its row from the parent's durable `subagentCatalog`, so the tombstone is the only
+  thing preventing the next read from re-adopting the member. Dropping it re-adopts the member as a live
+  ghost."* That is a decision, and it was the reason the roster grew without bound. The plan's own
+  paraphrase ("a tombstone is never dropped") was the only place it surfaced, and the implementation's
+  History section is where it was found. **A rejection is a decision**, and a record that reads only the
+  Decision section will miss half of what a document decided.
+- **ADR 0030 supersedes that rejection alone**, and ADR 0011's header now carries a clause-scoped pointer
+  that names what still stands. The boundary was checked rather than assumed: `pruneLeadTrash` is still
+  called from exactly one place, inside the retirement that moved an artifact in, so "enforcement only
+  inside a retirement" is untouched by a bound that runs on every write for a different reason — moving
+  records, not deleting bytes.
+- **The rejection was right about the risk, and the new design keeps the guard rather than the record.**
+  `retiredChildIds` holds the child id that the rejection was protecting, which is exactly why the rejection
+  can be lifted without re-introducing the ghost. The paragraph the implementation found the hard way —
+  that `ensureAdopted` compares a child against the roster's own records, so an archived tombstone's child
+  would have been adopted back as a live member with a new `memberId` — is in the ADR's Context as the
+  second fact, next to the first one that made the bound possible at all.
+- **The ADR records the four arguments and, as importantly, what it does not bound**: the storage-domain
+  mode, records with no destination, records whose bytes remain on a leg, and the archive itself. It also
+  states the one thing still growing — `retiredChildIds` — rather than leaving a reader to discover it.
+- **Five documents, five commits, one per file**: `roster-storage-{en,zh}` (the id list, the window, the
+  files beside the roster), `member-lifecycle-{en,zh}` (a protocol that ended in a permanent tombstone now
+  ends in one that may leave), `architecture-{en,zh}` (`list_members` reports what left), the README pair,
+  and the `PLAN.md` sentence this file's rules let the Lead hand over. Heading parity is unchanged on every
+  pair: roster-storage 5/5, member-lifecycle 5/5, architecture 18/18, README 13/13, INDEX 6/6.
+- **The README states the behaviour and not a number, deliberately.** The flush has not happened on this
+  profile — it needs the first *write* after the plugin reloads — so the Status says the bound runs on a
+  write and never on a read, and calls itself suite-covered rather than live-observed. A count nobody
+  measured is the thing this file has had to correct twice today.
+- **One correction of the Lead's at merge.** ADR 0030's consequence list named both "its import marker" and
+  `provenance.json` as files under the data root, which is the same file counted twice since v0.28.5 renamed
+  it. Corrected before the merge, because an ADR in review is not yet a closed record — once it is accepted,
+  the fix would have needed a new ADR rather than an edit.
+- **Version.** `0.29.1`: documents only. No code, no stored shape, no shipped file.
