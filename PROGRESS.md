@@ -2012,3 +2012,34 @@
 - **Version.** `0.25.5`: the repository promised that a citation resolves, and this is the release where that
   promise is kept by something other than the reader's patience. (The README rewrite claimed `0.25.4` and
   `P4-16` while this branch was open, so both numbers moved; the collision is recorded in the merge commit.)
+
+## 2026-11-13 — the architecture pair points at the document that holds the statement (v0.25.6)
+
+- **The defect, and why no check could have caught it.** `docs/architecture-en.md` §2.5 closed with "The
+  user-facing statement is in the README pair." That was true when it was written, and `#52` made it false:
+  the README no longer states the costs and the routes, it links `docs/routes-en.md` (`README.md:112` and
+  `:249`), which is where those statements now live. Every mechanical rule in `scripts/check.mjs` passed while
+  this was wrong — it proves that a citation resolves and that two sides carry the same headings, and it has
+  nothing to say about a prose claim concerning what another document contains. It was found by reading, which
+  is the gap the checker's own section names as deliberately out of scope.
+- **The fix is two sentences, one per side.** `docs/architecture-en.md:262` now names `docs/routes-en.md`, and
+  `docs/architecture-zh.md:132` names `docs/routes-zh.md` — each pointing at its own language's document, which
+  is how this file already cites every other pair member. Nothing else in either paragraph moved, and the two
+  `§2.1` references in it were not touched.
+- **The premise was re-verified on `main` before editing rather than taken from the brief.**
+  `git grep -n "Costs and model routes" main -- README.md` returns nothing; `git grep -n "routes-en.md" main --
+  README.md` returns `README.md:112` and `README.md:249`; and `docs/routes-en.md:74` and `:80` hold the
+  statements that section used to carry.
+- **Verification.** `node scripts/check.mjs` prints `check passed` and
+  `node --test --test-isolation=none tests/*.test.mjs` is 212 tests, 212 passing, with no test file touched.
+  The check is explicitly **not** treated as evidence for the claim here, because it cannot be. The search that
+  stands in for it is `git grep -n "README" -- docs/ ':!docs/adr/*'`, whose remaining hits are `docs/INDEX`
+  rows listing which documents to update — still true, the README keeps the install path and the short tool
+  table — and citations of an installed package's own README.
+- **One finding of the same class, deliberately not fixed.** `docs/adr/0024-forward-the-lead-route.md:160-161`
+  says the README's member section names the replacement as the way to clear a stale member, and the README
+  contains no `route_stale` at all. The bullet records what `v0.22.0` updated, and an accepted ADR is a closed
+  record: it was true of the tree that commit wrote. Rewriting it is the thing the ADR rules forbid, so it
+  stands as history and the current statement is in `docs/routes-en.md`.
+- **Version.** `0.25.6`: a correction to where the architecture pair sends a reader, which changes released
+  documentation even though no code moved.

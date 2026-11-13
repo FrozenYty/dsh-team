@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.25.6] - 2026-11-13
+
+- The architecture pair points at the document that holds the statement.
+
 ## [0.25.5] - 2026-11-13
 
 - Every in-repository citation resolves, or the check says which one does not (P4-17).
