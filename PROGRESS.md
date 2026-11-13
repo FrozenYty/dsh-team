@@ -2303,3 +2303,62 @@
   `team/team.md`, deliberately did **not** move beside the roster: it is not a member definition and has no
   shipped counterpart, so moving it is a separate seam and a separate decision.
 - **Version.** `0.27.2`: documents and two comments. No behaviour, no stored shape, no shipped file.
+
+## 2026-11-13 — five role templates ship with the plugin, and a definition is read from a chain of directories (v0.28.0)
+
+- **What ships.** `templates/definitions/{implementer,reviewer,researcher,scribe,verifier}.md` — one per
+  standing role, each a real definition `parseDefinition` reads, each body carrying the two rules this
+  repository keeps relearning: report in three parts, and a check that can fail rather than a feeling. The
+  owner's idea was that the plugin should ship refined templates a user can start from and then replace
+  with their own, the way the memory plugin ships its notebook policy.
+- **The rule that defines the feature.** A shipped template declares **only** `name`, `label` and
+  `assignment` — never `provider`, `model`, `reasoning_effort`, `max_tokens`, `agent_preset` or `cwd`. The
+  file describes the role; the route belongs to whoever starts it, and a bundled default route would pin a
+  user's bill to whatever model was current on the day the template was written. `scripts/check.mjs`
+  **refuses** the forbidden fields by name rather than documenting them, because a rule nobody can check is
+  a comment.
+- **The chain is `<workspace>/.agents/team/definitions/` → `<workspace>/team/` → the shipped templates**,
+  first declaration wins. Two decisions inside it are worth more than the code:
+  - **The legacy `team/` directory outranks the shipped set.** Publishing `reviewer.md` this release means a
+    project that has carried its own `team/reviewer.md` for a year is exactly the one that would have been
+    silently replaced by a bundled file. Both user legs win; the shipped one is last.
+  - **A malformed file blocks the name it claims.** If a more specific layer declares a name and gets it
+    wrong, a later layer does not take over: the author is editing a file that is not taking effect, and
+    quietly substituting the shipped role hides that. `scanDefinitions` reports the name each rejected file
+    `claims`, and the layer above it is blocked only for that name — so an unrelated broken file does not
+    lock a project out of the shipped set.
+- **The sentence the model reads was false and is now true.** `index.js`'s module header said "its durable
+  state lives in one storage domain (ADR 0003)" — untrue since the roster became a file, and worse than a
+  stale comment because tool-description prose shapes how the tools get called. It now says the durable
+  state is the plugin's own `roster.json` under the bound workspace root, with the domain as import source
+  and rollback. `spawn_member`'s description, which placed definitions "under `team/`", now names the chain
+  and the five roles. Five stale comments went with them — including `trash.js`'s parser doc, which said it
+  read `<memberId>-<ms>` "exactly as retirement writes it", the same confusion inside the module whose
+  defect it explains.
+- **`AGENTS.md` §2 said the `files` list publishes "ten files", and stopping being true twice without saying
+  so** — the count never included `templates/`, and this release added five files to it. The Lead replaced
+  the count with the list itself at merge, since a number in an inventory is the part that rots first.
+- **Verification, and one probe that failed badly.** 238 tests pass, +5. The probes behaved: adding
+  `model: cheap-model` to a template fails **both** `check.mjs` and the unit test by name, which is the
+  point of putting the rule in both; removing `templates/` from `files` produces five failures, one per
+  template; reverting the chain fails four of the five template tests. **The fifth failed with a
+  `TypeError` rather than its own assertion** — it did fail, but it said less than the other three, and the
+  implementer reported that rather than counting it as a clean probe. That is the standard this repository
+  asks for: a probe that fails for the wrong reason is not evidence.
+- **What is not proved.** Nothing was installed, so two things rest on tests rather than on a live call: that
+  the model actually receives the corrected `spawn_member` description, and that a profile whose install
+  copy contains `templates/` can spawn `definition: 'reviewer'` — the test reads the directory beside the
+  module, which is where an installed copy resolves, but only a profile proves the published files arrive.
+- **What this leaves, reported rather than fixed.** Four documents still place member definitions at
+  `<workspace>/team/` with no mention of the chain: `docs/adr/0018`, `docs/adr/0021`,
+  `docs/architecture-{en,zh}.md` (§4's definitions row, §7 and §9) and `README.md`. Queued as a document
+  follow-up. And `team/team.md` **deliberately did not move** beside the roster: it is not a member
+  definition and has no shipped counterpart, so `.agents/team/` now holds `roster.json` and `definitions/`
+  while the team file stays in `team/`. That asymmetry is a real seam and is left as a decision rather than
+  absorbed into this task.
+- **Still true, and it now blocks the last phase:** none of today's releases is running. The process serving
+  the tools was measured again at the end of this release and still serves pre-0.26.0 code, so the roster
+  file has still not appeared under the workspace. A full restart is required before the migration, and the
+  migration will be the last thing to run.
+- **Version.** `0.28.0`: new published files, a new capability, and a description the model reads. Nothing
+  stored changed shape.

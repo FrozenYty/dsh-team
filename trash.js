@@ -549,14 +549,19 @@ export async function restoreSessionArtifact(request) {
 }
 
 /**
- * Parse one trash directory name, `<memberId>-<ms>`, exactly as retirement writes it.
+ * Parse one trash directory name, `<childId>-<ms>`, exactly as retirement writes it.
  *
- * The leading `.+` is greedy, so a member id that itself contains hyphens — a UUID, or an adopted
- * child Session id — splits at the last one and keeps its stamp. A name this plugin did not write
- * returns undefined and is therefore left alone; the trash is a directory an operator can also put
- * things in, and retention must never touch what it cannot account for.
+ * The name carries the **child Session id**, which is not the record's identity: a spawned member's
+ * `memberId` and `childId` are two different uuids, and only an adopted member has them equal. Retention
+ * matches a tombstone by this name and then reports the record's own `memberId`; the `memberId` key below
+ * is the id *as the name spells it*, which is what a record carrying no id of its own falls back to.
+ *
+ * The leading `.+` is greedy, so an id that itself contains hyphens — a UUID, or an adopted child Session
+ * id — splits at the last one and keeps its stamp. A name this plugin did not write returns undefined and
+ * is therefore left alone; the trash is a directory an operator can also put things in, and retention must
+ * never touch what it cannot account for.
  * @param {string} name - one direct child's name.
- * @returns {{memberId: string, stamp: number}|undefined}
+ * @returns {{memberId: string, stamp: number}|undefined} the id the name carries, and its stamp.
  */
 export function parseTrashDirName(name) {
   const match = /^(.+)-(\d+)$/.exec(name)
@@ -578,7 +583,7 @@ export function parseTrashDirName(name) {
  * Conservative by construction:
  *
  *   - only direct children of this one Lead's trash directory are considered;
- *   - only names shaped `<memberId>-<ms>` with a plausible member id and a numeric stamp qualify, and
+ *   - only names shaped `<childId>-<ms>` with a plausible Session id and a numeric stamp qualify, and
  *     only when a member record names that exact directory — a foreign name, a file, or an entry no
  *     tombstone accounts for is left where it is;
  *   - only a `trashState: 'done'` record may be removed. A `pending` move may or may not have landed,

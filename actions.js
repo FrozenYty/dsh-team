@@ -1536,7 +1536,7 @@ export async function spawnMember({
  * The move failing at runtime is reported, never silent: the intended trash fields are dropped, the
  * workspace archive is the fallback that hides a session no artifact could be moved from, and the
  * record says which of the two actually happened (`trashState`, `archived`). `archived` is true only
- * when that fallback ran, so a tombstone never carries both a `trashPath` and `archived: true`.
+ * when that fallback ran, so a tombstone never names a trash destination and `archived: true` at once.
  *
  * A retirement that actually moved an artifact in then enforces the per-Lead retention cap in the same
  * call (ADR 0011, ADR 0012), because that is the moment the trash grew. It removes the oldest entries
@@ -1746,8 +1746,8 @@ export async function retireMember({
   const record = persisted.members.find((candidate) => candidate.memberId === member.memberId)
 
   // Step 4: bound this Lead's trash, and only here. The move above is the one moment a retirement
-  // grows the trash, so it is the one moment the cap is enforced — no timer, no sweep on read. A
-  // pruned tombstone keeps its `trashPath` (it still says where the artifact went) and is marked
+  // grows the trash, so it is the one moment the cap is enforced — no timer, no sweep on read. A pruned
+  // tombstone keeps the trash directory it recorded (it still says where the artifact went) and is marked
   // `pruned`, which is what makes `restore_member` refuse with a typed reason instead of lying.
   let pruned = 0
   if (moved) {
