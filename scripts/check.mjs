@@ -109,8 +109,11 @@ for (const match of entry?.matchAll(/async\s+execute\s*\(([^)]*)\)/g) ?? []) {
 // unsupported JSON schema: ... max_tokens.minimum is not a supported keyword (subset:
 // type/oneOf/properties/required/additionalProperties/items/enum/const + annotations)`. Nothing local
 // caught it: the unit tests call actions.js and never load the host, and the entry itself parses fine.
-// `maxLength` is deliberately absent from this list: the three uses are parameter properties, which the
-// host tolerates, and dropping them would lose the range from the model-facing description.
+// `maxLength` is deliberately absent from this list: the three uses are parameter properties, and the host
+// does not assert a parameter schema at all — `register()` asserts `output.schema` only and projects the
+// parameters to the model unasserted, which `scripts/schema-check.mjs` established by asking the host's own
+// validator (2026-11-13, `@deepseek-ai/dsh-tools` 0.2.2-rc.1). So the cap is not enforced at that boundary;
+// the action enforces it when the value arrives, and the keyword stays for the range the model can read.
 const FORBIDDEN_SCHEMA_KEYWORDS = [
   'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'pattern',
   'format', 'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties', 'default',
