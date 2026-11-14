@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { test } from 'node:test'
 
 import { listMembers, retireMember, restoreMember } from '../actions.js'
@@ -712,3 +712,59 @@ test('the horizon is in the answers a caller receives, not only in the descripti
 // measurement is implemented, while the semantics are already covered by the raised-cap test above — a
 // trash of 25 artifacts under a cap of 25 is the largest trash the cap allows, so at most 25 entries can
 // be inspected there. A test that binds implementation detail is worth less than this sentence.
+
+// ── ADR 0039: the shapes the trash measurement must survive ─────────────────────────────────────────────
+//
+// The field is a visibility number, so under-reporting is worse than not having it: these tests hold the
+// walk to an **explicit** number for each shape rather than to another computation, because a comparison of
+// two computations can go vacuous on both sides at once (that is how the bytes assertion was empty once).
+//
+// And the decision the catches encode, in the test's own words: **a measurement never fails a read.** An
+// entry this process cannot walk contributes what it can and does not throw, because list_members is a read
+// and a read that fails over one unreadable artifact would hide every other member. The alternative a later
+// reader will assume — throw on the first unreadable entry — is what these assertions forbid.
+
+test('the trash measurement counts a nested artifact in full', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [] }))
+  const nested = join(trashRootOf(root), 'nested-1', 'inner', 'deep.jsonl')
+  await mkdir(dirname(nested), { recursive: true })
+  await writeFile(nested, 'x'.repeat(11))
+  await writeFile(join(trashRootOf(root), 'nested-1', 'session.jsonl'), 'x'.repeat(5))
+
+  const listed = await listMembers({ ctx: retirementCtx({}), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks() })
+  assert.equal(listed.trash_count, 1)
+  assert.equal(listed.trash_bytes, 16, 'five bytes at the top and eleven in the subdirectory')
+})
+
+test('an empty artifact contributes zero and the others still count', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [] }))
+  await mkdir(join(trashRootOf(root), 'empty-1'), { recursive: true })
+  await mkdir(join(trashRootOf(root), 'full-2'), { recursive: true })
+  await writeFile(join(trashRootOf(root), 'full-2', 'session.jsonl'), 'x'.repeat(9))
+
+  const listed = await listMembers({ ctx: retirementCtx({}), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks() })
+  assert.equal(listed.trash_count, 2, 'both artifacts are counted')
+  assert.equal(listed.trash_bytes, 9, 'and the empty one adds nothing to the size')
+})
+
+test('an entry the walk cannot descend into contributes what it has, and never fails the read', async () => {
+  const root = await scratch()
+  const table = memoryTable()
+  await updateRoster(table, 'lead-1', () => ({ leadSessionId: 'lead-1', members: [] }))
+  // A plain file where the walk expects an artifact directory. This is the portable stand-in for "the entry
+  // cannot be listed": readdir on it throws, so a walk without the guard would either reject the read or
+  // count nothing for it. The plugin itself writes single-file trash entries (trashKind: 'file'), so the
+  // bytes are on disk and counting them is the truthful measurement.
+  await mkdir(trashRootOf(root), { recursive: true })
+  await writeFile(join(trashRootOf(root), 'plain-3'), 'x'.repeat(7))
+  await mkdir(join(trashRootOf(root), 'dir-4'), { recursive: true })
+  await writeFile(join(trashRootOf(root), 'dir-4', 'session.jsonl'), 'x'.repeat(4))
+
+  const listed = await listMembers({ ctx: retirementCtx({}), table, leadSessionId: 'lead-1', leadAgent: lead, dataDir: root, hooks: hooks() })
+  assert.equal(listed.trash_count, 2, 'both entries are counted, the file included')
+  assert.equal(listed.trash_bytes, 11, 'seven for the file and four for the directory, and nothing throws')
+})
