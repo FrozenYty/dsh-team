@@ -24,7 +24,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { collectLivingSurface, declaredNamesOf, findUndeclared, formatProblem } from './name-guard.mjs'
+import { collectLivingSurface, coverageLine, declaredNamesOf, findUndeclared, formatDeadClaim, formatProblem } from './name-guard.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
@@ -495,13 +495,15 @@ if (typeof manifestVersion === 'string') {
 const livingFiles = collectLivingSurface({ root, published: publishedFiles, docNames })
 const nameGuard = findUndeclared({ files: livingFiles, declared: declaredNamesOf(entry ?? '') })
 for (const problem of nameGuard.problems) fail(formatProblem(problem))
+// A claim that permits nothing is a failure, not a note: the list decays one dead entry at a time, and the
+// entry that hid a real dead name looked reasonable right up until someone checked whether it was needed.
+for (const claim of nameGuard.dead) fail(formatDeadClaim(claim))
 
 if (failures.length > 0) {
   console.error(`check failed: ${failures.length} problem(s)`)
   for (const failure of failures) console.error(`  - ${failure}`)
-  console.error(`names: ${nameGuard.compared} identifier-shaped name(s) compared across ${nameGuard.scanned} living file(s)`)
+  console.error(coverageLine(nameGuard))
   process.exit(1)
 }
-const coverage = `names: ${nameGuard.compared} identifier-shaped name(s) compared across ${nameGuard.scanned} living file(s)`
 console.log('check passed')
-console.log(coverage)
+console.log(coverageLine(nameGuard))

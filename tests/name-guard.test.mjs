@@ -14,11 +14,15 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 import {
+  auditClaims,
   candidatesIn,
+  coverageLine,
   collectLivingSurface,
   declaredNamesOf,
   findUndeclared,
+  foreignClaims,
   foreignReason,
+  formatDeadClaim,
   formatProblem,
   suggestionFor,
 } from '../scripts/name-guard.mjs'
@@ -101,3 +105,47 @@ function readJson(relative) {
 function readdir(relative) {
   return readdirSync(join(root, relative))
 }
+
+test('a claim that permits nothing is a failure, naming the claim and its reason', () => {
+  const claims = [
+    { name: 'live claim', match: /^list_members$/, reason: 'a name that is on the surface' },
+    { name: 'dead claim', match: /^zzzz_nothing$/, reason: 'a reason that looked reasonable once' },
+  ]
+  const found = findUndeclared({
+    files: [document('README.md', 'Read `list_members`.')],
+    declared: declaredNamesOf("name: 'list_members',\n"),
+    claims,
+  })
+  assert.deepEqual(found.problems, [], 'both tokens are accounted for, so nothing is undeclared')
+  assert.deepEqual(found.claims.map((claim) => claim.matches), [1, 0], 'the audit counts what each claim permits')
+  assert.equal(found.dead.length, 1)
+  assert.equal(found.dead[0].name, 'dead claim')
+  assert.equal(
+    formatDeadClaim(found.dead[0]),
+    'scripts/name-guard.mjs: the allowlist claim "dead claim" matches nothing in the living surface'
+      + ' — delete it, or check whether the surface moved. Its reason was: "a reason that looked reasonable once"',
+  )
+})
+
+test('every real claim is load-bearing today, and the coverage line says so', () => {
+  const manifest = readJson('package.json')
+  const docNames = readdir('docs').filter((name) => name.endsWith('.md'))
+  const files = collectLivingSurface({ root, published: manifest.files ?? [], docNames })
+  const found = findUndeclared({ files, declared: declaredNamesOf(read('index.js')) })
+  assert.equal(found.dead.length, 0, 'no claim is dead weight')
+  assert.equal(found.claims.length, foreignClaims().length, 'every claim is audited, not a subset')
+  for (const claim of found.claims) {
+    assert.ok(claim.matches > 0, `the claim "${claim.name}" permits something (${claim.matches} occurrence(s))`)
+  }
+  // The counts are the measurement, so they are printed rather than implied: one line, claim by claim.
+  const line = coverageLine(found)
+  assert.match(line, /^names: \d+ identifier-shaped name\(s\) compared across \d+ living file\(s\); allowlist: 4\/4 claim\(s\) matched \(/)
+  for (const claim of found.claims) assert.ok(line.includes(`${claim.name} ${claim.matches}`), line)
+})
+
+test('the audit counts occurrences, not distinct tokens', () => {
+  const claims = [{ name: 'twice', match: /^list_members$/, reason: 'probe' }]
+  const audit = auditClaims([{ token: 'list_members' }, { token: 'list_members' }, { token: 'task_board' }], claims)
+  assert.equal(audit.claims[0].matches, 2, 'two occurrences, one claim')
+  assert.deepEqual(audit.dead, [])
+})
