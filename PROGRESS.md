@@ -3653,3 +3653,30 @@
   same process; both sides of the pair agree on every count, and heading parity holds.
 - **Version.** `0.40.1`: one round recorded, one check added, and one trigger that had moved without anyone
   noticing.
+
+## 2026-11-14 — all eleven live checks have run, and the miss message is the finding (v0.40.2)
+
+- **Nothing is pending for the first time since the checklist was written.** Eleven checks, each dated where it
+  ran: 3 to 6 on 2026-11-13, everything else on 2026-11-14. The procedure is now proven end to end, which matters
+  because it is **the only instrument for the Host's behaviour** — shapes are checked by `schema-check`, logic by
+  the suite, and neither of them notices a Host service that changes underneath both.
+- **The finding is one sentence in a refusal.** The second Lead, reading the same file with the same target,
+  answered: *75 lines scanned, **0 archived records for this Lead**, none of them that member*. **It separates
+  "this Lead has none" from "nothing in the file matched"** — because the filter is applied before the match —
+  and a bare "not found" would make those two indistinguishable **in exactly the case where they differ**. That
+  is the reason the check exists, and it was not obvious until someone read the answer.
+- **The check's own precondition was wrong, and its first run corrected it.** It had demanded an archived
+  tombstone from *each* Lead; the second needs **none**, and the check is strongest when it has none, because
+  then its miss must say "0 for this Lead" rather than "nothing matched". **A precondition written before the
+  first run is a guess, and the run is what turns it into a requirement.**
+- **The delay was in noticing, not in the profile**: a second Lead had existed all along
+  (`session-bb909ae6-…`), so the precondition was met long before the check was written. This one cannot be done
+  by a single session — a second Lead must make its own call, and no Lead can make it on another's behalf.
+- **The absolute-path rule held by substitution rather than by silence**: the second Lead's message is quoted
+  verbatim **except** for the machine path, replaced by `<workspace>` **and the substitution named in the
+  sentence**, so "verbatim" stays honest instead of becoming a quiet edit.
+- **And a defect from the tool itself was repaired in the same commit**: two literal tabs where `trashLimit` was
+  meant, on the English side only, because **PowerShell reads a backtick-t inside a double-quoted string as a
+  tab** while the single-quoted here-string used for the Chinese side kept it literal. **The same edit is safe in
+  one quoting style and silently corrupting in the other** — and only a byte-level check caught it.
+- **Version.** `0.40.2`: one status line, one quoted refusal, and a checklist that is finally complete.
