@@ -3626,3 +3626,30 @@
   the two-artifact-one-file shape, so nested, empty and unreadable entries contribute zero **without an
   assertion holding them to it**.
 - **Version.** `0.40.0`: one default, three fields, one horizon, and a round that was worth sending back.
+
+## 2026-11-14 — the checklist's first real round, and its newest check was born already run (v0.40.1)
+
+- **Ten of eleven checks have now run** — 1, 2, 3, 4, 5, 6, 7, 9, 10 and 11 — with **check 8 the only one
+  pending**, and it is the only one that needs something no single session can arrange: two Lead Sessions under
+  one data root. The document says so in its own status section on both sides, and the totals were checked line
+  by line rather than from memory, because that is the number most likely to drift.
+- **Check 11 was born already run.** It exists because the member noticed that the trash visibility — the field
+  the owner asked for the night before — was covered by **no check at all**, and said so instead of inventing
+  one. The observations for it were already in the session that built the feature: `trash_limit: 200`,
+  `trash_count` 20 → 21, `trash_bytes` 4,303,030 → 4,345,033 — **42,003 bytes for exactly one more artifact**.
+  **A check written the day its evidence exists starts with a first run instead of a promise.**
+- **Check 6's trigger moved, and the document now carries it**: raising the default cap to 200 means an
+  unconfigured profile never prunes, so the emergent archiving can no longer be met by accident. The behaviour
+  is real; only the way to reach it changed — **a profile already at its cap, or an explicit limit low enough to
+  bind**. **A check nobody can satisfy by accident needs its trigger written down**, or it quietly stops being a
+  check while still reading like one.
+- **The arithmetic is recorded twice on purpose**: 97 − 22 and the earlier 96 − 21 both equal 75, and both are
+  kept because **the subtraction is the proof, not the number**.
+- **Two invented numbers were caught by their author before pushing**: a version in a document commit's subject
+  — a version it had no right to name, and not this repository's convention for that commit — and a size figure
+  with no source. They are the same failure, **a number without a source**, and the second one would have been
+  invisible in a document about verification.
+- **Verification.** The gate passed and 328 tests passed in the committing call, gated on the exit code in the
+  same process; both sides of the pair agree on every count, and heading parity holds.
+- **Version.** `0.40.1`: one round recorded, one check added, and one trigger that had moved without anyone
+  noticing.

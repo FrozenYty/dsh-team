@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.40.1] - 2026-11-14
+
+- The checklist's first real round is recorded, and its newest check was born already run.
+
 ## [0.40.0] - 2026-11-14
 
 - The trash keeps 200 artifacts by default, its cost is reported, and the window arrives with the decision.

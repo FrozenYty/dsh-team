@@ -27,7 +27,7 @@ check states the relation rather than the value.
 **Call** `list_members` with `archived: true`.
 **Correct looks like** `archived_returned` equals the cap (50 today) **and** is smaller than `archived_total`
 whenever more records exist, so the answer says both how much it shows and how much it holds. Observed
-2026-11-13: `archived_returned: 50`, `archived_total: 74`.
+2026-11-13: `archived_returned: 50`, `archived_total: 74`; **2026-11-14: `archived_returned: 50`, `archived_total: 75`**.
 **If it does not match** — `archived_returned` above 50: the cap is not being applied, and an unbounded
 read is the failure the cap exists to prevent. `archived_total` equal to `archived_returned` when the file
 clearly holds more: the total is being computed from the returned slice, so a caller can no longer tell
@@ -38,7 +38,7 @@ that history is being withheld.
 **Call** `list_members` with no flag.
 **Correct looks like** `archived_records` reported, `archived` rows absent, and the **arithmetic closing**:
 `retiredChildIds` length minus the number of tombstones still in the roster equals `archived_records`.
-Observed 2026-11-13: **95 − 21 = 74**. That subtraction is how you verify the hot path was respected
+Observed 2026-11-13: **95 − 21 = 74**. Re-run **2026-11-14**: **97 − 22 = 75**, the archive's line count — and the earlier reading closed too (96 − 21 = 75), which is why both are here. That subtraction is how you verify the hot path was respected
 without a debugger: if the hot path had read the file, the count could come from the wrong place and the
 difference would not close.
 **If it does not match** — the arithmetic not closing: the count and the file disagree, so either the
@@ -57,7 +57,7 @@ the false-success defect this plugin has been repaired for more than once.
 
 ## 4. A live retirement writes the workspace trash and a portable origin
 
-**Call** `retire_member` on a member whose artifact exists.
+**Call** `retire_member` on a member whose artifact exists. **Re-confirmed 2026-11-14** on a fresh retirement: `originalRelPath` written, artifact moved into the workspace trash, `trashState: done`, no `originalPath`.
 **Correct looks like** the artifact inside the **workspace** trash (`<workspace>/.agents/team/trash/…`,
 never `~/.dsh/team-roster`); `originalRelPath` written **with forward slashes** as `<slug>/<leaf>`; and
 **neither `originalPath` nor `trashPath`** on the record (ADR 0034).
@@ -88,6 +88,10 @@ the slug joined against the wrong root.
 tombstone becoming archivable as a consequence — so the same write moves it to the archive and the file
 grows by one line while the roster shrinks by one tombstone. Observed 2026-11-13: one pruned, **74 → 75**
 lines, the newly archivable tombstone flushed in the same write.
+**Trigger, after v0.40.0: this is no longer something a normal run meets.** The default cap is 200 now, so a
+profile that has not configured 	rashLimit never reaches it and never prunes. Exercise the check on a
+profile whose trash is already at its cap, or with an explicit 	rashLimit low enough to bind. The behaviour
+is still real — only the trigger moved, and a check nobody can satisfy by accident needs it written down.
 **This emergent behaviour is expected and is not an error.** It is two rules meeting: the cap removes the
 artifact (ADR 0011/0012), and the window then allows the record to leave because its bytes are gone (ADR
 0030). A checklist reader who does not know this will read a correct run as a bug.
@@ -99,7 +103,7 @@ record left for a reason other than the cap, which the four conditions should ha
 
 **Call** `list_members` (with or without the flag).
 **Correct looks like** `host_hooks.panel_filter`, `roster_filter` and `slot_credit` all `installed`,
-`stripped_ids` equal to the number of retired child ids the filters are removing (observed 2026-11-13: 95),
+`stripped_ids` equal to the number of retired child ids the filters are removing (observed 2026-11-13: 95, re-confirmed 2026-11-14 at 97),
 and `storage.source: "file"` with a workspace `path` — not `storage-domain`, which the schema no longer
 publishes (ADR 0031/0033).
 **If it does not match** — a hook `absent`: that service did not exist when the plugin loaded, and the
@@ -110,7 +114,7 @@ resolved.
 
 ## 8. Two Leads in one data root see only their own archived records
 
-**Status: not yet run — one of three pending checks.** The archive is one file per data root and the
+**Status: not yet run — the only pending check.** The archive is one file per data root and the
 reader must answer one Lead only (ADR 0035). Today's profile has a single Lead Session, so the rule is
 covered by the suite and by no live observation.
 **Precondition:** two Lead Sessions sharing a data root, each with at least one archived tombstone.
@@ -121,7 +125,7 @@ file rather than by Lead, and every count in checks 1 and 2 becomes meaningless 
 
 ## 9. One archived record is found by identity, past the cap
 
-**Status: not yet run.**
+**Status: run 2026-11-14, both directions.** A hit on `impl-lifetime` — the oldest of 75 archived records, therefore beyond the newest 50 — returned exactly one row with `archived_returned: 1` and `archived_scanned: 75`; a miss on `nobody-g3` returned `archived_returned: 0`, `archived_scanned: 75` and the message naming the target.
 **Precondition, and it is the whole point:** the archive must hold **more records than the cap**, with the
 target living **only beyond it**. A lookup tested on a short archive passes while the feature is gone, which
 is why the size of the file is part of the check rather than context.
@@ -138,7 +142,7 @@ count: the answer is not reporting its cost, so a miss can no longer be told fro
 prose such as `"Replaced by reviewer-g2"`: text matching came back, and identity stopped being identity.
 ## 10. Every member reports what it has spent, from one of three sources
 
-**Status: not yet run.**
+**Status: run 2026-11-14, all three sources.** A mounted member answered `spend_tokens: 0` before its first committed request — a measurement, not an omission; the five standing roles, all unloaded, each answered with a number; and a member retired during the run carries `spendTokens: 63897` on its tombstone, whose row still reports it after the artifact left the sessions root for the trash.
 **Precondition, and it is the whole point:** one member of each kind — **mounted** with committed requests,
 **unloaded but not retired**, and **retired on or after v0.39.0**. The retired case is the one with a
 version floor: a tombstone written before v0.39.0 carries no number and never will, so a missing field there
@@ -160,8 +164,29 @@ whose number **changes** between reads: the field is being recomputed from a liv
 from the tombstone. `0` anywhere nothing could be measured: the field used as a stand-in, the one thing it
 must never be. A number on a row whose member is not mounted and not retired that never moves while its work
 clearly spends: the listing leg did not match the header, so the identity witness is what to inspect.
+## 11. The trash's own cost is reported, per Lead
+
+**Status: run 2026-11-14.** Observed on this profile at v0.40.0, from plain `list_members` calls before and
+after one live retirement: `trash_limit: 200`, `trash_count: 20` then **21**, `trash_bytes: 4,303,030` then
+**4,345,033** — a rise of **42,003** bytes for exactly one more artifact (the run that added `spend-probe`
+and retired it).
+**Call** `list_members` with no flag.
+**Correct looks like** `trash_count`, `trash_bytes` and `trash_limit` all **present**, and the three
+relationships that hold on any profile: `trash_limit` equals the **effective** cap (200 where the config
+sets nothing); `trash_count` equals the number of artifact directories actually under this Lead's trash;
+`trash_bytes` is positive and consistent with what is on disk, growing by roughly the new artifact's size
+when one is added. **Zero is a valid measurement** on a profile with no trash — present rather than absent,
+which is the deliberate opposite of the spend field's rule, because here the walk really did measure and
+found nothing.
+**If it does not match** — `trash_limit` reading **20**: this is not the release that changed the default, so
+the profile loaded a different bundle than intended, and the check is about which code is running rather
+than about the answer. A `trash_count` that disagrees with the directory listing: the measurement is not
+reading *this* Lead's trash. A **missing** field: the answer shape is older than the plugin, which is a
+stale install rather than a wrong measurement. `trash_bytes: 0` while artifacts exist: the walk is not
+recursing into them — worth naming because the plugin's own unit test for that assertion was **vacuous**
+until 2026-11-14, so a passing test was not evidence here.
 ## Recording a round
 
-Write the Host version, the date, each check's observed values, and any check that could not be run and
+This document's own statuses reflect the **2026-11-14** run against the v0.40.0 profile: checks 1, 2, 3, 4, 5, 6, 7, 9, 10 and 11 have run, and **check 8 has not**. Write the Host version, the date, each check's observed values, and any check that could not be run and
 why, into `PROGRESS.md` as one entry. A check that was skipped is recorded as skipped — silence about which
 checks ran is how a procedure comes to be believed while it is broken.
