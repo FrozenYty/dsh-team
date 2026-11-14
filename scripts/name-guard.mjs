@@ -34,29 +34,88 @@ export const NAME_SHAPE = /[a-z][a-z0-9]*(?:_[a-z0-9]+)+/g
  * Names that are not this plugin's to declare, each with the reason it is not one. Keep this short: every
  * entry is a claim, and a list that grows past a handful is a signal that the shape above is wrong rather
  * than that the list should grow.
+ *
+ * **Every claim must be load-bearing**: its matcher has to match at least one candidate in the surface the
+ * guard scans, or the check refuses it — a claim that permits nothing is either a leftover to delete or a
+ * sign the surface moved, and the list decays one dead entry at a time otherwise.
+ *
+ * **The other half of that audit stays human.** A claim that matches something can still be *hiding* a
+ * violation of that name — that is what the one `member_context` entry was, a real dead name held down by
+ * an allowlist entry whose reason looked reasonable. No matcher can judge that; the defence is that every
+ * claim carries a reason a reviewer can weigh, which is why a claim without one is not allowed.
  */
-const FOREIGN_NAMES = [
+const CLAIMS = [
   {
+    name: 'harness tools',
     match: /^(?:list_agents|send_message|interrupt_agent|subagent_fork|web_search|wait_agent)$/,
     reason: 'a tool the Harness ships; this plugin points at it, it does not declare it',
   },
   {
+    name: 'upstream team packages',
     match: /^(?:team_roster|team_task|team_task_(?:create|get|list|update)|spawn_teammate)$/,
     reason: 'a name of the shipped experimental team packages, kept where the docs say what this plugin replaces',
   },
   {
+    name: 'provider wire vocabulary',
     match: /^(?:stop_reason|tool_use|web_search_tool_result)$/,
     reason: 'a provider wire field or value, not a name this code declares',
   },
   {
+    name: 'harness working directory',
     match: /^working_directory$/,
     reason: 'a Harness concept named in a comment: the directory a Session runs in',
   },
 ]
 
+/**
+ * The one line the guard prints, whether it passes or fails: what it read, and whether the allowlist still
+ * does anything. A claim audited silently is a claim nobody can argue with.
+ * @param {{compared: number, scanned: number, claims: Array<{name: string, matches: number}>}} guard - the audit.
+ * @returns {string} the line.
+ */
+export function coverageLine(guard) {
+  const matched = guard.claims.filter((claim) => claim.matches > 0).length
+  const counts = guard.claims.map((claim) => `${claim.name} ${claim.matches}`).join(', ')
+  return `names: ${guard.compared} identifier-shaped name(s) compared across ${guard.scanned} living file(s); `
+    + `allowlist: ${matched}/${guard.claims.length} claim(s) matched (${counts})`
+}
+
 /** The reason a token is not this plugin's, or undefined when it is not allowlisted. */
 export function foreignReason(token) {
-  return FOREIGN_NAMES.find((entry) => entry.match.test(token))?.reason
+  return CLAIMS.find((entry) => entry.match.test(token))?.reason
+}
+
+/** The claims the guard holds, for a test that drives the audit over a synthetic surface. */
+export function foreignClaims() {
+  return CLAIMS
+}
+
+/**
+ * One dead claim as the line a reviewer acts on: which claim, and the reason it gave for existing.
+ * @param {{name: string, reason: string}} claim - a claim that matched nothing.
+ * @returns {string} the message.
+ */
+export function formatDeadClaim(claim) {
+  return `scripts/name-guard.mjs: the allowlist claim "${claim.name}" matches nothing in the living surface`
+    + ` — delete it, or check whether the surface moved. Its reason was: "${claim.reason}"`
+}
+
+/**
+ * The claim audit: every claim, and how many candidates it matched.
+ *
+ * A claim that matched nothing is dead weight, and the count is returned so the check can refuse it rather
+ * than leaving the judgement to whoever reads the list next.
+ * @param {Array<{token: string}>} candidates - every candidate the surface produced.
+ * @param {Array<{name: string, match: RegExp, reason: string}>} [claims] - the allowlist.
+ * @returns {{claims: Array<{name: string, reason: string, matches: number}>, dead: Array<object>}} the audit.
+ */
+export function auditClaims(candidates, claims = CLAIMS) {
+  const audited = claims.map((claim) => ({
+    name: claim.name,
+    reason: claim.reason,
+    matches: candidates.filter((candidate) => claim.match.test(candidate.token)).length,
+  }))
+  return { claims: audited, dead: audited.filter((claim) => claim.matches === 0) }
 }
 
 /**
@@ -194,12 +253,16 @@ export function formatProblem(problem) {
  * @param {object} request
  * @param {Array<{path: string, text: string, markdown?: boolean}>} request.files - the living surface.
  * @param {Set<string>} request.declared - the names the code declares.
+ * @param {Array<{name: string, match: RegExp, reason: string}>} [request.claims] - the allowlist to audit.
  * @returns {{problems: Array<{path: string, line: number, token: string, nearest: string|undefined}>,
- *   scanned: number, compared: number}} what was found and how much was read.
+ *   scanned: number, compared: number, claims: Array<{name: string, reason: string, matches: number}>,
+ *   dead: Array<{name: string, reason: string, matches: number}>}} what was found, how much was read, and
+ *   which claims still permit something.
  */
-export function findUndeclared({ files, declared }) {
+export function findUndeclared({ files, declared, claims }) {
   const problems = []
   const seen = new Set()
+  const candidates = []
   let scanned = 0
   let compared = 0
   for (const file of files) {
@@ -207,6 +270,7 @@ export function findUndeclared({ files, declared }) {
     scanned += 1
     for (const { token, line } of candidatesIn(file.text, file.markdown === true)) {
       compared += 1
+      candidates.push({ token })
       if (declared.has(token) || foreignReason(token) !== undefined) continue
       const key = `${file.path}\u0000${token}`
       if (seen.has(key)) continue
@@ -214,5 +278,6 @@ export function findUndeclared({ files, declared }) {
       problems.push({ path: file.path, line, token, nearest: suggestionFor(token, declared) })
     }
   }
-  return { problems, scanned, compared }
+  const audit = auditClaims(candidates, claims)
+  return { problems, scanned, compared, claims: audit.claims, dead: audit.dead }
 }
