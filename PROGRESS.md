@@ -3786,3 +3786,29 @@
   on the branch *before* the merge — and this is the second time in two days it has been paid late, both times by
   me.
 - **Version.** `0.41.2`: four deleted lines, one late record, and a number that did not move for the right reason.
+
+## 2026-11-14 — an allowlist claim that permits nothing is a failure (v0.41.3)
+
+- **The last mechanical half of the guard is in, and it is the half that keeps the list honest over time.** Every
+  claim must be **load-bearing**: a claim whose matcher matches nothing in the living surface fails, naming the
+  claim and **quoting the reason it gave**, with a failure that tells a reader which of the two things it probably
+  is — *delete it, or check whether the surface moved.*
+- **The counts are printed on the same line as the coverage**, every run: four claims, **158 matches**
+  (harness tools 104, upstream team packages 37, provider wire vocabulary 12, harness working directory 5).
+  **A claim audited silently is a claim nobody can argue with** — the same rule as the names compared, and the
+  reason the audit exists rather than merely the failure.
+- **The other half stays human, and the module says so in its own words**: a claim that matches something can
+  still be **hiding** a violation of that name — `member_context` did, for as long as it was on the surface — and
+  no matcher can judge that. The defence is the reason string, which a reviewer reads.
+  **Mechanising the count and leaving the judgement to a person is the split that makes the list auditable at
+  all**; mechanising the judgement would only move the dishonesty somewhere else.
+- **It demonstrates its own failure**: a synthetic claim for a name no file contains prints
+  `the allowlist claim "probe dead claim" matches nothing in the living surface — delete it, or check whether the
+  surface moved. Its reason was: "a probe claim that permits nothing"`, and the same run prints
+  `allowlist: 4/5 claim(s) matched (probe dead claim 0, …)` — so the count line shows the dead weight beside the
+  living claims.
+- **One limit stated rather than implied**: the counts are a property of today's text. A document that stops
+  mentioning a name shows up as a falling number, and **nobody is watching between runs** — the number is a signal
+  for whoever reads it, not an alarm.
+- **Version.** `0.41.3`: one audit, one printed line, and a list that cannot quietly fill with entries that permit
+  nothing.

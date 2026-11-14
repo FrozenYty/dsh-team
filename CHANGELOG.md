@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.41.3] - 2026-11-14
+
+- An allowlist claim that permits nothing is a failure, and every claim's count is printed.
+
 ## [0.41.2] - 2026-11-14
 
 - The allowlist entry the repaired violation no longer needs is deleted, and the count proves it was dead weight.
