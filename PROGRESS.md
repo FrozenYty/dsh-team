@@ -3762,3 +3762,27 @@
   off.
 - **Version.** `0.41.1`: five deleted lines, one count that moved the right way, and a rule demonstrated in both
   directions.
+
+## 2026-11-14 — the entry the repaired violation no longer needs, and the debt this release is late on (v0.41.2)
+
+- **The compared count did not move: 1286 before the deletion, 1286 after.** That zero is the proof the entry was
+  permitting nothing, and it is the correct arithmetic — **the 1290 → 1286 drop belongs to the previous release's
+  *document* repair**, because the removed sentence held two identifier tokens per side, the dead name and
+  `list_members`, four in total and only two of them the name. **A number that moves for the wrong reason is still
+  a wrong number**, and the first telling of this one had it moving for the wrong reason.
+- **An entry that permits a name nobody writes is not harmless — it can hide a future violation of that same name,
+  and this one did**: `member_context` was on the living surface the whole time its entry allowed it. **The defence
+  is not mechanical.** It is that every claim carries a reason a reviewer can judge, and this reason said out loud
+  that it was a violation awaiting repair — which is exactly how it was found.
+- **Four claims remain**, each with its reason: six Harness tool names; the shipped experimental team package
+  names, **enumerated rather than wildcarded** so a new upstream name fails and asks for a claim; the provider wire
+  fields; and one Harness concept named in a comment.
+- **The probe proves recurrence is caught, not only the departure**: re-adding the name to a living file printed
+  `index.js:1714: "member_context" is not a declared name — did you mean "member_id"?`, then reverted.
+- **And the debt this release is late on, stated rather than buried.** The change merged before its records did.
+  **The version guard could not see it**: §9 compares the changelog's newest section against `package.json`, and a
+  change that updates *neither* is invisible to it — **a guard comparing two artifacts catches drift between them,
+  never a change that touches both not at all.** The rule that prevents this is older than the guard — records go
+  on the branch *before* the merge — and this is the second time in two days it has been paid late, both times by
+  me.
+- **Version.** `0.41.2`: four deleted lines, one late record, and a number that did not move for the right reason.
