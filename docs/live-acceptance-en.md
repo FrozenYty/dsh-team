@@ -164,8 +164,29 @@ whose number **changes** between reads: the field is being recomputed from a liv
 from the tombstone. `0` anywhere nothing could be measured: the field used as a stand-in, the one thing it
 must never be. A number on a row whose member is not mounted and not retired that never moves while its work
 clearly spends: the listing leg did not match the header, so the identity witness is what to inspect.
+## 11. The trash's own cost is reported, per Lead
+
+**Status: run 2026-11-14.** Observed on this profile at v0.40.0, from plain `list_members` calls before and
+after one live retirement: `trash_limit: 200`, `trash_count: 20` then **21**, `trash_bytes: 4,303,030` then
+**4,345,033** — a rise of **42,003** bytes for exactly one more artifact (the run that added `spend-probe`
+and retired it).
+**Call** `list_members` with no flag.
+**Correct looks like** `trash_count`, `trash_bytes` and `trash_limit` all **present**, and the three
+relationships that hold on any profile: `trash_limit` equals the **effective** cap (200 where the config
+sets nothing); `trash_count` equals the number of artifact directories actually under this Lead's trash;
+`trash_bytes` is positive and consistent with what is on disk, growing by roughly the new artifact's size
+when one is added. **Zero is a valid measurement** on a profile with no trash — present rather than absent,
+which is the deliberate opposite of the spend field's rule, because here the walk really did measure and
+found nothing.
+**If it does not match** — `trash_limit` reading **20**: this is not the release that changed the default, so
+the profile loaded a different bundle than intended, and the check is about which code is running rather
+than about the answer. A `trash_count` that disagrees with the directory listing: the measurement is not
+reading *this* Lead's trash. A **missing** field: the answer shape is older than the plugin, which is a
+stale install rather than a wrong measurement. `trash_bytes: 0` while artifacts exist: the walk is not
+recursing into them — worth naming because the plugin's own unit test for that assertion was **vacuous**
+until 2026-11-14, so a passing test was not evidence here.
 ## Recording a round
 
-This document's own statuses reflect the **2026-11-14** run against the v0.40.0 profile: checks 1, 2, 3, 4, 5, 6, 7, 9 and 10 have run, and **check 8 has not**. Write the Host version, the date, each check's observed values, and any check that could not be run and
+This document's own statuses reflect the **2026-11-14** run against the v0.40.0 profile: checks 1, 2, 3, 4, 5, 6, 7, 9, 10 and 11 have run, and **check 8 has not**. Write the Host version, the date, each check's observed values, and any check that could not be run and
 why, into `PROGRESS.md` as one entry. A check that was skipped is recorded as skipped — silence about which
 checks ran is how a procedure comes to be believed while it is broken.
