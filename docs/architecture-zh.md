@@ -56,8 +56,6 @@ profile 把 `compaction-basic` 置为 `inactive`，所以没有任何东西在�
 
 上下文工具在 v0.1 交付；它们现在的行在 §5，接口由那一节负责。每个 Lead 专属工具都注册在 Team Lead 的确切 Agent 上下文上（`agent/created`），并在 `agent/disposed` 时卸载。不遮蔽任何官方工具名，也不写任何会话事件。
 
-`member_context` 存在于 v0.1，已移除：它的行与 `list_members` 重复，而且读的是官方花名册而不是本插件的。
-
 实测到的限制塑造了后续设计：本地子代理空闲即被卸载，而 `compactNow()` 要求 Agent 驻留且空闲。因此已完成的成员无法按需压缩；可行路径是用消息唤醒它，让自动压缩在它的下一步运行。
 
 ### 2.3 自建花名册工具
