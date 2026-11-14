@@ -122,9 +122,6 @@ v0.1 shipped the context tools; §5 owns their current rows. Every Lead-scoped t
 exact Agent context of a Team Lead (`agent/created`), and unwinds on `agent/disposed`. No official tool
 name is shadowed and no session event is written.
 
-`member_context` existed in v0.1 and was removed: its rows duplicated `list_members`, and it read the
-shipped roster rather than this plugin's.
-
 Measured limitation that shapes the design: a local child is unloaded when it goes idle, and
 `compactNow()` requires a resident idle Agent. A finished teammate therefore cannot be compacted on
 demand; waking it with a message and letting automatic compaction run at its next step is the durable
