@@ -3706,3 +3706,35 @@
   this machine; and the walk's bound, together with a `trash_count` above the cap, remains unasserted from the
   counting side — deliberately, since counting `stat` calls would bind the test to the implementation.
 - **Version.** `0.40.3`: three assertions, three literal numbers, and a reason written where it will be read.
+
+## 2026-11-14 — every name in the living surface must be one the code declares (v0.41.0)
+
+- **The declared names are read out of `index.js`, not listed anywhere.** A hand-kept list would drift away from
+  the code it is checking, which is the failure being prevented. **And there is deliberately no table of retired
+  names**: such a table only works if whoever renames something remembers to add the old spelling, and the one
+  time they forget, the guard is silently dead — worse than none, because it sells confidence. Reading from the
+  code inverts the burden: a rename that leaves a reference behind makes that reference **undeclared**, and the
+  check fails without anyone registering anything.
+- **History is exempt, and the sentence in the script says why**: *a dead name belongs in the record and must not
+  be in the living surface.* `PROGRESS.md`, `CHANGELOG.md`, `PLAN.md` and `docs/adr/**` are not scanned, because a
+  retired name there is **correct** — those files record what was true when they were written.
+- **The narrow shape is what makes it sound rather than noisy**: only backticked lowercase snake_case with at
+  least one underscore is a candidate, so a hyphen, a colon, an uppercase letter or a dot disqualifies a token and
+  `dsh-team-relay`, `path:line`, `DSH_TEAM_ROSTER_DATA_DIR` and `archive.jsonl` never enter the comparison. That
+  is not a threshold being tuned; it is the candidate set being limited to the shape this plugin's own names have.
+- **The first honest run, reported as numbers rather than as a verdict**: **1290 names compared across 30 living
+  files**, twenty flagged, **two of which were the extractor's own bug** (`host_hooks` and `current_holder` are
+  declared in a `key: SHARED_CONSTANT` form its first pattern missed), leaving eighteen under five allowlist
+  claims — six Harness tool names, seven shipped package names, three provider wire fields, one Harness concept.
+- **And the fifth claim is a real violation, recorded as one**: `member_context` was removed in v0.1, and a living
+  document still names it *as removed*. **The guard's first catch was a sentence that outlived its subject** — and
+  the entry says it is a violation awaiting repair rather than a name that belongs, so the allowlist shrinks by
+  one when that sentence moves into the record.
+- **The failure is a repair instruction** — file, line, token, nearest declared name — and the suggestion is a
+  courtesy rather than a proof: one probe pointed `trash_bytes` at `trash_path`, three letters away. That is
+  written down as the limit of the suggestion, not as its accuracy.
+- **And the guard proves it is not vacuous**: a unit test asserts a declared name is clean **and that the compared
+  count is non-zero**, because a guard that compares nothing would otherwise pass forever. A second asserts that a
+  synthetic undeclared token is reported with its file, token and suggestion.
+- **Version.** `0.41.0`: one section, one script, six tests, and the first name this repository has caught pointing
+  at nothing.
