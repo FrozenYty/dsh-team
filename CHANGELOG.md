@@ -21,6 +21,10 @@ carries no version heading and stays in `PROGRESS.md`. Three cases that are not 
 
 A release adds a section here in the same pull request that writes its `PROGRESS.md` entry.
 
+## [0.41.1] - 2026-11-14
+
+- The dead name leaves the living surface, and the record keeps it.
+
 ## [0.41.0] - 2026-11-14
 
 - Every name in the living surface must be one the code declares, and the first run found one that was not.

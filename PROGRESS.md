@@ -3738,3 +3738,27 @@
   synthetic undeclared token is reported with its file, token and suggestion.
 - **Version.** `0.41.0`: one section, one script, six tests, and the first name this repository has caught pointing
   at nothing.
+
+## 2026-11-14 — the dead name leaves the living surface, and the record keeps it (v0.41.1)
+
+- **The repair was a removal, not a rewording, and the reason is the guard's own question**: does a reader of the
+  *present* meet a retired name? Dropping the backticks would have silenced the check without answering that —
+  **a dodge and a repair look identical in a diff and are opposite in intent**, and the difference is whether the
+  reader stops meeting the name.
+- **The sentence carried no present-tense fact.** Both of its clauses explained why the section was *gone*; nothing
+  in the current design depended on either; the neighbouring paragraph already said what exists; and both facts
+  were already in the record. **Nothing was deleted in substance — the living surface stopped repeating the
+  record**, which is the division the rule is for.
+- **The guard's count moved, and that is the evidence it was looking**: 1290 identifier-shaped names compared
+  before the repair, **1286** after, because the removed sentence held two tokens on each side. **A check whose
+  number moves when the violation is repaired is a check that read the file**, in the same way the citation
+  resolver's failure list shrinks when a broken reference is fixed.
+- **Both halves of the rule are verified in one commit**: **0** occurrences of the name on the living surface —
+  architecture pair, `index.js`, both READMEs — and **4** in `PROGRESS.md`. A dead name in the record is correct;
+  a dead name in the living surface is the defect.
+- **And the next change makes the guard stricter by one**: the allowlist entry that permitted the name is now
+  unnecessary, so it goes. **An allowlist that shrinks because the violation was repaired is the only proof an
+  allowlist can give** — one that only grows is a graveyard of noise, and a guard nobody can satisfy gets turned
+  off.
+- **Version.** `0.41.1`: five deleted lines, one count that moved the right way, and a rule demonstrated in both
+  directions.
