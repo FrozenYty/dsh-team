@@ -24,6 +24,8 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { collectLivingSurface, declaredNamesOf, findUndeclared, formatProblem } from './name-guard.mjs'
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
 const fail = (message) => failures.push(message)
@@ -475,9 +477,31 @@ if (typeof manifestVersion === 'string') {
   }
 }
 
+// 10. Every name in the living surface is a name the code declares.
+//
+// A rename leaves references behind, and a reader of the published surface cannot tell a stale name from a
+// live one: a tool description promising a field nothing answers with, or a document naming a tool that was
+// removed. Nothing local notices — the unit tests call actions.js, and the documents are not compiled.
+//
+// The surface is the published bundle, the locale files, the README pair and the documentation pair: the
+// files a reader takes as *current*. `PROGRESS.md`, `CHANGELOG.md`, `PLAN.md` and `docs/adr/**` are excluded
+// on purpose, because **a dead name belongs in the record and must not be in the living surface** — those
+// files record what was true when they were written, so a name that no longer exists is correct there.
+//
+// There is deliberately no table of retired names: a table only works if whoever renames something
+// remembers to add the old spelling, and the one time they forget the guard is silently dead. Reading the
+// declared names out of index.js inverts the burden — a reference left behind makes that reference
+// undeclared, and the check fails without anyone registering anything.
+const livingFiles = collectLivingSurface({ root, published: publishedFiles, docNames })
+const nameGuard = findUndeclared({ files: livingFiles, declared: declaredNamesOf(entry ?? '') })
+for (const problem of nameGuard.problems) fail(formatProblem(problem))
+
 if (failures.length > 0) {
   console.error(`check failed: ${failures.length} problem(s)`)
   for (const failure of failures) console.error(`  - ${failure}`)
+  console.error(`names: ${nameGuard.compared} identifier-shaped name(s) compared across ${nameGuard.scanned} living file(s)`)
   process.exit(1)
 }
+const coverage = `names: ${nameGuard.compared} identifier-shaped name(s) compared across ${nameGuard.scanned} living file(s)`
 console.log('check passed')
+console.log(coverage)
