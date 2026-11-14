@@ -3680,3 +3680,29 @@
   tab** while the single-quoted here-string used for the Chinese side kept it literal. **The same edit is safe in
   one quoting style and silently corrupting in the other** — and only a byte-level check caught it.
 - **Version.** `0.40.2`: one status line, one quoted refusal, and a checklist that is finally complete.
+
+## 2026-11-14 — the trash measurement answers to each shape it must survive (v0.40.3)
+
+- **Every shape now carries a literal expectation** — a nested subdirectory (five bytes at the top and eleven
+  inside), an empty artifact beside a non-empty one (two artifacts, nine bytes), and an entry that cannot be
+  walked (seven for a file and four for a directory) — rather than only a comparison against an independent walk.
+  The last round is the reason: **two computations can go empty together**, and the assertion that allowed it was
+  `0 === 0`.
+- **A read never fails over one artifact, and that decision is now written in the test's own words.** The catches
+  in the walk are deliberate: a member nobody can measure must not hide every other member, so the entry
+  contributes what it can and nothing throws. **The alternative is what a later reader will assume** — throwing
+  on one unreadable artifact — which is why the reason belongs where a person changing it will read it.
+- **A plain file is the portable stand-in for "cannot be listed"**, and it is a shape this plugin really writes,
+  so counting its bytes is true rather than a convenient zero. The `readdir` catch itself has no portable
+  fixture — a permission-denied directory would mean fighting Windows ACLs — so what is pinned is the behaviour
+  its existence is for: no throw, no silently dropped entry.
+- **Two probes were equivalent rather than unsatisfied, and both were replaced.** One removed a guard but
+  compensated inside the catch, so the number never moved; the other gave an empty directory its own `lstat`
+  size, **which is zero on Windows**, so on this machine it could not change any result. **"The suite survived"
+  can mean "the mutation did nothing here"** — the rule the notebook already holds, with two fresh instances,
+  and the second is platform-dependent enough to be worth remembering on its own.
+- **Named limits, unchanged**: the two catches are exercised through the caller's behaviour rather than by
+  hitting the branches; the measured figures are still not re-derived by any test, because they are facts about
+  this machine; and the walk's bound, together with a `trash_count` above the cap, remains unasserted from the
+  counting side — deliberately, since counting `stat` calls would bind the test to the implementation.
+- **Version.** `0.40.3`: three assertions, three literal numbers, and a reason written where it will be read.
