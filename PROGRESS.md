@@ -3812,3 +3812,33 @@
   for whoever reads it, not an alarm.
 - **Version.** `0.41.3`: one audit, one printed line, and a list that cannot quietly fill with entries that permit
   nothing.
+
+## 2026-11-14 — a change to anything but a document carries a complete release record (v0.41.4)
+
+- **The gate's first run was on the branch that introduced it, and it failed correctly**:
+  `no release record on this branch: package.json is still 0.41.3, and the changelog has no 0.41.4 section`.
+  **A guard whose first catch is its own branch is the best evidence available that it is wired in** — and the red
+  was expected, because the record is mine to write: the branch is not mergeable until it exists.
+- **The record is three artifacts or it is half a record**: a bump, a changelog section, and a `PROGRESS.md` entry
+  naming the version. **A check requiring only the first would reward exactly the half-record this repository keeps
+  finding** — and that case has its own test and its own sentence: *"the record is a bump, a changelog section and
+  an entry, or it is half a record"*.
+- **`substantive` is deliberately wider than "the published bundle"**: anything that is not a `.md` file and not
+  `package.json`. The change that started this was **four deleted lines in `scripts/`**, and a narrower rule would
+  have required nothing from it.
+- **Two traps are pinned by tests rather than left to review**: versions compare **numerically** — `0.41.10` is
+  higher than `0.41.9`, and a string comparison says otherwise **while looking correct** — and an unresolvable base
+  **reports rather than fails**, because *a gate that cannot run must not fail the branch*, and a gate that silently
+  skips is the failure this repository already has a name for.
+- **It made itself runnable in CI.** The default checkout fetches one commit of the pull-request ref, so
+  `origin/main` would never resolve and the guard would report "could not run" on every pull request forever.
+  **A gate that can never run is a manual check wearing a gate's clothes**, and `fetch-depth: 0` is the whole fix —
+  it is in the workflow with that sentence beside it.
+- **The two sections interlock rather than duplicate**: with only the manifest and the entry raised, §9 caught the
+  missing changelog section and the two README version lines. §11 calls that half instead of copying it, which is
+  how the pair stays one rule rather than two that can drift.
+- **What it still cannot see, stated rather than implied**: it reads **commits, not the working tree**, so an
+  uncommitted change is invisible to it — CI judges the commit, and a local run before committing is not evidence.
+  And it requires only that `PROGRESS.md` **mentions** the version; a bump plus an entry about something else would
+  pass. **It checks that a record exists, never that the record is true** — the half no gate can own.
+- **Version.** `0.41.4`: one section, one workflow line, eight tests, and the last action that nothing watched.

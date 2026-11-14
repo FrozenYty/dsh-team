@@ -25,6 +25,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { collectLivingSurface, coverageLine, declaredNamesOf, findUndeclared, formatDeadClaim, formatProblem } from './name-guard.mjs'
+import { auditReleaseRecord, gitRead, releaseLine, versionOf, MANIFEST, PROGRESS } from './release-record.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
@@ -499,11 +500,41 @@ for (const problem of nameGuard.problems) fail(formatProblem(problem))
 // entry that hid a real dead name looked reasonable right up until someone checked whether it was needed.
 for (const claim of nameGuard.dead) fail(formatDeadClaim(claim))
 
+// 11. A change to anything but a document carries a complete release record.
+//
+// Three releases in a row were merged with the manifest bumped and nothing else: no changelog section, no
+// record of what changed, and nothing local noticed, because the only thing any check looked at was the file
+// that had been edited. §9 already owns the changelog half — it compares the newest section with the
+// manifest — so this section compares the version with `origin/main` and requires the entry that names it.
+// The three parts are the record: a version higher than the base, a changelog section equal to it, and a
+// `PROGRESS.md` entry naming it. Requiring only the version is satisfied by exactly the half-record that
+// keeps happening, which is why this is not a version check.
+//
+// Two traps are stated here because they survive review otherwise: versions compare **numerically**, since
+// `0.41.10` is higher than `0.41.9` and a string comparison says the opposite while looking correct; and when
+// `origin/main` cannot be resolved the base is **reported, not failed** — the pattern §10's sibling uses for
+// the half that needs the asar — because a gate that silently skips is worse than one that says it did not
+// run. The workflow fetches the base for that reason (`fetch-depth: 0` in .github/workflows/ci.yml).
+const baseRead = gitRead(root, ['show', `origin/main:${MANIFEST}`])
+const changedRead = baseRead.text === undefined
+  ? { text: undefined, problem: baseRead.problem }
+  : gitRead(root, ['diff', '--name-only', 'origin/main...HEAD'])
+const release = auditReleaseRecord({
+  baseVersion: versionOf(baseRead.text),
+  baseProblem: baseRead.problem ?? changedRead.problem,
+  headVersion: versionOf(read(MANIFEST)),
+  progressText: read(PROGRESS) ?? '',
+  changedPaths: (changedRead.text ?? '').split(/\r?\n/),
+})
+for (const failure of release.failures) fail(failure)
+
 if (failures.length > 0) {
   console.error(`check failed: ${failures.length} problem(s)`)
   for (const failure of failures) console.error(`  - ${failure}`)
   console.error(coverageLine(nameGuard))
+  console.error(releaseLine(release))
   process.exit(1)
 }
 console.log('check passed')
 console.log(coverageLine(nameGuard))
+console.log(releaseLine(release))

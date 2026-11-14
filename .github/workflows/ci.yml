@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The release-record guard compares this branch with origin/main, and the default checkout fetches
+          # one commit of the pull request ref only — so without this line the guard would report that it
+          # could not run, on every pull request, forever.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
