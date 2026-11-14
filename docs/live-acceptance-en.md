@@ -89,8 +89,8 @@ tombstone becoming archivable as a consequence — so the same write moves it to
 grows by one line while the roster shrinks by one tombstone. Observed 2026-11-13: one pruned, **74 → 75**
 lines, the newly archivable tombstone flushed in the same write.
 **Trigger, after v0.40.0: this is no longer something a normal run meets.** The default cap is 200 now, so a
-profile that has not configured 	rashLimit never reaches it and never prunes. Exercise the check on a
-profile whose trash is already at its cap, or with an explicit 	rashLimit low enough to bind. The behaviour
+profile that has not configured `trashLimit` never reaches it and never prunes. Exercise the check on a
+profile whose trash is already at its cap, or with an explicit `trashLimit` low enough to bind. The behaviour
 is still real — only the trigger moved, and a check nobody can satisfy by accident needs it written down.
 **This emergent behaviour is expected and is not an error.** It is two rules meeting: the cap removes the
 artifact (ADR 0011/0012), and the window then allows the record to leave because its bytes are gone (ADR
@@ -114,14 +114,38 @@ resolved.
 
 ## 8. Two Leads in one data root see only their own archived records
 
-**Status: not yet run — the only pending check.** The archive is one file per data root and the
-reader must answer one Lead only (ADR 0035). Today's profile has a single Lead Session, so the rule is
-covered by the suite and by no live observation.
-**Precondition:** two Lead Sessions sharing a data root, each with at least one archived tombstone.
-**Correct looks like** each Lead's flagged read returning only its own records, with `archived_total`
-matching that Lead's lines rather than the file's.
-**If it does not match** — one Lead's records appearing in the other's answer: the reader is answering by
-file rather than by Lead, and every count in checks 1 and 2 becomes meaningless once a second Lead exists.
+**Status: run 2026-11-14.** A second Lead Session, `session-fcddaf79-3739-40d3-80e1-d34e83d9a4e7`, made its
+own calls against the same workspace. Two Leads, one data root:
+
+| | first Lead (`session-83a0217f-…`) | second Lead (`session-fcddaf79-…`) |
+|---|---|---|
+| `storage.path` / `archive_file` | `<workspace>\.agents\team\roster.json` / `…\archive.jsonl` | **the same two files** |
+| `archived_records` | 75 | **0** |
+| `trash_count` | 21 | **0** |
+| `archived_target: "impl-lifetime"` | **hit**: `archived_returned: 1`, `archived_scanned: 75` | **miss**: `archived_returned: 0`, `archived_scanned: 75` |
+
+The second Lead's message, verbatim except that the machine's absolute path is replaced by `<workspace>`: *"Nothing in `<workspace>`\archive.jsonl matches
+"impl-lifetime" as a target or a member id: 75 line(s) scanned, 0 archived record(s) for this Lead, none of
+them that member."*
+
+**That sentence is the finding, and it is why this check exists.** It separates *"this Lead has none"* from
+*"nothing in the file matched"*: the filter is applied **before** the match, so a second Lead's miss cannot
+be confused with a name that never existed. The wrong version — a bare "not found" — is what a reader would
+have expected, and it would make the two situations indistinguishable in the one case where they differ.
+**Precondition, corrected by the run itself:** two Lead Sessions sharing a data root. The second does **not**
+need archived records of its own — the check is strongest when it has none, because then its miss has to say
+*0 for this Lead* rather than *nothing matched*.
+**Correct looks like** the two rows above: the same two file paths in both answers, and each Lead's counts and
+lookup answering for itself — the first a hit, the second a miss that still reports the 75 lines it scanned.
+**If it does not match** — one Lead's records appearing in the other's answer: the reader is answering by file
+rather than by Lead, and every count in checks 1 and 2 becomes meaningless once a second Lead exists. A miss
+that reads as a bare "not found", or that omits the line count: the filter and the match have changed order, so
+"none for this Lead" and "no such member anywhere" are no longer distinguishable.
+
+**Why it took until now, and it is worth recording:** this check needs a second Lead Session to make its own
+call, and nothing in the first Lead can do it on that Lead's behalf. The profile had a second Lead all along —
+`session-bb909ae6-…` — so the precondition was met long before the check was written; the delay was in
+noticing, not in the profile.
 
 ## 9. One archived record is found by identity, past the cap
 
@@ -187,6 +211,6 @@ recursing into them — worth naming because the plugin's own unit test for that
 until 2026-11-14, so a passing test was not evidence here.
 ## Recording a round
 
-This document's own statuses reflect the **2026-11-14** run against the v0.40.0 profile: checks 1, 2, 3, 4, 5, 6, 7, 9, 10 and 11 have run, and **check 8 has not**. Write the Host version, the date, each check's observed values, and any check that could not be run and
+This document's own statuses reflect the **2026-11-14** run against the v0.40.0 profile: **all eleven checks have run**, each dated where it ran: 3 to 6 on 2026-11-13, everything else on 2026-11-14 — **nothing is pending**. Write the Host version, the date, each check's observed values, and any check that could not be run and
 why, into `PROGRESS.md` as one entry. A check that was skipped is recorded as skipped — silence about which
 checks ran is how a procedure comes to be believed while it is broken.
