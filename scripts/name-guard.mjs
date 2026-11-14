@@ -52,10 +52,6 @@ const FOREIGN_NAMES = [
     match: /^working_directory$/,
     reason: 'a Harness concept named in a comment: the directory a Session runs in',
   },
-  {
-    match: /^member_context$/,
-    reason: 'removed in v0.1 and named as removed in docs/architecture-en.md, which this check does not edit',
-  },
 ]
 
 /** The reason a token is not this plugin's, or undefined when it is not allowlisted. */
